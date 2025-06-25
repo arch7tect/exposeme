@@ -1,0 +1,46 @@
+[package]
+name = "exposeme"
+version = "0.1.0"
+edition = "2024"
+authors = ["Oleg Orlov <arch7tect@gmail.com>"]
+description = "Secure HTTP tunneling service"
+license = "MIT"
+
+[[bin]]
+name = "exposeme-server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "exposeme-client"
+path = "src/bin/client.rs"
+
+[[example]]
+name = "test_server"
+path = "examples/test_server.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# WebSocket support
+tokio-tungstenite = "0.20"
+futures-util = "0.3"
+
+# HTTP server/client
+hyper = { version = "0.14", features = ["full"] }
+hyper-tungstenite = "0.11"
+reqwest = { version = "0.11", features = ["json"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utilities
+uuid = { version = "1.0", features = ["v4"] }
+base64 = "0.21"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+anyhow = "1.0"
+
+[dev-dependencies]
+tokio-test = "0.4"

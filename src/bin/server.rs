@@ -41,10 +41,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        let addr = ([0, 0, 0, 0], 8080).into();
+        let addr = ([0, 0, 0, 0], 8888).into();
         let server = Server::bind(&addr).serve(make_svc);
 
-        info!("HTTP server listening on http://localhost:8080");
+        info!("HTTP server listening on http://localhost:8888");
 
         if let Err(e) = server.await {
             error!("HTTP server error: {}", e);
@@ -192,9 +192,16 @@ async fn handle_http_request(
             }
 
             // Decode body
-            let body_bytes = base64::engine::general_purpose::STANDARD
-                .decode(&body)
-                .unwrap_or_else(|_| body.into_bytes());
+            let body_bytes = match base64::engine::general_purpose::STANDARD.decode(&body) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    error!("Failed to decode base64 body from client: {}", e);
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_GATEWAY)
+                        .body(Body::from("Tunnel communication error: invalid data format"))
+                        .unwrap());
+                }
+            };
 
             Ok(response_builder.body(Body::from(body_bytes)).unwrap())
         }
@@ -281,7 +288,7 @@ async fn handle_websocket_connection(
 
                             let success_msg = Message::AuthSuccess {
                                 tunnel_id: requested_tunnel_id.clone(),
-                                public_url: format!("http://localhost:8080/{}", requested_tunnel_id),
+                                public_url: format!("http://localhost:8888/{}", requested_tunnel_id),
                             };
 
                             tx.send(success_msg)?;

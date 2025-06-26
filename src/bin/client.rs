@@ -136,9 +136,10 @@ async fn forward_request(
     let url = format!("{}{}", base_url, path);
 
     // Decode body from base64
-    let body_bytes = base64::engine::general_purpose::STANDARD
-        .decode(body)
-        .unwrap_or_else(|_| body.as_bytes().to_vec());
+    let body_bytes = match base64::engine::general_purpose::STANDARD.decode(body) {
+        Ok(bytes) => bytes,
+        Err(err) => return Err(err.into()),
+    };
 
     // Create request
     let mut request_builder = match method {

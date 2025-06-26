@@ -41,12 +41,12 @@ services:
           cpus: '0.1'
 
     # Health check
-#    healthcheck:
-#      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-#      interval: 30s
-#      timeout: 10s
-#      retries: 3
-#      start_period: 40s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 networks:
   default:

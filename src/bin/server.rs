@@ -327,6 +327,12 @@ async fn handle_tunnel_request(
     }
 
     let tunnel_id = path_parts[0].to_string();
+    if tunnel_id == "health" {
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from("OK"))
+            .unwrap());
+    }
     let forwarded_path = format!("/{}", path_parts[1..].join("/"));
 
     info!("Request for tunnel '{}': {} {}", tunnel_id, method, forwarded_path);

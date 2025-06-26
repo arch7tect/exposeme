@@ -190,24 +190,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Run all servers concurrently
-    tokio::select! {
+    if config.ssl.enabled {
+        info!("🌐 Starting HTTP, HTTPS, and WebSocket servers...");
+        tokio::select! {
         result = http_server => {
             if let Err(e) = result {
-                error!("HTTP server error: {}", e);
+                error!("❌ HTTP server error: {}", e);
             }
+            info!("HTTP server terminated");
         },
         result = https_server => {
             if let Err(e) = result {
-                error!("HTTPS server error: {}", e);
+                error!("❌ HTTPS server error: {}", e);
             }
+            info!("HTTPS server terminated");
         },
         result = ws_server => {
             if let Err(e) = result {
-                error!("WebSocket server error: {}", e);
+                error!("❌ WebSocket server error: {}", e);
             }
+            info!("WebSocket server terminated");
         }
     }
+    } else {
+        info!("🌐 Starting HTTP and WebSocket servers (HTTPS disabled)...");
+        tokio::select! {
+        result = http_server => {
+            if let Err(e) = result {
+                error!("❌ HTTP server error: {}", e);
+            }
+            info!("HTTP server terminated");
+        },
+        result = ws_server => {
+            if let Err(e) = result {
+                error!("❌ WebSocket server error: {}", e);
+            }
+            info!("WebSocket server terminated");
+        }
+    }
+    }
 
+    info!("🛑 ExposeME server shutting down");
     Ok(())
 }
 

@@ -17,7 +17,7 @@ domain = "exposeme.example.com"
 
 [ssl]
 # Enable HTTPS with automatic certificates
-enabled = true
+enabled = false
 
 # Certificate provider: "letsencrypt" or "manual"
 provider = "letsencrypt"

@@ -1,0 +1,53 @@
+# docker-compose.yml
+
+services:
+  exposeme-server:
+    image: arch7tect/exposeme-server:latest
+    container_name: exposeme-server
+    restart: unless-stopped
+
+    ports:
+      - "80:80"       # HTTP (ACME challenges + redirects)
+      - "443:443"     # HTTPS
+      - "8081:8081"   # WebSocket
+
+    volumes:
+      # Server configuration
+      - ./config/server.toml:/etc/exposeme/server.toml:ro
+      # SSL certificates storage
+      - ./exposeme-certs:/etc/exposeme/certs
+      # Logs (optional)
+      - ./exposeme-logs:/var/log/exposeme
+
+    environment:
+      # Override configuration via environment variables
+      - EXPOSEME_DOMAIN=${EXPOSEME_DOMAIN:-localhost}
+      - EXPOSEME_EMAIL=${EXPOSEME_EMAIL:-admin@localhost}
+      - EXPOSEME_STAGING=${EXPOSEME_STAGING:-true}
+      - RUST_LOG=${RUST_LOG:-info}
+
+    # Security settings
+    security_opt:
+      - no-new-privileges:true
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+
+    # Health check
+#    healthcheck:
+#      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+#      interval: 30s
+#      timeout: 10s
+#      retries: 3
+#      start_period: 40s
+
+networks:
+  default:
+    name: exposeme-network

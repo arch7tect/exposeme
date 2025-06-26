@@ -1,8 +1,9 @@
 # client.toml - ExposeME Client Configuration
+# docker run -it --rm -v ./config/client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
 
 [client]
 # Server WebSocket URL
-server_url = "ws://localhost:8081"
+server_url = "ws://host.docker.internal:8081"
 
 # Authentication token (must match server config)
 auth_token = "dev-token"
@@ -11,7 +12,7 @@ auth_token = "dev-token"
 tunnel_id = "my-dev-tunnel"
 
 # Local service to forward requests to
-local_target = "http://localhost:3300"
+local_target = "http://host.docker.internal:3300"
 
 # Auto-reconnect on connection loss
 auto_reconnect = true

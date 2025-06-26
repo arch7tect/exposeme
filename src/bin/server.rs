@@ -1,22 +1,48 @@
 // src/bin/server.rs
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
+use clap::Parser;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode};
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 use tracing::{error, info, warn};
 
-use exposeme::Message;
+use exposeme::{Message, ServerArgs, ServerConfig};
 
 type TunnelMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>>;
 type PendingRequests = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<(u16, HashMap<String, String>, String)>>>>;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Parse CLI arguments
+    let args = ServerArgs::parse();
+
     // Initialize tracing
-    tracing_subscriber::fmt::init();
+    if args.verbose {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .init();
+    }
+
+    // Generate config if requested
+    if args.generate_config {
+        ServerConfig::generate_default_file(&args.config)?;
+        return Ok(());
+    }
+
+    // Load configuration
+    let config = ServerConfig::load(&args)?;
+    info!("Loaded configuration from {:?}", args.config);
+    info!("HTTP server: {}", config.http_addr());
+    info!("WebSocket server: {}", config.ws_addr());
+    info!("Auth tokens: {} configured", config.auth.tokens.len());
 
     info!("Starting ExposeME Server...");
 
@@ -27,43 +53,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Clone for HTTP server
     let tunnels_http = tunnels.clone();
     let pending_requests_http = pending_requests.clone();
+    let config_http = config.clone();
 
     // Start HTTP server
-    let http_server = async {
+    let http_server = async move {
+        let config_for_service = config_http.clone();
+
         let make_svc = make_service_fn(move |_conn| {
             let tunnels = tunnels_http.clone();
             let pending_requests = pending_requests_http.clone();
+            let config = config_for_service.clone();
 
             async move {
                 Ok::<_, hyper::Error>(service_fn(move |req| {
-                    handle_http_request(req, tunnels.clone(), pending_requests.clone())
+                    handle_http_request(req, tunnels.clone(), pending_requests.clone(), config.clone())
                 }))
             }
         });
 
-        let addr = ([0, 0, 0, 0], 8888).into();
+        let addr = config_http.http_addr().parse()?;
         let server = Server::bind(&addr).serve(make_svc);
 
-        info!("HTTP server listening on http://localhost:8888");
+        info!("HTTP server listening on http://{}", config_http.http_addr());
 
         if let Err(e) = server.await {
             error!("HTTP server error: {}", e);
         }
+
+        Ok::<(), Box<dyn std::error::Error>>(())
     };
 
-    // Start WebSocket server
+    // Start WebSocket server  
     let ws_server = async {
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:8081").await?;
-        info!("WebSocket server listening on ws://localhost:8081");
+        let listener = tokio::net::TcpListener::bind(&config.ws_addr()).await?;
+        info!("WebSocket server listening on ws://{}", config.ws_addr());
 
         while let Ok((stream, addr)) = listener.accept().await {
             info!("New WebSocket connection from: {}", addr);
 
             let tunnels = tunnels.clone();
             let pending_requests = pending_requests.clone();
+            let config = config.clone();
 
             tokio::spawn(async move {
-                if let Err(e) = handle_websocket_connection(stream, tunnels, pending_requests).await {
+                if let Err(e) = handle_websocket_connection(stream, tunnels, pending_requests, config).await {
                     error!("WebSocket connection error: {}", e);
                 }
             });
@@ -74,7 +107,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run both servers concurrently
     tokio::select! {
-        _ = http_server => {},
+        result = http_server => {
+            if let Err(e) = result {
+                error!("HTTP server error: {}", e);
+            }
+        },
         result = ws_server => {
             if let Err(e) = result {
                 error!("WebSocket server error: {}", e);
@@ -89,6 +126,7 @@ async fn handle_http_request(
     req: Request<Body>,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
+    config: ServerConfig,
 ) -> Result<Response<Body>, hyper::Error> {
     let path = req.uri().path().to_string();
     let method = req.method().clone();
@@ -127,7 +165,7 @@ async fn handle_http_request(
     // Generate request ID
     let request_id = uuid::Uuid::new_v4().to_string();
 
-    // Extract method and headers before consuming request body
+    // Extract headers before consuming request body
     let headers_ref = req.headers();
 
     // Extract headers
@@ -170,9 +208,9 @@ async fn handle_http_request(
             .unwrap());
     }
 
-    // Wait for response (with timeout)
+    // Wait for response (with timeout from config)
     let response = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
+        Duration::from_secs(config.limits.request_timeout_secs),
         response_rx.recv()
     ).await;
 
@@ -226,6 +264,7 @@ async fn handle_websocket_connection(
     stream: tokio::net::TcpStream,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
+    config: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ws_stream = accept_async(stream).await?;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
@@ -255,8 +294,8 @@ async fn handle_websocket_connection(
                         Message::Auth { token, tunnel_id: requested_tunnel_id } => {
                             info!("Auth request for tunnel '{}'", requested_tunnel_id);
 
-                            // Simple token validation (hardcoded for MVP)
-                            if token != "dev" {
+                            // Token validation using config
+                            if !config.auth.tokens.contains(&token) {
                                 let error_msg = Message::AuthError {
                                     error: "invalid_token".to_string(),
                                     message: "Invalid authentication token".to_string(),
@@ -284,6 +323,22 @@ async fn handle_websocket_connection(
                                 }
                             }
 
+                            // Check max tunnels limit
+                            {
+                                let tunnels_guard = tunnels.read().await;
+                                if tunnels_guard.len() >= config.limits.max_tunnels {
+                                    let error_msg = Message::AuthError {
+                                        error: "max_tunnels_reached".to_string(),
+                                        message: format!("Maximum number of tunnels ({}) reached", config.limits.max_tunnels),
+                                    };
+                                    if let Err(err) = tx.send(error_msg) {
+                                        error!("Failed to send max_tunnels error to client: {}", err);
+                                        break;
+                                    }
+                                    break;
+                                }
+                            }
+
                             // Register tunnel
                             {
                                 let mut tunnels_guard = tunnels.write().await;
@@ -294,7 +349,7 @@ async fn handle_websocket_connection(
 
                             let success_msg = Message::AuthSuccess {
                                 tunnel_id: requested_tunnel_id.clone(),
-                                public_url: format!("http://localhost:8888/{}", requested_tunnel_id),
+                                public_url: format!("{}/{}", config.public_url_base(), requested_tunnel_id),
                             };
 
                             if let Err(err) = tx.send(success_msg) {
@@ -347,7 +402,6 @@ async fn handle_websocket_connection(
     Ok(())
 }
 
-// Re-export base64 for convenience
+// Re-export dependencies
 use base64::Engine;
-// Re-export futures for stream handling
 use futures_util::{SinkExt, StreamExt};

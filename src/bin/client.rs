@@ -1,41 +1,86 @@
 // src/bin/client.rs
 use std::collections::HashMap;
+use std::time::Duration;
 
+use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tracing::{error, info, warn};
 
-use exposeme::Message;
+use exposeme::{Message, ClientArgs, ClientConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Parse CLI arguments
+    let args = ClientArgs::parse();
+
     // Initialize tracing
-    tracing_subscriber::fmt::init();
+    if args.verbose {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .init();
+    }
+
+    // Generate config if requested
+    if args.generate_config {
+        ClientConfig::generate_default_file(&args.config)?;
+        return Ok(());
+    }
+
+    // Load configuration
+    let config = ClientConfig::load(&args)?;
+    info!("Loaded configuration from {:?}", args.config);
+    info!("Server: {}", config.client.server_url);
+    info!("Tunnel ID: {}", config.client.tunnel_id);
+    info!("Local target: {}", config.client.local_target);
 
     info!("Starting ExposeME Client...");
 
-    // Configuration (hardcoded for MVP)
-    let server_url = "ws://localhost:8081";
-    let auth_token = "dev";
-    let tunnel_id = "test";
-    let local_target = "http://localhost:3300";
+    // Main client loop with reconnection
+    loop {
+        match run_client(&config).await {
+            Ok(_) => {
+                info!("Client disconnected normally");
+                break;
+            }
+            Err(e) => {
+                error!("Client error: {}", e);
 
+                if config.client.auto_reconnect {
+                    info!("Reconnecting in {} seconds...", config.client.reconnect_delay_secs);
+                    tokio::time::sleep(Duration::from_secs(config.client.reconnect_delay_secs)).await;
+                    continue;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Connect to WebSocket server
-    let (ws_stream, _) = connect_async(server_url).await?;
+    let (ws_stream, _) = connect_async(&config.client.server_url).await?;
     info!("Connected to WebSocket server");
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
     // Send authentication
     let auth_message = Message::Auth {
-        token: auth_token.to_string(),
-        tunnel_id: tunnel_id.to_string(),
+        token: config.client.auth_token.clone(),
+        tunnel_id: config.client.tunnel_id.clone(),
     };
 
     let auth_json = auth_message.to_json()?;
     ws_sender.send(WsMessage::Text(auth_json)).await?;
-    info!("Sent authentication for tunnel '{}'", tunnel_id);
+    info!("Sent authentication for tunnel '{}'", config.client.tunnel_id);
 
     // Create HTTP client for forwarding requests
     let http_client = HttpClient::new();
@@ -49,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Message::AuthSuccess { tunnel_id, public_url } => {
                             info!("✅ Tunnel '{}' established!", tunnel_id);
                             info!("🌐 Public URL: {}", public_url);
-                            info!("🔄 Forwarding to: {}", local_target);
+                            info!("🔄 Forwarding to: {}", config.client.local_target);
                         }
 
                         Message::AuthError { error, message } => {
@@ -63,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Forward request to local service
                             let response = forward_request(
                                 &http_client,
-                                &local_target,
+                                &config.client.local_target,
                                 &method,
                                 &path,
                                 headers,
@@ -120,7 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    info!("Client shutting down");
+    info!("Client connection ended");
     Ok(())
 }
 

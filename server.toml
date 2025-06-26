@@ -1,0 +1,28 @@
+# server.toml - ExposeME Server Configuration
+
+[server]
+# HTTP server settings
+http_bind = "0.0.0.0"
+http_port = 8888
+
+# WebSocket server settings
+ws_bind = "0.0.0.0"
+ws_port = 8081
+
+# Public domain (optional, for HTTPS in production)
+# domain = "exposeme.example.com"
+
+[auth]
+# Authentication tokens
+tokens = [
+    "dev",
+    "team-token-1",
+    "team-token-2"
+]
+
+[limits]
+# Maximum concurrent tunnels
+max_tunnels = 50
+
+# Request timeout in seconds
+request_timeout_secs = 30

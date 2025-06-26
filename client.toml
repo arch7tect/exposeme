@@ -1,0 +1,20 @@
+# client.toml - ExposeME Client Configuration
+
+[client]
+# Server WebSocket URL
+server_url = "ws://localhost:8081"
+
+# Authentication token (must match server config)
+auth_token = "dev"
+
+# Tunnel identifier (choose unique name)
+tunnel_id = "my-dev-tunnel"
+
+# Local service to forward requests to
+local_target = "http://localhost:3300"
+
+# Auto-reconnect on connection loss
+auto_reconnect = true
+
+# Delay between reconnection attempts (seconds)
+reconnect_delay_secs = 5

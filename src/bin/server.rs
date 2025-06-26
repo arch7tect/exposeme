@@ -261,8 +261,11 @@ async fn handle_websocket_connection(
                                     error: "invalid_token".to_string(),
                                     message: "Invalid authentication token".to_string(),
                                 };
-                                tx.send(error_msg)?;
-                                continue;
+                                if let Err(err) = tx.send(error_msg) {
+                                    error!("Failed to send auth error to client: {}", err);
+                                    break;
+                                }
+                                break;
                             }
 
                             // Check if tunnel_id is already taken
@@ -273,8 +276,11 @@ async fn handle_websocket_connection(
                                         error: "tunnel_id_taken".to_string(),
                                         message: format!("Tunnel ID '{}' is already in use", requested_tunnel_id),
                                     };
-                                    tx.send(error_msg)?;
-                                    continue;
+                                    if let Err(err) = tx.send(error_msg) {
+                                        error!("Failed to send tunnel_taken error to client: {}", err);
+                                        break;
+                                    }
+                                    break;
                                 }
                             }
 
@@ -291,7 +297,10 @@ async fn handle_websocket_connection(
                                 public_url: format!("http://localhost:8888/{}", requested_tunnel_id),
                             };
 
-                            tx.send(success_msg)?;
+                            if let Err(err) = tx.send(success_msg) {
+                                error!("Failed to send auth success to client: {}", err);
+                                break;
+                            }
                             info!("Tunnel '{}' registered successfully", requested_tunnel_id);
                         }
 

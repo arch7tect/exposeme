@@ -8,6 +8,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub server: ServerSettings,
+    pub ssl: SslSettings,
     pub auth: AuthSettings,
     pub limits: LimitSettings,
 }
@@ -16,9 +17,32 @@ pub struct ServerConfig {
 pub struct ServerSettings {
     pub http_bind: String,
     pub http_port: u16,
+    pub https_port: u16,
     pub ws_bind: String,
     pub ws_port: u16,
-    pub domain: Option<String>,
+    pub domain: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SslSettings {
+    pub enabled: bool,
+    pub provider: SslProvider,
+    pub email: String,
+    pub staging: bool,
+    pub cert_cache_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SslProvider {
+    LetsEncrypt,
+    Manual,
+}
+
+impl Default for SslProvider {
+    fn default() -> Self {
+        SslProvider::LetsEncrypt
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,10 +61,18 @@ impl Default for ServerConfig {
         Self {
             server: ServerSettings {
                 http_bind: "0.0.0.0".to_string(),
-                http_port: 8888,
+                http_port: 80,
+                https_port: 443,
                 ws_bind: "0.0.0.0".to_string(),
                 ws_port: 8081,
-                domain: None,
+                domain: "localhost".to_string(),
+            },
+            ssl: SslSettings {
+                enabled: false,
+                provider: SslProvider::LetsEncrypt,
+                email: "admin@example.com".to_string(),
+                staging: true,
+                cert_cache_dir: "/tmp/exposeme-certs".to_string(),
             },
             auth: AuthSettings {
                 tokens: vec!["dev".to_string()],
@@ -101,6 +133,10 @@ pub struct ServerArgs {
     #[arg(long)]
     pub http_port: Option<u16>,
 
+    /// HTTPS port
+    #[arg(long)]
+    pub https_port: Option<u16>,
+
     /// WebSocket bind address  
     #[arg(long)]
     pub ws_bind: Option<String>,
@@ -108,6 +144,26 @@ pub struct ServerArgs {
     /// WebSocket port
     #[arg(long)]
     pub ws_port: Option<u16>,
+
+    /// Domain name for certificates
+    #[arg(long)]
+    pub domain: Option<String>,
+
+    /// Enable HTTPS with Let's Encrypt
+    #[arg(long)]
+    pub enable_https: bool,
+
+    /// Disable HTTPS (HTTP only mode)
+    #[arg(long)]
+    pub disable_https: bool,
+
+    /// Let's Encrypt email
+    #[arg(long)]
+    pub email: Option<String>,
+
+    /// Use Let's Encrypt staging environment
+    #[arg(long)]
+    pub staging: bool,
 
     /// Generate default config file and exit
     #[arg(long)]
@@ -170,11 +226,29 @@ impl ServerConfig {
         if let Some(port) = args.http_port {
             config.server.http_port = port;
         }
+        if let Some(port) = args.https_port {
+            config.server.https_port = port;
+        }
         if let Some(bind) = &args.ws_bind {
             config.server.ws_bind = bind.clone();
         }
         if let Some(port) = args.ws_port {
             config.server.ws_port = port;
+        }
+        if let Some(domain) = &args.domain {
+            config.server.domain = domain.clone();
+        }
+        if let Some(email) = &args.email {
+            config.ssl.email = email.clone();
+        }
+        if args.enable_https {
+            config.ssl.enabled = true;
+        }
+        if args.disable_https {
+            config.ssl.enabled = false;
+        }
+        if args.staging {
+            config.ssl.staging = true;
         }
 
         Ok(config)
@@ -194,6 +268,11 @@ impl ServerConfig {
         format!("{}:{}", self.server.http_bind, self.server.http_port)
     }
 
+    /// Get HTTPS server address
+    pub fn https_addr(&self) -> String {
+        format!("{}:{}", self.server.http_bind, self.server.https_port)
+    }
+
     /// Get WebSocket server address  
     pub fn ws_addr(&self) -> String {
         format!("{}:{}", self.server.ws_bind, self.server.ws_port)
@@ -201,9 +280,18 @@ impl ServerConfig {
 
     /// Get public URL base
     pub fn public_url_base(&self) -> String {
-        match &self.server.domain {
-            Some(domain) => format!("https://{}", domain),
-            None => format!("http://localhost:{}", self.server.http_port),
+        if self.ssl.enabled {
+            if self.server.https_port == 443 {
+                format!("https://{}", self.server.domain)
+            } else {
+                format!("https://{}:{}", self.server.domain, self.server.https_port)
+            }
+        } else {
+            if self.server.http_port == 80 {
+                format!("http://{}", self.server.domain)
+            } else {
+                format!("http://{}:{}", self.server.domain, self.server.http_port)
+            }
         }
     }
 }

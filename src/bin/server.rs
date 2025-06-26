@@ -8,9 +8,10 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode};
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
+use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
 
-use exposeme::{Message, ServerArgs, ServerConfig};
+use exposeme::{Message, ServerArgs, ServerConfig, SslManager, ChallengeStore};
 
 type TunnelMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>>;
 type PendingRequests = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<(u16, HashMap<String, String>, String)>>>>;
@@ -41,8 +42,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::load(&args)?;
     info!("Loaded configuration from {:?}", args.config);
     info!("HTTP server: {}", config.http_addr());
+    if config.ssl.enabled {
+        info!("HTTPS server: {}", config.https_addr());
+        info!("Domain: {}", config.server.domain);
+        info!("SSL provider: {:?}", config.ssl.provider);
+    }
     info!("WebSocket server: {}", config.ws_addr());
     info!("Auth tokens: {} configured", config.auth.tokens.len());
+
+    // Initialize SSL
+    let mut ssl_manager = SslManager::new(config.clone());
+    ssl_manager.initialize().await?;
+    let challenge_store = ssl_manager.get_challenge_store();
 
     info!("Starting ExposeME Server...");
 
@@ -50,23 +61,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tunnels: TunnelMap = Arc::new(RwLock::new(HashMap::new()));
     let pending_requests: PendingRequests = Arc::new(RwLock::new(HashMap::new()));
 
-    // Clone for HTTP server
+    // Clone for servers
     let tunnels_http = tunnels.clone();
     let pending_requests_http = pending_requests.clone();
     let config_http = config.clone();
+    let challenge_store_http = challenge_store.clone();
 
-    // Start HTTP server
+    let tunnels_https = tunnels.clone();
+    let pending_requests_https = pending_requests.clone();
+    let config_https = config.clone();
+    let ssl_config = ssl_manager.get_rustls_config();
+
+    // Start HTTP server (for redirects and ACME challenges)
     let http_server = async move {
         let config_for_service = config_http.clone();
+        let challenges = challenge_store_http.clone();
 
         let make_svc = make_service_fn(move |_conn| {
             let tunnels = tunnels_http.clone();
             let pending_requests = pending_requests_http.clone();
             let config = config_for_service.clone();
+            let challenges = challenges.clone();
 
             async move {
                 Ok::<_, hyper::Error>(service_fn(move |req| {
-                    handle_http_request(req, tunnels.clone(), pending_requests.clone(), config.clone())
+                    handle_http_request(
+                        req,
+                        tunnels.clone(),
+                        pending_requests.clone(),
+                        config.clone(),
+                        challenges.clone()
+                    )
                 }))
             }
         });
@@ -78,6 +103,65 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if let Err(e) = server.await {
             error!("HTTP server error: {}", e);
+        }
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    };
+
+    // Start HTTPS server (if SSL enabled)
+    let https_server = async move {
+        if let Some(tls_config) = ssl_config {
+            let config_for_service = config_https.clone();
+
+            // Create TLS acceptor
+            let tls_acceptor = TlsAcceptor::from(tls_config);
+
+            // Create TCP listener
+            let addr: std::net::SocketAddr = config_https.https_addr().parse()?;
+            let tcp_listener = tokio::net::TcpListener::bind(&addr).await?;
+            info!("HTTPS server listening on https://{}", config_https.https_addr());
+
+            // Handle connections manually with TLS
+            loop {
+                match tcp_listener.accept().await {
+                    Ok((stream, _)) => {
+                        let tls_acceptor = tls_acceptor.clone();
+                        let tunnels = tunnels_https.clone();
+                        let pending_requests = pending_requests_https.clone();
+                        let config = config_for_service.clone();
+
+                        tokio::spawn(async move {
+                            match tls_acceptor.accept(stream).await {
+                                Ok(tls_stream) => {
+                                    let service = service_fn(move |req| {
+                                        handle_https_request(
+                                            req,
+                                            tunnels.clone(),
+                                            pending_requests.clone(),
+                                            config.clone()
+                                        )
+                                    });
+
+                                    if let Err(e) = hyper::server::conn::Http::new()
+                                        .serve_connection(tls_stream, service)
+                                        .await
+                                    {
+                                        error!("HTTPS connection error: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("TLS handshake error: {}", e);
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!("TCP accept error: {}", e);
+                    }
+                }
+            }
+        } else {
+            info!("HTTPS disabled, not starting HTTPS server");
         }
 
         Ok::<(), Box<dyn std::error::Error>>(())
@@ -105,11 +189,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok::<(), Box<dyn std::error::Error>>(())
     };
 
-    // Run both servers concurrently
+    // Run all servers concurrently
     tokio::select! {
         result = http_server => {
             if let Err(e) = result {
                 error!("HTTP server error: {}", e);
+            }
+        },
+        result = https_server => {
+            if let Err(e) = result {
+                error!("HTTPS server error: {}", e);
             }
         },
         result = ws_server => {
@@ -123,6 +212,80 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn handle_http_request(
+    req: Request<Body>,
+    tunnels: TunnelMap,
+    pending_requests: PendingRequests,
+    config: ServerConfig,
+    challenge_store: ChallengeStore,
+) -> Result<Response<Body>, hyper::Error> {
+    let path = req.uri().path();
+
+    // Handle ACME challenges
+    if path.starts_with("/.well-known/acme-challenge/") {
+        return handle_acme_challenge(req, challenge_store).await;
+    }
+
+    // If HTTPS is enabled, redirect HTTP to HTTPS
+    if config.ssl.enabled {
+        let https_url = format!("https://{}{}",
+                                config.server.domain,
+                                req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("")
+        );
+
+        return Ok(Response::builder()
+            .status(StatusCode::MOVED_PERMANENTLY)
+            .header("Location", https_url)
+            .body(Body::from("Redirecting to HTTPS"))
+            .unwrap());
+    }
+
+    // Handle normal HTTP requests (when HTTPS is disabled)
+    handle_tunnel_request(req, tunnels, pending_requests, config).await
+}
+
+async fn handle_https_request(
+    req: Request<Body>,
+    tunnels: TunnelMap,
+    pending_requests: PendingRequests,
+    config: ServerConfig,
+) -> Result<Response<Body>, hyper::Error> {
+    // HTTPS requests always go to tunnel handling
+    handle_tunnel_request(req, tunnels, pending_requests, config).await
+}
+
+async fn handle_acme_challenge(
+    req: Request<Body>,
+    challenge_store: ChallengeStore
+) -> Result<Response<Body>, hyper::Error> {
+    let path = req.uri().path();
+
+    // Extract token from path: /.well-known/acme-challenge/{token}
+    if let Some(token) = path.strip_prefix("/.well-known/acme-challenge/") {
+        info!("🔍 ACME challenge request for token: {}", token);
+
+        // Look up challenge in store
+        let store = challenge_store.read().await;
+        if let Some(key_auth) = store.get(token) {
+            info!("✅ ACME challenge found, responding with key authorization");
+            return Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/plain")
+                .body(Body::from(key_auth.clone()))
+                .unwrap());
+        } else {
+            warn!("❌ ACME challenge not found for token: {}", token);
+        }
+    } else {
+        warn!("❌ Invalid ACME challenge path: {}", path);
+    }
+
+    Ok(Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(Body::from("ACME challenge not found"))
+        .unwrap())
+}
+
+async fn handle_tunnel_request(
     req: Request<Body>,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
@@ -143,7 +306,7 @@ async fn handle_http_request(
     let tunnel_id = path_parts[0].to_string();
     let forwarded_path = format!("/{}", path_parts[1..].join("/"));
 
-    info!("HTTP request for tunnel '{}': {} {}", tunnel_id, method, forwarded_path);
+    info!("Request for tunnel '{}': {} {}", tunnel_id, method, forwarded_path);
 
     // Check if tunnel exists
     let tunnel_sender = {

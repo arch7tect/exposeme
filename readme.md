@@ -145,28 +145,46 @@ exposeme/
 
 ## Production Deployment
 
-For production use:
+For production use with HTTPS:
 
-1. **Set custom domain** in `server.toml`:
+1. **Set up domain and DNS** - Point your domain to the server's IP
+2. **Configure HTTPS** in `server.toml`:
 ```toml
 [server]
-domain = "tunnel.example.com"
+domain = "exposeme.your-domain.com"
+http_port = 80      # For ACME challenges and redirects
+https_port = 443    # Main HTTPS traffic
+
+[ssl]
+enabled = true
+provider = "letsencrypt"
+email = "admin@your-domain.com"
+staging = false
+cert_cache_dir = "/etc/exposeme/certs"
 ```
 
-2. **Use strong tokens**:
-```toml
-[auth]
-tokens = ["very-long-random-token-here"]
+3. **Run with proper permissions** (needed for ports 80/443):
+```bash
+sudo cargo run --bin exposeme-server -- --enable-https
 ```
 
-3. **Configure limits**:
-```toml
-[limits]
-max_tunnels = 100
-request_timeout_secs = 45
+4. **Firewall setup:**
+```bash
+# Allow HTTP (ACME challenges)
+sudo ufw allow 80/tcp
+
+# Allow HTTPS (main traffic)  
+sudo ufw allow 443/tcp
+
+# Allow WebSocket (tunnel management)
+sudo ufw allow 8081/tcp
 ```
 
-4. **Run with systemd** or similar process manager
+5. **Create certificate directory:**
+```bash
+sudo mkdir -p /etc/exposeme/certs
+sudo chown $USER:$USER /etc/exposeme/certs
+```
 
 ## Advanced Usage
 
@@ -218,7 +236,7 @@ Once running, you can use the tunnel URL `http://localhost:8888/test/` for:
 
 ## Testing with Real Webhooks
 
-Once running, use your tunnel URL for:
+Once running with HTTPS, use your tunnel URL for:
 
 - **Telegram bots**: `https://your-domain.com/my-bot/webhook`
 - **WhatsApp Business**: Point webhook to tunnel URL
@@ -232,9 +250,9 @@ Once running, use your tunnel URL for:
 # Start tunnel
 cargo run --bin exposeme-client -- -T telegram-bot
 
-# Set webhook (replace TOKEN and DOMAIN)
-curl -X POST "https://api.telegram.org/botTOKEN/setWebhook" \
-     -d "url=https://DOMAIN/telegram-bot/webhook"
+# Set webhook (replace BOT_TOKEN and YOUR_DOMAIN)
+curl -X POST "https://api.telegram.org/botBOT_TOKEN/setWebhook" \
+     -d "url=https://YOUR_DOMAIN/telegram-bot/webhook"
 ```
 
 **GitHub Webhook:**
@@ -263,9 +281,12 @@ cargo run --bin exposeme-client -- -T github-dev -l http://localhost:3000
 - [x] Configurable limits and timeouts
 - [x] Token-based authentication
 - [x] Error handling and recovery
+- [x] HTTPS support with Let's Encrypt
+- [x] Automatic SSL certificates
+- [x] HTTP to HTTPS redirects
 
 🔄 **In progress / Planned:**
-- [ ] HTTPS support with Let's Encrypt
+- [ ] Certificate auto-renewal (90 days)
 - [ ] Web dashboard for tunnel management
 - [ ] Custom domains per tunnel
 - [ ] Rate limiting per tunnel

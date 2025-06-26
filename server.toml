@@ -1,16 +1,35 @@
 # server.toml - ExposeME Server Configuration
 
 [server]
-# HTTP server settings
+# HTTP server settings (for redirects and ACME challenges)
 http_bind = "0.0.0.0"
-http_port = 8888
+http_port = 80
+
+# HTTPS server settings
+https_port = 443
 
 # WebSocket server settings
 ws_bind = "0.0.0.0"
 ws_port = 8081
 
-# Public domain (optional, for HTTPS in production)
-# domain = "exposeme.example.com"
+# Domain name (required for HTTPS)
+domain = "exposeme.example.com"
+
+[ssl]
+# Enable HTTPS with automatic certificates
+enabled = true
+
+# Certificate provider: "letsencrypt" or "manual"
+provider = "letsencrypt"
+
+# Email for Let's Encrypt registration
+email = "admin@example.com"
+
+# Use staging environment (for testing)
+staging = false
+
+# Directory to cache certificates
+cert_cache_dir = "/etc/exposeme/certs"
 
 [auth]
 # Authentication tokens

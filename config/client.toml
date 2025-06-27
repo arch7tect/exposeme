@@ -1,12 +1,12 @@
 # client.toml - ExposeME Client Configuration
-# docker run -it --rm -v ./config/client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
+# docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
 
 [client]
 # Server WebSocket URL
-server_url = "wss://host.docker.internal:8081"
+server_url = "ws://exposeme.arch7tect.org:8081"
 
 # Authentication token (must match server config)
-auth_token = "dev-token"
+auth_token = "enfint-04d9d0bde4b2a06f3977379e"
 
 # Tunnel identifier (choose unique name)
 tunnel_id = "my-dev-tunnel"

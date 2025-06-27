@@ -2,16 +2,16 @@
 
 [client]
 # Server WebSocket URL
-server_url = "ws://localhost:8081"
+server_url = "ws://exposeme.arch7tect.org:8081"
 
 # Authentication token (must match server config)
-auth_token = "dev-token"
+auth_token = "arch7tect-ca840484c238fa6d7c983029"
 
 # Tunnel identifier (choose unique name)
-tunnel_id = "my-dev-tunnel"
+tunnel_id = "arch7tect-tunnel"
 
 # Local service to forward requests to
-local_target = "http://localhost:3300"
+local_target = "http://localhost:8000"
 
 # Auto-reconnect on connection loss
 auto_reconnect = true

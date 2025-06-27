@@ -333,8 +333,9 @@ async fn handle_tunnel_request(
             .body(Body::from("OK"))
             .unwrap());
     }
-    let forwarded_path = format!("/{}", path_parts[1..].join("/"));
-
+    let forwarded_path = format!("/{}{}",
+                                 path_parts[1..].join("/"),
+                                 req.uri().query().map_or(String::new(), |q| format!("?{}", q)));
     info!("Request for tunnel '{}': {} {}", tunnel_id, method, forwarded_path);
 
     // Check if tunnel exists

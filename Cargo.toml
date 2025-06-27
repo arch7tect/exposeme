@@ -23,7 +23,7 @@ path = "examples/test_server.rs"
 tokio = { version = "1.0", features = ["full"] }
 
 # WebSocket support
-tokio-tungstenite = "0.20"
+tokio-tungstenite = { version = "0.20", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # HTTP server/client

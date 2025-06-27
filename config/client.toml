@@ -3,7 +3,7 @@
 
 [client]
 # Server WebSocket URL
-server_url = "ws://host.docker.internal:8081"
+server_url = "wss://host.docker.internal:8081"
 
 # Authentication token (must match server config)
 auth_token = "dev-token"

@@ -9,13 +9,13 @@ ws_bind = "0.0.0.0"
 ws_port = 8081
 
 # Domain will be overridden via environment variable
-domain = "localhost"
+domain = "sip.flametree.dev.enfint.tech"
 
 [ssl]
-enabled = false
+enabled = true
 provider = "letsencrypt"
 # Email will be overridden via environment variable
-email = "admin@localhost"
+email = "orlov@enfint.tech"
 # Staging will be overridden via environment variable
 staging = true
 cert_cache_dir = "/etc/exposeme/certs"
@@ -24,10 +24,8 @@ cert_cache_dir = "/etc/exposeme/certs"
 # Tokens for client authorization
 # In production better to use environment variables
 tokens = [
-    "dev-token",
-    "telegram-bot-production",
-    "github-webhook-production",
-    "stripe-webhook-production"
+    "arch7tect-ca840484c238fa6d7c983029",
+    "enfint-04d9d0bde4b2a06f3977379e"
 ]
 
 [limits]

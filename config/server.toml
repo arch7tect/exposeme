@@ -6,7 +6,7 @@ http_bind = "0.0.0.0"
 http_port = 80
 https_port = 443
 ws_bind = "0.0.0.0"
-ws_port = 8081docker
+ws_port = 8081
 
 # Domain will be overridden via environment variable
 domain = "sip.flametree.dev.enfint.tech"

@@ -3,7 +3,7 @@
 
 [client]
 # Server WebSocket URL
-server_url = "ws://exposeme.arch7tect.org:8081"
+server_url = "ws://sip.flametree.dev.enfint.tech:8080"
 
 # Authentication token (must match server config)
 auth_token = "enfint-04d9d0bde4b2a06f3977379e"
@@ -12,7 +12,7 @@ auth_token = "enfint-04d9d0bde4b2a06f3977379e"
 tunnel_id = "my-dev-tunnel"
 
 # Local service to forward requests to
-local_target = "http://host.docker.internal:3300"
+local_target = "http://host.docker.internal:8000"
 
 # Auto-reconnect on connection loss
 auto_reconnect = true

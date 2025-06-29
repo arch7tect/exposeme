@@ -17,7 +17,7 @@ provider = "letsencrypt"
 # Email will be overridden via environment variable
 email = "orlov@enfint.tech"
 # Staging will be overridden via environment variable
-staging = true
+staging = false
 cert_cache_dir = "/etc/exposeme/certs"
 
 [auth]

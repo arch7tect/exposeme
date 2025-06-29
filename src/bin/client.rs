@@ -6,6 +6,7 @@ use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+use base64::Engine;
 use tracing::{error, info, warn};
 
 use exposeme::{ClientArgs, ClientConfig, Message};
@@ -253,5 +254,3 @@ async fn forward_request(
     Ok((status, response_headers, response_body_b64))
 }
 
-// Re-export base64 for convenience
-use base64::Engine;

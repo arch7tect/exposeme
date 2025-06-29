@@ -78,7 +78,7 @@ Example:
 ```bash
 # This will use port 9999 even if server.toml specifies a different port
 cargo run --bin exposeme-server -- --http-port 9999
-``` (MVP - Hardcoded)
+``` 
 
 ### Server
 - HTTP proxy: `0.0.0.0:8888`
@@ -90,22 +90,6 @@ cargo run --bin exposeme-server -- --http-port 9999
 - Auth token: `"dev"`
 - Tunnel ID: `"test"`
 - Local target: `http://localhost:3300`
-
-## Project Structure
-
-```
-exposeme/
-├── Cargo.toml
-├── src/
-│   ├── lib.rs              # Common types and protocol
-│   ├── protocol.rs         # WebSocket message protocol
-│   └── bin/
-│       ├── server.rs       # Server binary
-│       └── client.rs       # Client binary
-├── examples/
-│   └── test_server.rs      # Test HTTP server
-└── README.md
-```
 
 ## WebSocket Protocol
 
@@ -200,22 +184,6 @@ EXPOSEME_HTTP_PORT=9999 cargo run --bin exposeme-server
 EXPOSEME_TOKEN=my-secret cargo run --bin exposeme-client
 ```
 
-### Docker Deployment
-
-Example `docker-compose.yml`:
-```yaml
-version: '3.8'
-services:
-  exposeme-server:
-    build: .
-    ports:
-      - "8888:8888"
-      - "8081:8081" 
-    volumes:
-      - ./server.toml:/app/server.toml
-    command: ["exposeme-server", "--config", "/app/server.toml"]
-```
-
 ### Multiple Instances
 
 Run multiple server instances with different configs:
@@ -263,14 +231,6 @@ cargo run --bin exposeme-client -- -T github-dev -l http://localhost:3000
 # Use URL: https://your-domain.com/github-dev/webhooks
 ```
 
-- [ ] HTTPS support with Let's Encrypt
-- [ ] Configuration files
-- [ ] Multiple tunnels per client
-- [ ] Web dashboard
-- [ ] Custom domains
-- [ ] Rate limiting
-- [ ] Authentication system
-
 ## Next Steps (Future versions)
 
 ✅ **Already implemented:**
@@ -281,9 +241,11 @@ cargo run --bin exposeme-client -- -T github-dev -l http://localhost:3000
 - [x] Configurable limits and timeouts
 - [x] Token-based authentication
 - [x] Error handling and recovery
+- [x] Health check endpoint
 - [x] HTTPS support with Let's Encrypt
 - [x] Automatic SSL certificates
 - [x] HTTP to HTTPS redirects
+- [x] Secure web sockets (WSS)
 
 🔄 **In progress / Planned:**
 - [ ] Certificate auto-renewal (90 days)
@@ -293,31 +255,7 @@ cargo run --bin exposeme-client -- -T github-dev -l http://localhost:3000
 - [ ] Request logging and replay
 - [ ] Tunnel statistics and monitoring
 - [ ] API for programmatic tunnel management
-- [ ] Health check endpoints
 - [ ] Metrics and observability
-
-## Security Considerations
-
-### Token Security
-- **Never commit tokens** to version control
-- **Use environment variables** for production tokens
-- **Rotate tokens regularly** in production
-- **Use different tokens** for different environments
-
-### Network Security
-- **Bind to localhost** for development: `http_bind = "127.0.0.1"`
-- **Use HTTPS** in production (when implemented)
-- **Firewall rules** to restrict access to WebSocket port
-- **Monitor active tunnels** regularly
-
-### Safe Practices
-```bash
-# Good: Use environment variable
-EXPOSEME_TOKEN=$(cat /secure/token.txt) cargo run --bin exposeme-client
-
-# Bad: Token visible in process list  
-cargo run --bin exposeme-client -- --token secret-token-here
-```
 
 ## License
 

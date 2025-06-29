@@ -2,7 +2,7 @@
 
 [client]
 # Server WebSocket URL
-server_url = "ws://exposeme.arch7tect.org:8081"
+server_url = "wss://exposeme.arch7tect.org:8081"
 
 # Authentication token (must match server config)
 auth_token = "arch7tect-ca840484c238fa6d7c983029"

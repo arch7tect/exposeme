@@ -233,10 +233,11 @@ impl SslManager {
 
         // Wait for certificate
         let mut attempts = 0;
-        const MAX_ATTEMPTS: u32 = 30;
+        const MAX_ATTEMPTS: u32 = 60;
         loop {
             sleep(Duration::from_secs(2)).await;
             let order_state = order.state();
+            info!("Certificate order status: {:?} for {}", order_state.status, domain);
             match order_state.status {
                 OrderStatus::Valid => {
                     info!("✅ Certificate issued for {}", domain);

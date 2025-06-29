@@ -15,9 +15,7 @@ services:
       # Server configuration
       - ./config/server.toml:/etc/exposeme/server.toml:ro
       # SSL certificates storage
-      - ./exposeme-certs:/etc/exposeme/certs
-      # Logs (optional)
-      - ./exposeme-logs:/var/log/exposeme
+      - ./exposeme-certs:/etc/exposeme/certs:rw
 
     environment:
       # Override configuration via environment variables

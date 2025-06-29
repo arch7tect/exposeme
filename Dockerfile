@@ -1,5 +1,5 @@
 # Dockerfile
-FROM rust:1.88-slim as builder
+FROM rust:1.88-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -19,7 +19,7 @@ COPY examples/ ./examples/
 RUN cargo build --release
 
 # Final server image
-FROM debian:bookworm-slim as server
+FROM debian:bookworm-slim AS server
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -47,7 +47,7 @@ USER exposeme
 CMD ["exposeme-server", "--config", "/etc/exposeme/server.toml"]
 
 # Final client image
-FROM debian:bookworm-slim as client
+FROM debian:bookworm-slim AS client
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \

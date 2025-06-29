@@ -2,13 +2,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-
 use clap::Parser;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode};
 use tokio::sync::{mpsc, RwLock};
 use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
-use tokio_rustls::TlsAcceptor;
+use rustls::{ServerConfig as RustlsConfig};
 use tracing::{error, info, warn};
 
 use exposeme::{Message, ServerArgs, ServerConfig, SslManager, ChallengeStore};
@@ -64,12 +63,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_http = config.clone();
     let challenge_store_http = challenge_store.clone();
 
-    let tunnels_https = tunnels.clone();
-    let pending_requests_https = pending_requests.clone();
-    let config_https = config.clone();
-
     // Start HTTP server (for redirects and ACME challenges)
-    let http_server = async move {
+    let http_handle = tokio::spawn(async move {
         let config_for_service = config_http.clone();
         let challenges = challenge_store_http.clone();
 
@@ -92,85 +87,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        let addr = config_http.http_addr().parse()?;
+        let addr = config_http.http_addr().parse().unwrap();
         let server = Server::bind(&addr).serve(make_svc);
 
-        info!("HTTP server listening on http://{}", config_http.http_addr());
+        info!("✅ HTTP server listening on http://{}", config_http.http_addr());
 
         if let Err(e) = server.await {
-            error!("HTTP server error: {}", e);
+            error!("❌ HTTP server error: {}", e);
         }
-
-        Ok::<(), Box<dyn std::error::Error>>(())
-    };
+    });
 
     // Wait a moment for HTTP server to start
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_http_server_ready(&config).await?;
+    
     ssl_manager.initialize().await?;
-    let ssl_config = ssl_manager.get_rustls_config();
 
     // Start HTTPS server (if SSL enabled)
-    let https_server = async move {
-        if let Some(tls_config) = ssl_config {
-            let config_for_service = config_https.clone();
+    let https_handle = if config.ssl.enabled {
+        let tunnels_https = tunnels.clone();
+        let pending_requests_https = pending_requests.clone();
+        let config_https = config.clone();
+        let ssl_config_for_https = ssl_manager.get_rustls_config().unwrap();
 
-            // Create TLS acceptor
-            let tls_acceptor = TlsAcceptor::from(tls_config);
-
-            // Create TCP listener
-            let addr: std::net::SocketAddr = config_https.https_addr().parse()?;
-            let tcp_listener = tokio::net::TcpListener::bind(&addr).await?;
-            info!("HTTPS server listening on https://{}", config_https.https_addr());
-
-            // Handle connections manually with TLS
-            loop {
-                match tcp_listener.accept().await {
-                    Ok((stream, _)) => {
-                        let tls_acceptor = tls_acceptor.clone();
-                        let tunnels = tunnels_https.clone();
-                        let pending_requests = pending_requests_https.clone();
-                        let config = config_for_service.clone();
-
-                        tokio::spawn(async move {
-                            match tls_acceptor.accept(stream).await {
-                                Ok(tls_stream) => {
-                                    let service = service_fn(move |req| {
-                                        handle_https_request(
-                                            req,
-                                            tunnels.clone(),
-                                            pending_requests.clone(),
-                                            config.clone()
-                                        )
-                                    });
-
-                                    if let Err(e) = hyper::server::conn::Http::new()
-                                        .serve_connection(tls_stream, service)
-                                        .await
-                                    {
-                                        error!("HTTPS connection error: {}", e);
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("TLS handshake error: {}", e);
-                                }
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        error!("TCP accept error: {}", e);
-                    }
-                }
-            }
-        } else {
-            info!("HTTPS disabled, not starting HTTPS server");
-        }
-
-        Ok::<(), Box<dyn std::error::Error>>(())
-    };
+        Some(tokio::spawn(async move {
+            start_https_server(
+                config_https,
+                tunnels_https,
+                pending_requests_https,
+                ssl_config_for_https
+            ).await;
+        }))
+    } 
+    else {
+        None
+    };     
 
     // Start WebSocket server  
-    let ws_server = async {
-        let listener = tokio::net::TcpListener::bind(&config.ws_addr()).await?;
+    let ws_handle = tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(&config.ws_addr()).await.unwrap();
         info!("WebSocket server listening on ws://{}", config.ws_addr());
 
         while let Ok((stream, addr)) = listener.accept().await {
@@ -186,49 +140,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
         }
+    });
 
-        Ok::<(), Box<dyn std::error::Error>>(())
-    };
-
-    // Run all servers concurrently
-    if config.ssl.enabled {
-        info!("🌐 Starting HTTP, HTTPS, and WebSocket servers...");
-        tokio::select! {
-        result = http_server => {
-            if let Err(e) = result {
-                error!("❌ HTTP server error: {}", e);
+    // Wait for all servers
+    match https_handle {
+        Some(https_handle) => {
+            tokio::select! {
+                _ = http_handle => info!("HTTP server terminated"),
+                _ = https_handle => info!("HTTPS server terminated"),
+                _ = ws_handle => info!("WebSocket server terminated"),
             }
-            info!("HTTP server terminated");
-        },
-        result = https_server => {
-            if let Err(e) = result {
-                error!("❌ HTTPS server error: {}", e);
-            }
-            info!("HTTPS server terminated");
-        },
-        result = ws_server => {
-            if let Err(e) = result {
-                error!("❌ WebSocket server error: {}", e);
-            }
-            info!("WebSocket server terminated");
         }
-    }
-    } else {
-        info!("🌐 Starting HTTP and WebSocket servers (HTTPS disabled)...");
-        tokio::select! {
-        result = http_server => {
-            if let Err(e) = result {
-                error!("❌ HTTP server error: {}", e);
+        None => {
+            tokio::select! {
+                _ = http_handle => info!("HTTP server terminated"),
+                _ = ws_handle => info!("WebSocket server terminated"),
             }
-            info!("HTTP server terminated");
-        },
-        result = ws_server => {
-            if let Err(e) = result {
-                error!("❌ WebSocket server error: {}", e);
-            }
-            info!("WebSocket server terminated");
         }
-    }
     }
 
     info!("🛑 ExposeME server shutting down");
@@ -607,6 +535,84 @@ async fn handle_websocket_connection(
     Ok(())
 }
 
-// Re-export dependencies
+async fn wait_for_http_server_ready(config: &ServerConfig) -> anyhow::Result<(), Box<dyn std::error::Error>> {
+    let test_url = format!("http://127.0.0.1:{}/.well-known/acme-challenge/readiness-test",
+                           config.server.http_port);
+
+    info!("Waiting for HTTP server to be ready...");
+
+    for attempt in 1..=10 {
+        match reqwest::get(&test_url).await {
+            Ok(response) => {
+                info!("✅ HTTP server is ready (attempt {}, status: {})", attempt, response.status());
+                return Ok(());
+            }
+            Err(e) => {
+                if attempt < 10 {
+                    info!("⏳ HTTP server not ready yet (attempt {}): {}", attempt, e);
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                } else {
+                    return Err(format!("HTTP server failed to start after 10 attempts: {}", e).into());
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn start_https_server(
+    config: ServerConfig,
+    tunnels: TunnelMap,
+    pending_requests: PendingRequests,
+    tls_config: Arc<RustlsConfig>,
+) {
+    use tokio_rustls::TlsAcceptor;
+
+    let tls_acceptor = TlsAcceptor::from(tls_config);
+    let addr: std::net::SocketAddr = config.https_addr().parse().unwrap();
+    let tcp_listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    info!("✅ HTTPS server listening on https://{}", config.https_addr());
+
+    loop {
+        match tcp_listener.accept().await {
+            Ok((stream, _)) => {
+                let tls_acceptor = tls_acceptor.clone();
+                let tunnels = tunnels.clone();
+                let pending_requests = pending_requests.clone();
+                let config = config.clone();
+
+                tokio::spawn(async move {
+                    match tls_acceptor.accept(stream).await {
+                        Ok(tls_stream) => {
+                            let service = service_fn(move |req| {
+                                handle_https_request(
+                                    req,
+                                    tunnels.clone(),
+                                    pending_requests.clone(),
+                                    config.clone()
+                                )
+                            });
+
+                            if let Err(e) = hyper::server::conn::Http::new()
+                                .serve_connection(tls_stream, service)
+                                .await
+                            {
+                                error!("HTTPS connection error: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            error!("TLS handshake error: {}", e);
+                        }
+                    }
+                });
+            }
+            Err(e) => {
+                error!("TCP accept error: {}", e);
+            }
+        }
+    }
+}
+
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};

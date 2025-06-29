@@ -175,7 +175,6 @@ impl SslManager {
             self.add_challenge(&challenge.token, &key_auth).await;
 
             // Validate challenge
-            wait_for_http_server_ready(&self.config).await?;
             info!("Notifying Let's Encrypt that challenge is ready...");
             order.set_challenge_ready(&challenge.url).await?;
 
@@ -342,28 +341,3 @@ pub async fn get_challenge_response(challenge_store: &ChallengeStore, token: &st
     store.get(token).cloned()
 }
 
-async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<()> {
-    let test_url = format!("http://127.0.0.1:{}/.well-known/acme-challenge/readiness-test",
-                           config.server.http_port);
-
-    info!("Waiting for HTTP server to be ready...");
-
-    for attempt in 1..=10 {
-        match reqwest::get(&test_url).await {
-            Ok(response) => {
-                info!("✅ HTTP server is ready (attempt {}, status: {})", attempt, response.status());
-                return Ok(());
-            }
-            Err(e) => {
-                if attempt < 10 {
-                    info!("⏳ HTTP server not ready yet (attempt {}): {}", attempt, e);
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                } else {
-                    return Err(anyhow!(format!("HTTP server failed to start after 10 attempts: {}", e)));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}

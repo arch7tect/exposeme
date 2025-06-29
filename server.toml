@@ -13,23 +13,23 @@ ws_bind = "0.0.0.0"
 ws_port = 8081
 
 # Domain name (required for HTTPS)
-domain = "exposeme.example.com"
+domain = "exposeme2.arch7tect.org"
 
 [ssl]
 # Enable HTTPS with automatic certificates
-enabled = false
+enabled = true
 
 # Certificate provider: "letsencrypt" or "manual"
 provider = "letsencrypt"
 
 # Email for Let's Encrypt registration
-email = "admin@example.com"
+email = "arch7tect@gmail.com"
 
 # Use staging environment (for testing)
-staging = false
+staging = true
 
 # Directory to cache certificates
-cert_cache_dir = "/etc/exposeme/certs"
+cert_cache_dir = "./exposeme-certs"
 
 [auth]
 # Authentication tokens

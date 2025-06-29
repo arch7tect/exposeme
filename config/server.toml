@@ -9,13 +9,13 @@ ws_bind = "0.0.0.0"
 ws_port = 8081
 
 # Domain will be overridden via environment variable
-domain = "exposeme.arch7tect.org"
+domain = "sip.flametree.dev.enfint.tech"
 
 [ssl]
 enabled = true
 provider = "letsencrypt"
 # Email will be overridden via environment variable
-email = "arch7tect@gmail.com"
+email = "orlov@enfint.tech"
 # Staging will be overridden via environment variable
 staging = true
 cert_cache_dir = "/etc/exposeme/certs"

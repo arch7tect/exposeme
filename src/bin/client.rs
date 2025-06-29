@@ -8,7 +8,7 @@ use reqwest::Client as HttpClient;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tracing::{error, info, warn};
 
-use exposeme::{Message, ClientArgs, ClientConfig};
+use exposeme::{ClientArgs, ClientConfig, Message};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,15 +16,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = ClientArgs::parse();
 
     // Initialize tracing
-    if args.verbose {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .init();
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(if args.verbose {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        })
+        .init();
 
     // Generate config if requested
     if args.generate_config {
@@ -52,8 +50,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 error!("Client error: {}", e);
 
                 if config.client.auto_reconnect {
-                    info!("Reconnecting in {} seconds...", config.client.reconnect_delay_secs);
-                    tokio::time::sleep(Duration::from_secs(config.client.reconnect_delay_secs)).await;
+                    info!(
+                        "Reconnecting in {} seconds...",
+                        config.client.reconnect_delay_secs
+                    );
+                    tokio::time::sleep(Duration::from_secs(config.client.reconnect_delay_secs))
+                        .await;
                     continue;
                 } else {
                     break;
@@ -80,7 +82,10 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
     let auth_json = auth_message.to_json()?;
     ws_sender.send(WsMessage::Text(auth_json)).await?;
-    info!("Sent authentication for tunnel '{}'", config.client.tunnel_id);
+    info!(
+        "Sent authentication for tunnel '{}'",
+        config.client.tunnel_id
+    );
 
     // Create HTTP client for forwarding requests
     let http_client = HttpClient::new();
@@ -91,7 +96,10 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
             Ok(WsMessage::Text(text)) => {
                 if let Ok(msg) = Message::from_json(&text) {
                     match msg {
-                        Message::AuthSuccess { tunnel_id, public_url } => {
+                        Message::AuthSuccess {
+                            tunnel_id,
+                            public_url,
+                        } => {
                             info!("✅ Tunnel '{}' established!", tunnel_id);
                             info!("🌐 Public URL: {}", public_url);
                             info!("🔄 Forwarding to: {}", config.client.local_target);
@@ -102,7 +110,13 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                             return Err(format!("Auth error: {}", message).into());
                         }
 
-                        Message::HttpRequest { id, method, path, headers, body } => {
+                        Message::HttpRequest {
+                            id,
+                            method,
+                            path,
+                            headers,
+                            body,
+                        } => {
                             info!("📥 Received request: {} {}", method, path);
 
                             // Forward request to local service
@@ -113,12 +127,18 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                                 &path,
                                 headers,
                                 &body,
-                            ).await;
+                            )
+                            .await;
 
                             let response_message = match response {
                                 Ok((status, headers, body)) => {
                                     info!("📤 Sending response: {}", status);
-                                    Message::HttpResponse { id, status, headers, body }
+                                    Message::HttpResponse {
+                                        id,
+                                        status,
+                                        headers,
+                                        body,
+                                    }
                                 }
                                 Err(e) => {
                                     error!("❌ Failed to forward request: {}", e);
@@ -126,14 +146,16 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                                         id,
                                         status: 502,
                                         headers: HashMap::new(),
-                                        body: base64::engine::general_purpose::STANDARD.encode("Bad Gateway"),
+                                        body: base64::engine::general_purpose::STANDARD
+                                            .encode("Bad Gateway"),
                                     }
                                 }
                             };
 
                             // Send response back
                             if let Ok(response_json) = response_message.to_json() {
-                                if let Err(e) = ws_sender.send(WsMessage::Text(response_json)).await {
+                                if let Err(e) = ws_sender.send(WsMessage::Text(response_json)).await
+                                {
                                     error!("Failed to send response: {}", e);
                                     break;
                                 }
@@ -200,7 +222,9 @@ async fn forward_request(
     // Add headers
     for (name, value) in headers {
         // Skip headers that reqwest handles automatically
-        if !["host", "content-length", "connection", "user-agent"].contains(&name.to_lowercase().as_str()) {
+        if !["host", "content-length", "connection", "user-agent"]
+            .contains(&name.to_lowercase().as_str())
+        {
             request_builder = request_builder.header(&name, &value);
         }
     }
@@ -219,10 +243,7 @@ async fn forward_request(
     // Extract response headers
     let mut response_headers = HashMap::new();
     for (name, value) in response.headers() {
-        response_headers.insert(
-            name.to_string(),
-            value.to_str().unwrap_or("").to_string(),
-        );
+        response_headers.insert(name.to_string(), value.to_str().unwrap_or("").to_string());
     }
 
     // Get response body

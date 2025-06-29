@@ -22,15 +22,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = ServerArgs::parse();
 
     // Initialize tracing
-    if args.verbose {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .init();
-    }
+    tracing_subscriber::fmt()
+        .with_max_level(if args.verbose {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        })
+        .init();
 
     // Generate config if requested
     if args.generate_config {
@@ -52,7 +50,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize SSL
     let mut ssl_manager = SslManager::new(config.clone());
-    ssl_manager.initialize().await?;
     let challenge_store = ssl_manager.get_challenge_store();
 
     info!("Starting ExposeME Server...");
@@ -70,7 +67,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tunnels_https = tunnels.clone();
     let pending_requests_https = pending_requests.clone();
     let config_https = config.clone();
-    let ssl_config = ssl_manager.get_rustls_config();
 
     // Start HTTP server (for redirects and ACME challenges)
     let http_server = async move {
@@ -107,6 +103,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         Ok::<(), Box<dyn std::error::Error>>(())
     };
+
+    // Wait a moment for HTTP server to start
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    ssl_manager.initialize().await?;
+    let ssl_config = ssl_manager.get_rustls_config();
 
     // Start HTTPS server (if SSL enabled)
     let https_server = async move {
@@ -281,6 +282,15 @@ async fn handle_acme_challenge(
     challenge_store: ChallengeStore
 ) -> Result<Response<Body>, hyper::Error> {
     let path = req.uri().path();
+    let user_agent = req.headers().get("user-agent")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown");
+    info!("🔍 ACME challenge request received");
+    info!("   Path: {}", path);
+    info!("   Method: {}", req.method());
+    info!("   User-Agent: {}", user_agent);
+    info!("   Remote IP: {:?}", req.headers().get("x-forwarded-for"));
+
 
     // Extract token from path: /.well-known/acme-challenge/{token}
     if let Some(token) = path.strip_prefix("/.well-known/acme-challenge/") {
@@ -288,6 +298,8 @@ async fn handle_acme_challenge(
 
         // Look up challenge in store
         let store = challenge_store.read().await;
+        info!("📋 Available challenge tokens: {:?}", store.keys().collect::<Vec<_>>());
+
         if let Some(key_auth) = store.get(token) {
             info!("✅ ACME challenge found, responding with key authorization");
             return Ok(Response::builder()

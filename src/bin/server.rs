@@ -127,9 +127,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };     
 
     // Start WebSocket server  
-    let ws_protocol = if config.ssl.enabled { "WSS (secure)" } else { "WS (non-secure)" };
-    let ws_port = config.server.ws_port;
-
     let tunnels_ws = tunnels.clone();
     let pending_requests_ws = pending_requests.clone();
     let config_ws = config.clone();

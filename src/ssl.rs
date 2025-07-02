@@ -69,7 +69,7 @@ impl SslManager {
     }
 
     /// Initialize SSL configuration
-    pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if !self.config.ssl.enabled {
             info!("SSL disabled, running HTTP only");
             return Ok(());
@@ -94,7 +94,7 @@ impl SslManager {
     }
 
     /// Setup Let's Encrypt certificates
-    async fn setup_letsencrypt(&self) -> Result<RustlsConfig, Box<dyn std::error::Error>> {
+    async fn setup_letsencrypt(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         let domain = &self.config.server.domain;
         let email = &self.config.ssl.email;
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
@@ -131,7 +131,7 @@ impl SslManager {
     }
 
     /// Obtain certificate from Let's Encrypt
-    async fn obtain_certificate(&self, domain: &str, email: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
+    async fn obtain_certificate(&self, domain: &str, email: &str) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
         // Choose ACME directory based on staging flag
         let directory_url = if self.config.ssl.staging {
             LetsEncrypt::Staging.url()
@@ -281,7 +281,7 @@ impl SslManager {
     }
 
     /// Load certificates from files
-    fn load_certificates(&self, cert_path: &Path, key_path: &Path) -> Result<RustlsConfig, Box<dyn std::error::Error>> {
+    fn load_certificates(&self, cert_path: &Path, key_path: &Path) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         info!("Loading certificates from files");
 
         // Read certificate file
@@ -311,11 +311,10 @@ impl SslManager {
     }
 
     /// Load manual certificates
-    fn load_manual_certificates(&self) -> Result<RustlsConfig, Box<dyn std::error::Error>> {
+    fn load_manual_certificates(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         // For manual certificates, user should provide cert and key files
         let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", self.config.server.domain));
         let key_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", self.config.server.domain));
-
 
         if !cert_path.exists() || !key_path.exists() {
             return Err(format!(
@@ -328,7 +327,7 @@ impl SslManager {
     }
 
     /// Generate self-signed certificate (for development)
-    pub fn generate_self_signed(&self) -> Result<RustlsConfig, Box<dyn std::error::Error>> {
+    pub fn generate_self_signed(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         let domain =  self.config.server.domain.as_str();
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
         fs::create_dir_all(cache_dir)?;
@@ -369,7 +368,7 @@ impl SslManager {
             self.load_certificates(&cert_path, &key_path)
         }
     }
-    pub fn get_certificate_info(&self) -> Result<CertificateInfo, Box<dyn std::error::Error>> {
+    pub fn get_certificate_info(&self) -> Result<CertificateInfo, Box<dyn std::error::Error + Send + Sync>> {
         let domain = self.config.server.domain.as_str();
         let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", domain));
 
@@ -408,7 +407,7 @@ impl SslManager {
         }
     }
 
-    pub async fn force_renewal(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn force_renewal(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let domain = self.config.server.domain.as_str();
         info!("🚨 Start certificate renewal for {}", domain);
 

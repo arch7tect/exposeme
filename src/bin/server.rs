@@ -21,7 +21,7 @@ type PendingRequests =
     Arc<RwLock<HashMap<String, mpsc::UnboundedSender<(u16, HashMap<String, String>, String)>>>>;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Parse CLI arguments
     let args = ServerArgs::parse();
 
@@ -54,10 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize SSL
     let ssl_manager = Arc::new(RwLock::new(SslManager::new(config.clone())));
-    let challenge_store = {
-        let manager = ssl_manager.read().await;
-        manager.get_challenge_store()
-    };
+    let challenge_store = ssl_manager.read().await.get_challenge_store();
 
     info!("Starting ExposeME Server...");
 
@@ -158,13 +155,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+
+    let renew_handle = if config.ssl.enabled && config.ssl.provider != SslProvider::Manual{
+        Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
+            loop {
+                interval.tick().await;
+                info!("🔍 Daily certificate renewal check for {}", config.server.domain);
+                let mut manager = ssl_manager.write().await;
+                match  manager.get_certificate_info() {
+                    Ok(info) => {
+                        if let Some(days_until_expiry) = info.days_until_expiry {
+                            info!("📅 Certificate for {} expires in {} days", config.server.domain, days_until_expiry);
+                            if info.needs_renewal {
+                                if let Err(e) = manager.force_renewal().await {
+                                    error!("Failed to renew certificate: {}", e);
+                                }
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        error!("Failed to get certificate info: {}", e);
+                    },
+                }
+            }
+        }))
+    }
+    else {
+        None
+    };
+
     // Wait for all servers
     match https_handle {
         Some(https_handle) => {
-            tokio::select! {
-                _ = http_handle => info!("HTTP server terminated"),
-                _ = https_handle => info!("HTTPS server terminated"),
-                _ = ws_handle => info!("WebSocket server terminated"),
+            match renew_handle {
+                Some(renew_handle) => {
+                    tokio::select! {
+                        _ = http_handle => info!("HTTP server terminated"),
+                        _ = https_handle => info!("HTTPS server terminated"),
+                        _ = ws_handle => info!("WebSocket server terminated"),
+                        _ = renew_handle => info!("Renewal task terminated"),
+                    }
+                },
+                None => {
+                    tokio::select! {
+                        _ = http_handle => info!("HTTP server terminated"),
+                        _ = https_handle => info!("HTTPS server terminated"),
+                        _ = ws_handle => info!("WebSocket server terminated"),
+                    }
+                },
             }
         }
         None => {
@@ -186,7 +225,7 @@ async fn handle_http_request(
     config: ServerConfig,
     challenge_store: ChallengeStore,
     ssl_manager: Arc<RwLock<SslManager>>,
-) -> Result<Response<Body>, hyper::Error> {
+) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
     let path = req.uri().path();
 
     // Handle ACME challenges
@@ -233,7 +272,7 @@ async fn handle_https_request(
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
     config: ServerConfig,
-) -> Result<Response<Body>, hyper::Error> {
+) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
     // HTTPS requests always go to tunnel handling
     handle_tunnel_request(req, tunnels, pending_requests, config).await
 }
@@ -241,7 +280,7 @@ async fn handle_https_request(
 async fn handle_acme_challenge(
     req: Request<Body>,
     challenge_store: ChallengeStore,
-) -> Result<Response<Body>, hyper::Error> {
+) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
     let path = req.uri().path();
     let user_agent = req
         .headers()
@@ -290,7 +329,7 @@ async fn handle_tunnel_request(
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
     config: ServerConfig,
-) -> Result<Response<Body>, hyper::Error> {
+) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
     let path = req.uri().path().to_string();
     let method = req.method().clone();
 
@@ -433,7 +472,7 @@ async fn handle_tunnel_request(
 
 async fn wait_for_http_server_ready(
     config: &ServerConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let test_url = format!(
         "http://127.0.0.1:{}/.well-known/acme-challenge/readiness-test",
         config.server.http_port
@@ -766,7 +805,7 @@ async fn handle_certificate_api(
     req: Request<Body>,
     ssl_manager: Arc<RwLock<SslManager>>,
     config: ServerConfig,
-) -> Result<Response<Body>, hyper::Error> {
+) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
     let path = req.uri().path();
     let method = req.method();
 

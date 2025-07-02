@@ -211,7 +211,7 @@ pub struct ClientArgs {
 
 impl ServerConfig {
     /// Load configuration from file and CLI args
-    pub fn load(args: &ServerArgs) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load(args: &ServerArgs) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut config = if args.config.exists() {
             let content = fs::read_to_string(&args.config)?;
             toml::from_str(&content)?
@@ -256,7 +256,7 @@ impl ServerConfig {
     }
 
     /// Generate default config file
-    pub fn generate_default_file(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn generate_default_file(path: &PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let config = Self::default();
         let content = toml::to_string_pretty(&config)?;
         fs::write(path, content)?;

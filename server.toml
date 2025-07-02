@@ -20,7 +20,7 @@ domain = "exposeme2.arch7tect.org"
 enabled = true
 
 # Certificate provider: "letsencrypt" or "manual"
-provider = "letsencrypt"
+provider = "selfsigned"
 
 # Email for Let's Encrypt registration
 email = "arch7tect@gmail.com"

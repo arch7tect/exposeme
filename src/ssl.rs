@@ -1,31 +1,43 @@
 // src/ssl.rs
 use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
 use instant_acme::{
     Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder,
     OrderStatus,
 };
 use rcgen::{generate_simple_self_signed, CertificateParams};
 use rustls::{Certificate, PrivateKey, ServerConfig as RustlsConfig};
-use rustls_pemfile::{certs, pkcs8_private_keys};
+use rustls_pemfile::{certs, pkcs8_private_keys, read_one, Item};
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::{info, warn};
-
+use x509_parser::parse_x509_certificate;
 use crate::config::{ServerConfig, SslProvider};
 
 /// Global challenge store
 pub type ChallengeStore = Arc<RwLock<HashMap<String, String>>>;
 
+#[derive(Debug, Clone)]
 pub struct SslManager {
     config: ServerConfig,
     rustls_config: Option<Arc<RustlsConfig>>,
     challenge_store: ChallengeStore,
+}
+
+#[derive(Debug, Clone)]
+pub struct CertificateInfo {
+    pub domain: String,
+    pub exists: bool,
+    pub expiry_date: Option<DateTime<Utc>>,
+    pub days_until_expiry: Option<i64>,
+    pub needs_renewal: bool,
 }
 
 impl SslManager {
@@ -57,7 +69,7 @@ impl SslManager {
     }
 
     /// Initialize SSL configuration
-    pub async fn initialize(&mut self) -> Result<()> {
+    pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if !self.config.ssl.enabled {
             info!("SSL disabled, running HTTP only");
             return Ok(());
@@ -68,6 +80,7 @@ impl SslManager {
         let rustls_config = match self.config.ssl.provider {
             SslProvider::LetsEncrypt => self.setup_letsencrypt().await?,
             SslProvider::Manual => self.load_manual_certificates()?,
+            SslProvider::SelfSigned => self.generate_self_signed()?,
         };
 
         self.rustls_config = Some(Arc::new(rustls_config));
@@ -81,7 +94,7 @@ impl SslManager {
     }
 
     /// Setup Let's Encrypt certificates
-    async fn setup_letsencrypt(&self) -> Result<RustlsConfig> {
+    async fn setup_letsencrypt(&self) -> Result<RustlsConfig, Box<dyn std::error::Error>> {
         let domain = &self.config.server.domain;
         let email = &self.config.ssl.email;
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
@@ -118,7 +131,7 @@ impl SslManager {
     }
 
     /// Obtain certificate from Let's Encrypt
-    async fn obtain_certificate(&self, domain: &str, email: &str) -> Result<(String, String)> {
+    async fn obtain_certificate(&self, domain: &str, email: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
         // Choose ACME directory based on staging flag
         let directory_url = if self.config.ssl.staging {
             LetsEncrypt::Staging.url()
@@ -163,7 +176,7 @@ impl SslManager {
                 .challenges
                 .iter()
                 .find(|c| c.r#type == ChallengeType::Http01)
-                .ok_or_else(|| anyhow!("No HTTP-01 challenge found"))?;
+                .ok_or_else(|| "No HTTP-01 challenge found")?;
 
             let key_authorization = order.key_authorization(challenge);
             let key_auth = key_authorization.as_str().to_string();
@@ -190,7 +203,7 @@ impl SslManager {
 
                 // For single domain, take the first authorization
                 let current_auth = fresh_auths.first()
-                    .ok_or_else(|| anyhow!("No authorizations found"))?;
+                    .ok_or_else(|| "No authorizations found")?;
 
                 match current_auth.status {
                     AuthorizationStatus::Valid => {
@@ -200,13 +213,13 @@ impl SslManager {
                     AuthorizationStatus::Invalid => {
                         // Clean up challenge
                         self.remove_challenge(&challenge.token).await;
-                        return Err(anyhow!("❌ Authorization failed for {}", domain));
+                        return Err(format!("❌ Authorization failed for {}", domain).into());
                     }
                     AuthorizationStatus::Pending => {
                         attempts += 1;
                         if attempts >= MAX_ATTEMPTS {
                             self.remove_challenge(&challenge.token).await;
-                            return Err(anyhow!("❌ Authorization timeout for {}", domain));
+                            return Err(format!("❌ Authorization timeout for {}", domain).into());
                         }
                         info!("⏳ Authorization pending for {} (attempt {}/{})", domain, attempts, MAX_ATTEMPTS);
                     }
@@ -244,12 +257,12 @@ impl SslManager {
                     break;
                 }
                 OrderStatus::Invalid => {
-                    return Err(anyhow!("❌ Certificate order failed for {}", domain));
+                    return Err(format!("❌ Certificate order failed for {}", domain).into());
                 }
                 _ => {
                     attempts += 1;
                     if attempts >= MAX_ATTEMPTS {
-                        return Err(anyhow!("❌ Certificate generation timeout for {}", domain));
+                        return Err(format!("❌ Certificate generation timeout for {}", domain).into());
                     }
                     info!("⏳ Certificate generation pending for {} (attempt {}/{})", domain, attempts, MAX_ATTEMPTS);
                 }
@@ -258,7 +271,7 @@ impl SslManager {
 
         // Download certificate
         let cert_chain_pem = order.certificate().await?.ok_or_else(|| {
-            anyhow!("Certificate not available")
+            "Certificate not available"
         })?;
 
         let private_key_pem = cert.serialize_private_key_pem();
@@ -268,7 +281,7 @@ impl SslManager {
     }
 
     /// Load certificates from files
-    fn load_certificates(&self, cert_path: &Path, key_path: &Path) -> Result<RustlsConfig> {
+    fn load_certificates(&self, cert_path: &Path, key_path: &Path) -> Result<RustlsConfig, Box<dyn std::error::Error>> {
         info!("Loading certificates from files");
 
         // Read certificate file
@@ -278,12 +291,12 @@ impl SslManager {
             .map(Certificate)
             .collect();
 
-        // Read private key file  
+        // Read private key file
         let key_file = fs::read(key_path)?;
         let mut keys = pkcs8_private_keys(&mut key_file.as_slice())?;
 
         if keys.is_empty() {
-            return Err(anyhow!("No private keys found"));
+            return Err("No private keys found".into());
         }
 
         let private_key = PrivateKey(keys.remove(0));
@@ -298,47 +311,127 @@ impl SslManager {
     }
 
     /// Load manual certificates
-    fn load_manual_certificates(&self) -> Result<RustlsConfig> {
+    fn load_manual_certificates(&self) -> Result<RustlsConfig, Box<dyn std::error::Error>> {
         // For manual certificates, user should provide cert and key files
-        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join("cert.pem");
-        let key_path = Path::new(&self.config.ssl.cert_cache_dir).join("key.pem");
+        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", self.config.server.domain));
+        let key_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", self.config.server.domain));
+
 
         if !cert_path.exists() || !key_path.exists() {
-            return Err(anyhow!(
-                "Manual certificates not found. Please place cert.pem and key.pem in {}",
-                self.config.ssl.cert_cache_dir
-            ));
+            return Err(format!(
+                "Manual certificates not found. Please place {}.pem and {}.key in {}",
+                self.config.server.domain, self.config.server.domain, self.config.ssl.cert_cache_dir
+            ).into());
         }
 
         self.load_certificates(&cert_path, &key_path)
     }
 
     /// Generate self-signed certificate (for development)
-    pub fn generate_self_signed(domain: &str) -> Result<RustlsConfig> {
-        warn!("Generating self-signed certificate for {}", domain);
-        warn!("This should only be used for development!");
+    pub fn generate_self_signed(&self) -> Result<RustlsConfig, Box<dyn std::error::Error>> {
+        let domain =  self.config.server.domain.as_str();
+        let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
+        fs::create_dir_all(cache_dir)?;
+        let cert_path = cache_dir.join(format!("{}.pem", domain));
+        let key_path = cache_dir.join(format!("{}.key", domain));
 
-        let subject_alt_names = vec![domain.to_string()];
-        let cert = generate_simple_self_signed(subject_alt_names)?;
+        // Check if certificates exist and are valid
+        if !cert_path.exists() || !key_path.exists() {
+            warn!("Generating self-signed certificate for {}", domain);
+            warn!("This should only be used for development!");
 
-        let cert_der = cert.serialize_der()?;
-        let private_key_der = cert.serialize_private_key_der();
+            let subject_alt_names = vec![domain.to_string()];
+            let cert = generate_simple_self_signed(subject_alt_names)?;
+            
+            // Serialize to PEM
+            let cert_pem = cert.serialize_pem()?;
+            let key_pem = cert.serialize_private_key_pem();
 
-        let cert_chain = vec![Certificate(cert_der)];
-        let private_key = PrivateKey(private_key_der);
+            // Save to files
+            fs::write(cert_path, &cert_pem)?;
+            fs::write(key_path, &key_pem)?;
 
-        let config = RustlsConfig::builder()
-            .with_safe_defaults()
-            .with_no_client_auth()
-            .with_single_cert(cert_chain, private_key)?;
+            // Convert to DER for rustls
+            let cert_der = cert.serialize_der()?;
+            let private_key_der = cert.serialize_private_key_der();
 
-        Ok(config)
+            let cert_chain = vec![Certificate(cert_der)];
+            let private_key = PrivateKey(private_key_der);
+
+            let config = RustlsConfig::builder()
+                .with_safe_defaults()
+                .with_no_client_auth()
+                .with_single_cert(cert_chain, private_key)?;
+
+            Ok(config)
+        }
+        else {
+            self.load_certificates(&cert_path, &key_path)
+        }
+    }
+    pub fn get_certificate_info(&self) -> Result<CertificateInfo, Box<dyn std::error::Error>> {
+        let domain = self.config.server.domain.as_str();
+        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", domain));
+
+        if !cert_path.exists() {
+            return Ok(CertificateInfo {
+                domain: domain.to_string(),
+                exists: false,
+                expiry_date: None,
+                days_until_expiry: None,
+                needs_renewal: true,
+            });
+        }
+
+        let file = File::open(cert_path)?;
+        let mut reader = BufReader::new(file);
+        match read_one(&mut reader)? {
+            Some(Item::X509Certificate(der_vec)) => {
+                let (_, cert) = parse_x509_certificate(&der_vec)
+                    .map_err(|e| format!("Failed to parse certificate: {}", e))?;
+                let not_after = cert.validity().not_after;
+                let expiry_time = DateTime::from_timestamp(not_after.timestamp(), 0)
+                    .ok_or_else(|| "Invalid certificate expiry time")?;
+
+                let now = Utc::now();
+                let days_until_expiry = expiry_time.signed_duration_since(now).num_days();
+
+                Ok(CertificateInfo {
+                    domain: domain.to_string(),
+                    exists: true,
+                    expiry_date: Some(expiry_time),
+                    days_until_expiry: Some(days_until_expiry),
+                    needs_renewal: days_until_expiry < 30,
+                })
+            }
+            _ => Err("Expected X509Certificate in PEM file".into()),
+        }
+    }
+
+    pub async fn force_renewal(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let domain = self.config.server.domain.as_str();
+        info!("🚨 Start certificate renewal for {}", domain);
+
+        // Remove existing certificate to force renewal
+        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", domain));
+        let key_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", domain));
+
+        if cert_path.exists() {
+            fs::remove_file(&cert_path)?;
+        }
+        if key_path.exists() {
+            fs::remove_file(&key_path)?;
+        }
+
+        // Perform renewal
+        let new_config = match self.config.ssl.provider {
+            SslProvider::LetsEncrypt => self.setup_letsencrypt().await?,
+            SslProvider::SelfSigned => self.generate_self_signed()?,
+            _ => return Err(format!("Unsupported SSL provider for renewal: {:?}", self.config.ssl.provider).into()),
+        };
+        self.rustls_config = Some(Arc::new(new_config));
+
+        info!("✅ Certificate renewal completed for {}", domain);
+        Ok(())
     }
 }
-
-/// Get challenge response for ACME HTTP-01
-pub async fn get_challenge_response(challenge_store: &ChallengeStore, token: &str) -> Option<String> {
-    let store = challenge_store.read().await;
-    store.get(token).cloned()
-}
-

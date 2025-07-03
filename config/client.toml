@@ -6,7 +6,7 @@
 server_url = "wss://sip.flametree.dev.enfint.tech:8081"
 
 # Authentication token (must match server config)
-auth_token = "enfint-04d9d0bde4b2a06f3977379e"
+auth_token = "your-secure-token-here"
 
 # Tunnel identifier (choose unique name)
 tunnel_id = "my-dev-tunnel"

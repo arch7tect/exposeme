@@ -24,8 +24,7 @@ cert_cache_dir = "/etc/exposeme/certs"
 # Tokens for client authorization
 # In production better to use environment variables
 tokens = [
-    "arch7tect-ca840484c238fa6d7c983029",
-    "enfint-04d9d0bde4b2a06f3977379e"
+    "your-secure-token-here"
 ]
 
 [limits]

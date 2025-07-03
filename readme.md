@@ -1,143 +1,40 @@
-# ExposeME - Secure HTTP Tunneling Service
+# ExposeME
 
-Simple HTTP tunneling service for exposing local development servers to external webhooks (MVP version).
+A fast, secure HTTP tunneling solution written in Rust that exposes local services to the internet through WebSocket connections.
+
+## Features
+
+- **Secure tunneling** via WebSocket connections
+- **HTTPS support** with automatic Let's Encrypt certificates (auto-renewal when < 30 days left)
+- **Multiple SSL providers**: Let's Encrypt, self-signed, or manual certificates
+- **Docker support** with pre-built images
+- **Token-based authentication** for secure access
+- **Multiple concurrent tunnels** with configurable limits
+- **Auto-reconnection** for reliable connections
+- **Health checks** and monitoring endpoints
+
+## Architecture
+
+- **Server**: Accepts WebSocket connections and forwards HTTP requests
+- **Client**: Connects to server and forwards requests to local services
+- **Protocol**: WebSocket-based communication with JSON messages
+- **SSL/TLS**: Automatic certificate management with Let's Encrypt
 
 ## Quick Start
 
-### 1. Build the project
-```bash
-cargo build --release
-```
+### Server Setup with Let's Encrypt
 
-### 2. Start the server
-```bash
-cargo run --bin exposeme-server
-```
+1. **Configure the server:**
 
-The server will start:
-- HTTP proxy on `http://localhost:8080`
-- WebSocket server on `ws://localhost:8081`
-
-### 3. Start a test local server
-In another terminal:
-```bash
-cargo run --example test_server
-```
-
-This starts a simple HTTP server on `http://localhost:3300` that echoes requests.
-
-### 4. Start the client
-In a third terminal:
-```bash
-cargo run --bin exposeme-client
-```
-
-The client will:
-- Connect to the WebSocket server
-- Authenticate with token `"dev"` and tunnel_id `"test"`
-- Forward requests to `http://localhost:3300`
-
-### 5. Test the tunnel
-In another terminal:
-```bash
-# Test basic request
-curl http://localhost:8888/test/webhook -d "Hello from tunnel!"
-
-# Test health endpoint
-curl http://localhost:8888/test/health
-
-# Test with JSON
-curl -H "Content-Type: application/json" \
-     -d '{"message": "test webhook"}' \
-     http://localhost:8888/test/webhook
-```
-
-## How it works
-
-```
-External Request → Server (8888) → WebSocket → Client → Local Service (3300)
-                                     ↑
-                               Tunnel ID: "test"
-```
-
-1. External service sends HTTP request to `http://localhost:8888/test/webhook`
-2. Server extracts tunnel ID (`test`) from URL path
-3. Server forwards request via WebSocket to client
-4. Client forwards request to local service at `localhost:3300`
-5. Response flows back through the same path
-
-## Configuration Priority
-
-Settings are applied in the following order (higher priority overrides lower):
-
-1. **CLI arguments** (highest priority)
-2. **TOML configuration file**
-3. **Default values** (lowest priority)
-
-Example:
-```bash
-# This will use port 9999 even if server.toml specifies a different port
-cargo run --bin exposeme-server -- --http-port 9999
-``` 
-
-### Server
-- HTTP proxy: `0.0.0.0:8888`
-- WebSocket: `0.0.0.0:8081`
-- Auth token: `"dev"`
-
-### Client
-- Server URL: `ws://localhost:8081`
-- Auth token: `"dev"`
-- Tunnel ID: `"test"`
-- Local target: `http://localhost:3300`
-
-## WebSocket Protocol
-
-### Authentication
-```json
-// Client → Server
-{"type": "auth", "token": "dev", "tunnel_id": "test"}
-
-// Server → Client (success)
-{"type": "auth_success", "tunnel_id": "test", "public_url": "http://localhost:8080/test"}
-
-// Server → Client (error)
-{"type": "auth_error", "error": "tunnel_id_taken", "message": "Tunnel ID already in use"}
-```
-
-### Request Forwarding
-```json
-// Server → Client
-{
-  "type": "http_request",
-  "id": "req_12345",
-  "method": "POST",
-  "path": "/webhook",
-  "headers": {"Content-Type": "application/json"},
-  "body": "SGVsbG8gV29ybGQ="  // base64 encoded
-}
-
-// Client → Server
-{
-  "type": "http_response",
-  "id": "req_12345", 
-  "status": 200,
-  "headers": {"Content-Type": "application/json"},
-  "body": "eyJzdGF0dXMiOiJvayJ9"  // base64 encoded
-}
-```
-
-## Production Deployment
-
-For production use with HTTPS:
-
-1. **Set up domain and DNS** - Point your domain to the server's IP
-2. **Configure HTTPS** in `server.toml`:
 ```toml
+# config/server.toml
 [server]
-domain = "exposeme.your-domain.com"
-http_port = 80      # For ACME challenges and redirects
-https_port = 443    # Main HTTPS traffic
+http_bind = "0.0.0.0"
+http_port = 80
+https_port = 443
+ws_bind = "0.0.0.0"
+ws_port = 8081
+domain = "your-domain.com"
 
 [ssl]
 enabled = true
@@ -145,118 +42,153 @@ provider = "letsencrypt"
 email = "admin@your-domain.com"
 staging = false
 cert_cache_dir = "/etc/exposeme/certs"
+
+[auth]
+tokens = [
+    "your-secure-token-here",
+    "another-token-for-client-2"
+]
+
+[limits]
+max_tunnels = 100
+request_timeout_secs = 30
 ```
 
-3. **Run with proper permissions** (needed for ports 80/443):
+2. **Run the server with Docker Compose:**
+
+```yaml
+# docker-compose.yml
+services:
+  exposeme-server:
+    image: arch7tect/exposeme-server:latest
+    container_name: exposeme-server
+    restart: unless-stopped
+    
+    ports:
+      - "80:80"       # HTTP
+      - "443:443"     # HTTPS  
+      - "8081:8081"   # WebSocket
+    
+    volumes:
+      - ./config/server.toml:/etc/exposeme/server.toml:ro
+      - ./exposeme-certs:/etc/exposeme/certs:rw
+    
+    environment:
+      - EXPOSEME_DOMAIN=your-domain.com
+      - EXPOSEME_EMAIL=admin@your-domain.com
+      - EXPOSEME_STAGING=false
+      - RUST_LOG=info
+```
+
 ```bash
-sudo cargo run --bin exposeme-server -- --enable-https
+docker-compose up -d
 ```
 
-4. **Firewall setup:**
-```bash
-# Allow HTTP (ACME challenges)
-sudo ufw allow 80/tcp
+### Client Configuration
 
-# Allow HTTPS (main traffic)  
-sudo ufw allow 443/tcp
+1. **Configure the client:**
 
-# Allow WebSocket (tunnel management)
-sudo ufw allow 8081/tcp
+```toml
+# client.toml
+[client]
+server_url = "wss://your-domain.com:8081"
+auth_token = "your-secure-token-here"
+tunnel_id = "my-app-tunnel"
+local_target = "http://host.docker.internal:8000"
+auto_reconnect = true
+reconnect_delay_secs = 5
 ```
 
-5. **Create certificate directory:**
-```bash
-sudo mkdir -p /etc/exposeme/certs
-sudo chown $USER:$USER /etc/exposeme/certs
-```
-
-## Advanced Usage
-
-### Environment Variables
-
-You can also use environment variables (useful for Docker):
+2. **Run the client:**
 
 ```bash
-# Server
-EXPOSEME_HTTP_PORT=9999 cargo run --bin exposeme-server
-
-# Client  
-EXPOSEME_TOKEN=my-secret cargo run --bin exposeme-client
+docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
 ```
 
-### Multiple Instances
+3. **Access your service:**
+   Your local service will be available at: `https://your-domain.com/my-app-tunnel/`
 
-Run multiple server instances with different configs:
+## Building from Source
+
+### Prerequisites
+- Rust 1.70+
+- OpenSSL development headers
+
+### Build
 ```bash
-# Instance 1: Development
-cargo run --bin exposeme-server -- --config dev-server.toml --http-port 8888
+# Clone repository
+git clone <repository-url>
+cd exposeme
 
-# Instance 2: Testing
-cargo run --bin exposeme-server -- --config test-server.toml --http-port 9999
+# Build server and client
+cargo build --release
+
+# Run server
+./target/release/exposeme-server --generate-config
+./target/release/exposeme-server
+
+# Run client  
+./target/release/exposeme-client --generate-config
+./target/release/exposeme-client
 ```
 
-Once running, you can use the tunnel URL `http://localhost:8888/test/` for:
+## Configuration Options
 
-- **Local development**: Test webhooks from external services
-- **Telegram bots**: Set webhook URL to `http://your-server:8888/test/webhook`
-- **WhatsApp**: Point webhook to your tunnel URL
-- **GitHub webhooks**: Use for local development
+### Server Configuration
 
-## Testing with Real Webhooks
+| Section | Option | Description | Default |
+|---------|--------|-------------|---------|
+| `[server]` | `domain` | Domain name for certificates | `localhost` |
+| `[server]` | `http_port` | HTTP port | `80` |
+| `[server]` | `https_port` | HTTPS port | `443` |
+| `[server]` | `ws_port` | WebSocket port | `8081` |
+| `[ssl]` | `enabled` | Enable HTTPS | `false` |
+| `[ssl]` | `provider` | SSL provider (`letsencrypt`, `manual`, `selfsigned`) | `letsencrypt` |
+| `[ssl]` | `staging` | Use Let's Encrypt staging | `true` |
+| `[auth]` | `tokens` | Authentication tokens | `["dev"]` |
+| `[limits]` | `max_tunnels` | Maximum concurrent tunnels | `50` |
 
-Once running with HTTPS, use your tunnel URL for:
+### Client Configuration
 
-- **Telegram bots**: `https://your-domain.com/my-bot/webhook`
-- **WhatsApp Business**: Point webhook to tunnel URL
-- **GitHub webhooks**: For local development
-- **Stripe webhooks**: Test payment processing locally
+| Section | Option | Description | Default |
+|---------|--------|-------------|---------|
+| `[client]` | `server_url` | WebSocket server URL | `ws://localhost:8081` |
+| `[client]` | `auth_token` | Authentication token | `dev` |
+| `[client]` | `tunnel_id` | Unique tunnel identifier | `test` |
+| `[client]` | `local_target` | Local service URL | `http://localhost:3300` |
+| `[client]` | `auto_reconnect` | Auto-reconnect on disconnect | `true` |
 
-### Webhook Examples
+## API Endpoints
 
-**Telegram Bot Setup:**
+### Health Check
 ```bash
-# Start tunnel
-cargo run --bin exposeme-client -- -T telegram-bot
-
-# Set webhook (replace BOT_TOKEN and YOUR_DOMAIN)
-curl -X POST "https://api.telegram.org/botBOT_TOKEN/setWebhook" \
-     -d "url=https://YOUR_DOMAIN/telegram-bot/webhook"
+curl http://your-domain.com/api/health
 ```
 
-**GitHub Webhook:**
+### Certificate Status
 ```bash
-# Start tunnel for your local dev server
-cargo run --bin exposeme-client -- -T github-dev -l http://localhost:3000
-
-# Use URL: https://your-domain.com/github-dev/webhooks
+curl http://your-domain.com/api/certificates/status
 ```
 
-## Next Steps (Future versions)
+## Use Cases
 
-✅ **Already implemented:**
-- [x] TOML configuration
-- [x] CLI arguments
-- [x] Multiple tunnels support
-- [x] Auto-reconnection
-- [x] Configurable limits and timeouts
-- [x] Token-based authentication
-- [x] Error handling and recovery
-- [x] Health check endpoint
-- [x] HTTPS support with Let's Encrypt
-- [x] Automatic SSL certificates
-- [x] HTTP to HTTPS redirects
-- [x] Secure web sockets (WSS)
+- **Development environments**: Expose local dev servers for testing
+- **Webhooks**: Receive webhooks on local development machines
+- **IoT devices**: Connect devices behind NAT to cloud services
+- **Microservices**: Temporary exposure of internal services
+- **Demo applications**: Share work-in-progress applications
 
-🔄 **In progress / Planned:**
-- [ ] Certificate auto-renewal (90 days)
-- [ ] Web dashboard for tunnel management
-- [ ] Custom domains per tunnel
-- [ ] Rate limiting per tunnel
-- [ ] Request logging and replay
-- [ ] Tunnel statistics and monitoring
-- [ ] API for programmatic tunnel management
-- [ ] Metrics and observability
+## Troubleshooting
+
+### Docker Logs
+```bash
+docker-compose logs -f exposeme-server
+```
 
 ## License
 
-MIT
+MIT License
+
+---
+
+**Made with ❤️ and Rust**

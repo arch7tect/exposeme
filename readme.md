@@ -112,7 +112,6 @@ docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml arch7tect/exposem
 
 ### Prerequisites
 - Rust 1.70+
-- OpenSSL development headers
 
 ### Build
 ```bash

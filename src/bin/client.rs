@@ -7,12 +7,20 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use base64::Engine;
+use tokio::signal;
 use tracing::{error, info, warn};
 
 use exposeme::{ClientArgs, ClientConfig, Message};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Handle Ctrl+C gracefully
+    tokio::spawn(async {
+        signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
+        info!("🛑 Received Ctrl+C, shutting down...");
+        std::process::exit(0);
+    });
+    
     // Parse CLI arguments
     let args = ClientArgs::parse();
 

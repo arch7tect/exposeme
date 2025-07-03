@@ -190,4 +190,4 @@ MIT License
 
 ---
 
-**Made with ❤️ and Rust**
+**Made with Rust**

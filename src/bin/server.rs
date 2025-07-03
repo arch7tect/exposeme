@@ -612,6 +612,7 @@ where
                                     error!("Failed to send auth error to client: {}", err);
                                     break;
                                 }
+                                tokio::time::sleep(Duration::from_millis(500)).await;
                                 break;
                             }
 
@@ -633,6 +634,7 @@ where
                                         );
                                         break;
                                     }
+                                    tokio::time::sleep(Duration::from_millis(500)).await;
                                     break;
                                 }
                             }
@@ -655,6 +657,7 @@ where
                                         );
                                         break;
                                     }
+                                    tokio::time::sleep(Duration::from_millis(500)).await;
                                     break;
                                 }
                             }

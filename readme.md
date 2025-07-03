@@ -11,11 +11,11 @@ A fast, secure HTTP tunneling solution written in Rust that exposes local servic
 - **Token-based authentication** for secure access
 - **Multiple concurrent tunnels** with configurable limits
 - **Auto-reconnection** for reliable connections
-- **Health checks** and monitoring endpoints
+- **Health check** and certificate status endpoints
 
 ## Architecture
 
-- **Server**: Accepts WebSocket connections and forwards HTTP requests
+- **Server**: Accepts WebSocket connections from clients and forwards HTTP requests to them
 - **Client**: Connects to server and forwards requests to local services
 - **Protocol**: WebSocket-based communication with JSON messages
 - **SSL/TLS**: Automatic certificate management with Let's Encrypt
@@ -186,8 +186,4 @@ docker-compose logs -f exposeme-server
 
 ## License
 
-MIT License
-
----
-
-**Made with Rust**
+MIT

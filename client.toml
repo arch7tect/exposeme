@@ -8,7 +8,7 @@ server_url = "wss://exposeme.arch7tect.org:8081"
 auth_token = "dev"
 
 # Tunnel identifier (choose unique name)
-tunnel_id = "arch7tect-tunnel"
+tunnel_id = "my-tunnel"
 
 # Local service to forward requests to
 local_target = "http://localhost:8000"

@@ -22,7 +22,7 @@ email = "arch7tect@gmail.com"
 # Staging will be overridden via environment variable
 staging = false
 cert_cache_dir = "/etc/exposeme/certs"
-#wildcard=true
+wildcard=false
 #dns_provider = { provider = "digitalocean", config = { api_token = "your-do-token" } }
 
 

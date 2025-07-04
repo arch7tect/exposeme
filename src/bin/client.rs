@@ -7,6 +7,7 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use base64::Engine;
+use rustls::crypto::CryptoProvider;
 use tokio::signal;
 use tracing::{error, info, warn};
 
@@ -14,6 +15,11 @@ use exposeme::{ClientArgs, ClientConfig, Message};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Set up crypto provider
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install ring CryptoProvider");
+
     // Handle Ctrl+C gracefully
     tokio::spawn(async {
         signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");

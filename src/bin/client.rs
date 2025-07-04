@@ -7,7 +7,6 @@ use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use base64::Engine;
-use rustls::crypto::CryptoProvider;
 use tokio::signal;
 use tracing::{error, info, warn};
 

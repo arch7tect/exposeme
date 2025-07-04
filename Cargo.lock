@@ -558,15 +558,18 @@ dependencies = [
 
 [[package]]
 name = "exposeme"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64",
+ "bytes",
  "chrono",
  "clap",
  "futures-util",
  "hickory-resolver",
+ "http-body-util",
  "hyper",
+ "hyper-util",
  "instant-acme",
  "rcgen",
  "reqwest",
@@ -579,6 +582,7 @@ dependencies = [
  "tokio-test",
  "tokio-tungstenite",
  "toml",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "uuid",

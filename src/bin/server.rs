@@ -3,10 +3,14 @@ use base64::Engine;
 use clap::Parser;
 use exposeme::{ChallengeStore, Message, ServerArgs, ServerConfig, SslManager, SslProvider};
 use futures_util::{SinkExt, StreamExt};
-use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Request, Response, Server, StatusCode};
+use hyper_util::rt::TokioIo;
+use hyper_util::server::conn::auto::Builder;
+use hyper_util::service::TowerToHyperService;
+use hyper::{body::Incoming, Request, Response, StatusCode};
+use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use rustls::ServerConfig as RustlsConfig;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -15,13 +19,33 @@ use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 use tracing::{error, info, warn};
 use serde_json::json;
+use tower::Service;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
+type ResponseBody = BoxBody<bytes::Bytes, BoxError>;
 
 type TunnelMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>>;
 type PendingRequests =
-    Arc<RwLock<HashMap<String, mpsc::UnboundedSender<(u16, HashMap<String, String>, String)>>>>;
+Arc<RwLock<HashMap<String, mpsc::UnboundedSender<(u16, HashMap<String, String>, String)>>>>;
+
+fn boxed_body(text: impl Into<bytes::Bytes>) -> BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>> {
+    Full::new(text.into())
+        .map_err(|e: Infallible| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(e)
+        })
+        .boxed()
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn main() -> Result<(), BoxError> {
+    // Set up crypto provider
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install ring CryptoProvider");
+    
     // Parse CLI arguments
     let args = ServerArgs::parse();
 
@@ -71,40 +95,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Start HTTP server (for redirects and ACME challenges)
     let http_handle = tokio::spawn(async move {
-        let config_for_service = config_http.clone();
-        let challenges = challenge_store_http.clone();
-        let ssl_manager = ssl_manager_http.clone();
-
-        let make_svc = make_service_fn(move |_conn| {
-            let tunnels = tunnels_http.clone();
-            let pending_requests = pending_requests_http.clone();
-            let config = config_for_service.clone();
-            let challenges = challenges.clone();
-            let ssl_manager = ssl_manager.clone();
-
-            async move {
-                Ok::<_, hyper::Error>(service_fn(move |req| {
-                    handle_http_request(
-                        req,
-                        tunnels.clone(),
-                        pending_requests.clone(),
-                        config.clone(),
-                        challenges.clone(),
-                        ssl_manager.clone(),
-                    )
-                }))
-            }
-        });
-
-        let addr = config_http.http_addr().parse().unwrap();
-        let server = Server::bind(&addr).serve(make_svc);
-
-        info!(
-            "✅ HTTP server listening on http://{}",
-            config_http.http_addr()
-        );
-
-        if let Err(e) = server.await {
+        if let Err(e) = start_http_server(
+            config_http,
+            tunnels_http,
+            pending_requests_http,
+            challenge_store_http,
+            ssl_manager_http,
+        ).await {
             error!("❌ HTTP server error: {}", e);
         }
     });
@@ -128,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 pending_requests_https,
                 ssl_config_for_https,
             )
-            .await;
+                .await;
         }))
     } else {
         None
@@ -155,15 +152,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
-
-    let renew_handle = if config.ssl.enabled && config.ssl.provider != SslProvider::Manual{
+    let renew_handle = if config.ssl.enabled && config.ssl.provider != SslProvider::Manual {
         Some(tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
             loop {
                 interval.tick().await;
                 info!("🔍 Daily certificate renewal check for {}", config.server.domain);
                 let mut manager = ssl_manager.write().await;
-                match  manager.get_certificate_info() {
+                match manager.get_certificate_info() {
                     Ok(info) => {
                         if let Some(days_until_expiry) = info.days_until_expiry {
                             info!("📅 Certificate for {} expires in {} days", config.server.domain, days_until_expiry);
@@ -180,8 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             }
         }))
-    }
-    else {
+    } else {
         None
     };
 
@@ -218,27 +213,94 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-async fn handle_http_request(
-    req: Request<Body>,
+// Service implementation for HTTP handling
+#[derive(Clone)]
+struct HttpService {
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
     config: ServerConfig,
     challenge_store: ChallengeStore,
     ssl_manager: Arc<RwLock<SslManager>>,
-) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
+}
+
+impl Service<Request<Incoming>> for HttpService {
+    type Response = Response<ResponseBody>;
+    type Error = BoxError;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request<Incoming>) -> Self::Future {
+        let tunnels = self.tunnels.clone();
+        let pending_requests = self.pending_requests.clone();
+        let config = self.config.clone();
+        let challenge_store = self.challenge_store.clone();
+        let ssl_manager = self.ssl_manager.clone();
+
+        Box::pin(async move {
+            handle_http_request(req, tunnels, pending_requests, config, challenge_store, ssl_manager).await
+        })
+    }
+}
+
+async fn start_http_server(
+    config: ServerConfig,
+    tunnels: TunnelMap,
+    pending_requests: PendingRequests,
+    challenge_store: ChallengeStore,
+    ssl_manager: Arc<RwLock<SslManager>>,
+) -> Result<(), BoxError> {
+    let addr: std::net::SocketAddr = config.http_addr().parse()?;
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    info!("✅ HTTP server listening on http://{}", config.http_addr());
+
+    loop {
+        let (stream, _) = listener.accept().await?;
+        let io = TokioIo::new(stream);
+
+        let service = HttpService {
+            tunnels: tunnels.clone(),
+            pending_requests: pending_requests.clone(),
+            config: config.clone(),
+            challenge_store: challenge_store.clone(),
+            ssl_manager: ssl_manager.clone(),
+        };
+
+        tokio::spawn(async move {
+            if let Err(err) = Builder::new(hyper_util::rt::TokioExecutor::new())
+                .serve_connection(io, TowerToHyperService::new(service))
+                .await
+            {
+                error!("Failed to serve connection: {}", err);
+            }
+        });
+    }
+}
+
+async fn handle_http_request(
+    req: Request<Incoming>,
+    tunnels: TunnelMap,
+    pending_requests: PendingRequests,
+    config: ServerConfig,
+    challenge_store: ChallengeStore,
+    ssl_manager: Arc<RwLock<SslManager>>,
+) -> Result<Response<ResponseBody>, BoxError> {
     let path = req.uri().path();
 
     // Handle ACME challenges
     if path.starts_with("/.well-known/acme-challenge/") {
         return handle_acme_challenge(req, challenge_store).await;
-    };
+    }
 
     if path == "/api/health" {
         return Ok(Response::builder()
             .status(StatusCode::OK)
-            .body(Body::from("OK"))
+            .body(boxed_body("OK"))
             .unwrap());
-    };
+    }
 
     // If HTTPS is enabled, redirect HTTP to HTTPS
     if config.ssl.enabled {
@@ -255,32 +317,21 @@ async fn handle_http_request(
                 .unwrap_or("")
         );
 
-        return Ok(Response::builder()
+        Ok(Response::builder()
             .status(StatusCode::MOVED_PERMANENTLY)
             .header("Location", https_url)
-            .body(Body::from("Redirecting to HTTPS"))
-            .unwrap());
-    }
-    else {
+            .body(boxed_body("Redirecting to HTTPS"))
+            .unwrap())
+    } else {
         // Handle normal HTTP requests (when HTTPS is disabled)
         handle_tunnel_request(req, tunnels, pending_requests, config).await
     }
 }
 
-async fn handle_https_request(
-    req: Request<Body>,
-    tunnels: TunnelMap,
-    pending_requests: PendingRequests,
-    config: ServerConfig,
-) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
-    // HTTPS requests always go to tunnel handling
-    handle_tunnel_request(req, tunnels, pending_requests, config).await
-}
-
 async fn handle_acme_challenge(
-    req: Request<Body>,
+    req: Request<Incoming>,
     challenge_store: ChallengeStore,
-) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Response<ResponseBody>, BoxError> {
     let path = req.uri().path();
     let user_agent = req
         .headers()
@@ -309,7 +360,7 @@ async fn handle_acme_challenge(
             return Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/plain")
-                .body(Body::from(key_auth.clone()))
+                .body(boxed_body(key_auth.clone()))
                 .unwrap());
         } else {
             warn!("❌ ACME challenge not found for token: {}", token);
@@ -320,16 +371,16 @@ async fn handle_acme_challenge(
 
     Ok(Response::builder()
         .status(StatusCode::NOT_FOUND)
-        .body(Body::from("ACME challenge not found"))
+        .body(boxed_body("ACME challenge not found"))
         .unwrap())
 }
 
 async fn handle_tunnel_request(
-    req: Request<Body>,
+    req: Request<Incoming>,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
     config: ServerConfig,
-) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Response<ResponseBody>, BoxError> {
     let path = req.uri().path().to_string();
     let method = req.method().clone();
 
@@ -338,7 +389,7 @@ async fn handle_tunnel_request(
     if path_parts.is_empty() {
         return Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Tunnel ID required"))
+            .body(boxed_body("Tunnel ID required"))
             .unwrap());
     }
 
@@ -367,7 +418,7 @@ async fn handle_tunnel_request(
             warn!("Tunnel '{}' not found", tunnel_id);
             return Ok(Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
-                .body(Body::from("Tunnel not available"))
+                .body(boxed_body("Tunnel not available"))
                 .unwrap());
         }
     };
@@ -385,7 +436,7 @@ async fn handle_tunnel_request(
     }
 
     // Extract body
-    let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
+    let body_bytes = req.into_body().collect().await?.to_bytes();
     let body_b64 = base64::engine::general_purpose::STANDARD.encode(&body_bytes);
 
     // Create HTTP request message
@@ -411,7 +462,7 @@ async fn handle_tunnel_request(
         error!("Failed to send request to tunnel '{}': {}", tunnel_id, e);
         return Ok(Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::from("Tunnel communication error"))
+            .body(boxed_body("Tunnel communication error"))
             .unwrap());
     }
 
@@ -420,7 +471,7 @@ async fn handle_tunnel_request(
         Duration::from_secs(config.limits.request_timeout_secs),
         response_rx.recv(),
     )
-    .await;
+        .await;
 
     // Clean up pending request
     {
@@ -444,27 +495,25 @@ async fn handle_tunnel_request(
                     error!("Failed to decode base64 body from client: {}", e);
                     return Ok(Response::builder()
                         .status(StatusCode::BAD_GATEWAY)
-                        .body(Body::from(
-                            "Tunnel communication error: invalid data format",
-                        ))
+                        .body(boxed_body("Tunnel communication error: invalid data format"))
                         .unwrap());
                 }
             };
 
-            Ok(response_builder.body(Body::from(body_bytes)).unwrap())
+            Ok(response_builder.body(boxed_body(body_bytes)).unwrap())
         }
         Ok(None) => {
             warn!("No response received for request {}", request_id);
             Ok(Response::builder()
                 .status(StatusCode::GATEWAY_TIMEOUT)
-                .body(Body::from("No response from tunnel"))
+                .body(boxed_body("No response from tunnel"))
                 .unwrap())
         }
         Err(_) => {
             warn!("Timeout waiting for response to request {}", request_id);
             Ok(Response::builder()
                 .status(StatusCode::GATEWAY_TIMEOUT)
-                .body(Body::from("Tunnel response timeout"))
+                .body(boxed_body("Tunnel response timeout"))
                 .unwrap())
         }
     }
@@ -472,7 +521,7 @@ async fn handle_tunnel_request(
 
 async fn wait_for_http_server_ready(
     config: &ServerConfig,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), BoxError> {
     let test_url = format!(
         "http://127.0.0.1:{}/.well-known/acme-challenge/readiness-test",
         config.server.http_port
@@ -512,8 +561,6 @@ async fn start_https_server(
     pending_requests: PendingRequests,
     tls_config: Arc<RustlsConfig>,
 ) {
-    use tokio_rustls::TlsAcceptor;
-
     let tls_acceptor = TlsAcceptor::from(tls_config);
     let addr: std::net::SocketAddr = config.https_addr().parse().unwrap();
     let tcp_listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
@@ -533,17 +580,15 @@ async fn start_https_server(
                 tokio::spawn(async move {
                     match tls_acceptor.accept(stream).await {
                         Ok(tls_stream) => {
-                            let service = service_fn(move |req| {
-                                handle_https_request(
-                                    req,
-                                    tunnels.clone(),
-                                    pending_requests.clone(),
-                                    config.clone(),
-                                )
-                            });
+                            let io = TokioIo::new(tls_stream);
+                            let service = HttpsService {
+                                tunnels,
+                                pending_requests,
+                                config,
+                            };
 
-                            if let Err(e) = hyper::server::conn::Http::new()
-                                .serve_connection(tls_stream, service)
+                            if let Err(e) = Builder::new(hyper_util::rt::TokioExecutor::new())
+                                .serve_connection(io, TowerToHyperService::new(service))
                                 .await
                             {
                                 error!("HTTPS connection error: {}", e);
@@ -562,12 +607,40 @@ async fn start_https_server(
     }
 }
 
+// Service implementation for HTTPS handling
+#[derive(Clone)]
+struct HttpsService {
+    tunnels: TunnelMap,
+    pending_requests: PendingRequests,
+    config: ServerConfig,
+}
+
+impl Service<Request<Incoming>> for HttpsService {
+    type Response = Response<ResponseBody>;
+    type Error = BoxError;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request<Incoming>) -> Self::Future {
+        let tunnels = self.tunnels.clone();
+        let pending_requests = self.pending_requests.clone();
+        let config = self.config.clone();
+
+        Box::pin(async move {
+            handle_tunnel_request(req, tunnels, pending_requests, config).await
+        })
+    }
+}
+
 async fn handle_websocket_connection<S>(
     stream: S,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
     config: ServerConfig,
-) -> Result<(), Box<dyn std::error::Error>>
+) -> Result<(), BoxError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -581,7 +654,7 @@ where
     let outgoing_task = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
             if let Ok(json) = message.to_json() {
-                if ws_sender.send(WsMessage::Text(json)).await.is_err() {
+                if ws_sender.send(WsMessage::Text(json.into())).await.is_err() {
                     break;
                 }
             }
@@ -594,7 +667,7 @@ where
     while let Some(message) = ws_receiver.next().await {
         match message {
             Ok(WsMessage::Text(text)) => {
-                if let Ok(msg) = Message::from_json(&text) {
+                if let Ok(msg) = Message::from_json(&text.to_string()) {
                     match msg {
                         Message::Auth {
                             token,
@@ -768,7 +841,7 @@ async fn start_secure_websocket_server(
     config: ServerConfig,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
-    tls_config: Arc<rustls::ServerConfig>, // Fixed import
+    tls_config: Arc<rustls::ServerConfig>,
 ) {
     let tls_acceptor = TlsAcceptor::from(tls_config);
     let listener = tokio::net::TcpListener::bind(&config.ws_addr())
@@ -804,11 +877,12 @@ async fn start_secure_websocket_server(
         });
     }
 }
+
 async fn handle_certificate_api(
-    req: Request<Body>,
+    req: Request<Incoming>,
     ssl_manager: Arc<RwLock<SslManager>>,
     config: ServerConfig,
-) -> Result<Response<Body>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Response<ResponseBody>, BoxError> {
     let path = req.uri().path();
     let method = req.method();
 
@@ -830,7 +904,7 @@ async fn handle_certificate_api(
                     Ok(Response::builder()
                         .status(StatusCode::OK)
                         .header("Content-Type", "application/json")
-                        .body(Body::from(response.to_string()))
+                        .body(boxed_body(response.to_string()))
                         .unwrap())
                 }
                 Err(e) => {
@@ -838,7 +912,7 @@ async fn handle_certificate_api(
                     Ok(Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .header("Content-Type", "application/json")
-                        .body(Body::from(response.to_string()))
+                        .body(boxed_body(response.to_string()))
                         .unwrap())
                 }
             }
@@ -860,7 +934,7 @@ async fn handle_certificate_api(
                     Ok(Response::builder()
                         .status(StatusCode::OK)
                         .header("Content-Type", "application/json")
-                        .body(Body::from(response.to_string()))
+                        .body(boxed_body(response.to_string()))
                         .unwrap())
                 }
                 Err(e) => {
@@ -873,7 +947,7 @@ async fn handle_certificate_api(
                     Ok(Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .header("Content-Type", "application/json")
-                        .body(Body::from(response.to_string()))
+                        .body(boxed_body(response.to_string()))
                         .unwrap())
                 }
             }
@@ -884,7 +958,7 @@ async fn handle_certificate_api(
             Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .header("Content-Type", "application/json")
-                .body(Body::from(response.to_string()))
+                .body(boxed_body(response.to_string()))
                 .unwrap())
         }
     }

@@ -70,7 +70,7 @@ pub trait DnsProvider: Send + Sync {
         expected_value: &str,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         // Default implementation using DNS lookup
-        use hickory_resolver::{TokioResolver, config::*};
+        use hickory_resolver::TokioResolver;
 
         let resolver = TokioResolver::builder_tokio()?.build();
         let fqdn = format!("{}.{}", name, domain);

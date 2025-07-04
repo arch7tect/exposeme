@@ -257,7 +257,7 @@ impl DnsProvider for DigitalOceanProvider {
         name: &str,
         expected_value: &str,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        use hickory_resolver::{TokioResolver, config::*};
+        use hickory_resolver::TokioResolver;
 
         let resolver = TokioResolver::builder_tokio()?.build();
         let fqdn = format!("{}.{}", name, domain);

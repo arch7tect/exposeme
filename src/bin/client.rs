@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("🛑 Received Ctrl+C, shutting down...");
         std::process::exit(0);
     });
-    
+
     // Parse CLI arguments
     let args = ClientArgs::parse();
 
@@ -90,7 +90,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
     };
 
     let auth_json = auth_message.to_json()?;
-    ws_sender.send(WsMessage::Text(auth_json)).await?;
+    ws_sender.send(WsMessage::Text(auth_json.into())).await?;
     info!(
         "Sent authentication for tunnel '{}'",
         config.client.tunnel_id
@@ -103,7 +103,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
     while let Some(message) = ws_receiver.next().await {
         match message {
             Ok(WsMessage::Text(text)) => {
-                if let Ok(msg) = Message::from_json(&text) {
+                if let Ok(msg) = Message::from_json(&text.to_string()) {
                     match msg {
                         Message::AuthSuccess {
                             tunnel_id,
@@ -137,7 +137,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                                 headers,
                                 &body,
                             )
-                            .await;
+                                .await;
 
                             let response_message = match response {
                                 Ok((status, headers, body)) => {
@@ -163,7 +163,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
                             // Send response back
                             if let Ok(response_json) = response_message.to_json() {
-                                if let Err(e) = ws_sender.send(WsMessage::Text(response_json)).await
+                                if let Err(e) = ws_sender.send(WsMessage::Text(response_json.into())).await
                                 {
                                     error!("Failed to send response: {}", e);
                                     break;
@@ -261,4 +261,3 @@ async fn forward_request(
 
     Ok((status, response_headers, response_body_b64))
 }
-

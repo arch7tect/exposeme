@@ -11,7 +11,7 @@ auth_token = "dev"
 tunnel_id = "my-tunnel"
 
 # Local service to forward requests to
-local_target = "http://localhost:8000"
+local_target = "http://host.docker.internal:3000"
 
 # Auto-reconnect on connection loss
 auto_reconnect = true

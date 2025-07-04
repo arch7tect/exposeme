@@ -23,7 +23,8 @@ email = "arch7tect@gmail.com"
 staging = false
 cert_cache_dir = "/etc/exposeme/certs"
 wildcard=true
-dns_provider = { provider = "digitalocean", config = { api_token = "your-do-token" } }
+#dns_provider = { provider = "digitalocean", config = { api_token = "your-do-token" } }
+
 
 [auth]
 # Tokens for client authorization

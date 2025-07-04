@@ -224,18 +224,30 @@ impl SslManager {
             }
         }
 
-        // Generate certificate signing request with new rcgen API
-        let base_domain = if domain.starts_with("*.") {
-            &domain[2..]
-        } else {
-            domain
-        };
+        // Generate certificate signing request - SIMPLE WORKING VERSION
+        info!("Generating CSR for domain: {}", domain);
 
-        let mut params = rcgen::CertificateParams::new(vec![domain.to_string()])?;
-        params.distinguished_name.push(rcgen::DnType::CommonName, base_domain);
+        // Create the domain list for the certificate
+        let mut domains = vec![domain.to_string()];
 
+        // For wildcard certificates, also include the base domain if needed
+        if self.config.ssl.wildcard && domain.starts_with("*.") {
+            let base_domain = &domain[2..]; // Remove "*."
+            domains.push(base_domain.to_string());
+            info!("Certificate will include: {} and {}", domain, base_domain);
+        }
+
+        // Create certificate parameters - this automatically handles SAN entries
+        let mut params = rcgen::CertificateParams::new(domains)?;
+
+        // Set the Common Name to match the primary domain
+        params.distinguished_name.push(rcgen::DnType::CommonName, domain);
+
+        // Generate key pair and CSR
         let key_pair = rcgen::KeyPair::generate()?;
         let csr = params.serialize_request(&key_pair)?;
+
+        info!("CSR generated successfully for domain: {}", domain);
 
         // Finalize order
         info!("Finalizing certificate order...");
@@ -254,7 +266,7 @@ impl SslManager {
         info!("🎉 Successfully obtained certificate for {}", domain);
         Ok((cert_chain_pem, private_key_pem))
     }
-
+    
     /// Process HTTP-01 challenge
     async fn process_http_challenge(
         &self,
@@ -293,7 +305,7 @@ impl SslManager {
         Ok(())
     }
 
-    /// Process DNS-01 challenge
+    /// Process DNS-01 challenge - IMPROVED VERSION
     async fn process_dns_challenge(
         &self,
         order: &mut instant_acme::Order,
@@ -315,16 +327,24 @@ impl SslManager {
         let domain = match &auth.identifier {
             Identifier::Dns(domain) => domain,
         };
+
+        // For wildcard certificates, we need to create the record for the base domain
+        let record_domain = if domain.starts_with("*.") {
+            &domain[2..] // Remove "*." prefix
+        } else {
+            domain
+        };
+
         let record_name = "_acme-challenge";
 
         info!("Setting up DNS-01 challenge for {}", domain);
-        info!("Creating TXT record: {}.{} = {}", record_name, domain, dns_value);
+        info!("Creating TXT record: {}.{} = {}", record_name, record_domain, dns_value);
 
         // Create DNS record
-        let record_id = dns_provider.create_txt_record(domain, record_name, &dns_value).await?;
+        let record_id = dns_provider.create_txt_record(record_domain, record_name, &dns_value).await?;
 
         // Wait for DNS propagation
-        dns_provider.wait_for_propagation(domain, record_name, &dns_value).await?;
+        dns_provider.wait_for_propagation(record_domain, record_name, &dns_value).await?;
 
         // Notify Let's Encrypt
         info!("Notifying Let's Encrypt that DNS challenge is ready...");
@@ -335,24 +355,27 @@ impl SslManager {
 
         // Clean up DNS record
         info!("Cleaning up DNS record...");
-        if let Err(e) = dns_provider.delete_txt_record(domain, &record_id).await {
+        if let Err(e) = dns_provider.delete_txt_record(record_domain, &record_id).await {
             warn!("Failed to clean up DNS record: {}", e);
         }
 
         auth_result
     }
 
-    /// Wait for authorization to complete
+    /// Wait for authorization to complete - IMPROVED VERSION
     async fn wait_for_authorization(
         &self,
         order: &mut instant_acme::Order,
         domain: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut attempts = 0;
-        const MAX_ATTEMPTS: u32 = 30;
+        const MAX_ATTEMPTS: u32 = 60; // Increased timeout for DNS propagation
+        const RETRY_DELAY: u64 = 5; // Increased retry delay
+
+        info!("Waiting for authorization for domain: {}", domain);
 
         loop {
-            sleep(Duration::from_secs(2)).await;
+            sleep(Duration::from_secs(RETRY_DELAY)).await;
 
             let fresh_auths = order.authorizations().await?;
 
@@ -371,12 +394,18 @@ impl SslManager {
                     break;
                 }
                 AuthorizationStatus::Invalid => {
+                    // Log challenge details for debugging
+                    for challenge in &current_auth.challenges {
+                        if let Some(error) = &challenge.error {
+                            error!("Challenge error for {}: {:?}", domain, error);
+                        }
+                    }
                     return Err(format!("❌ Authorization failed for {}", domain).into());
                 }
                 AuthorizationStatus::Pending => {
                     attempts += 1;
                     if attempts >= MAX_ATTEMPTS {
-                        return Err(format!("❌ Authorization timeout for {}", domain).into());
+                        return Err(format!("❌ Authorization timeout for {} after {} attempts", domain, attempts).into());
                     }
                     info!("⏳ Authorization pending for {} (attempt {}/{})", domain, attempts, MAX_ATTEMPTS);
                 }
@@ -388,7 +417,7 @@ impl SslManager {
 
         Ok(())
     }
-
+    
     /// Wait for certificate issuance
     async fn wait_for_certificate_issuance(
         &self,

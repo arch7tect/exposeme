@@ -1,4 +1,4 @@
-# config/server.toml - Server configuration for Docker
+# config/server.toml - Updated for wildcard certificates
 
 [server]
 # Bind to all interfaces in container
@@ -8,31 +8,42 @@ https_port = 443
 ws_bind = "0.0.0.0"
 ws_port = 8081
 
-# Domain will be overridden via environment variable
+# Domain configuration
 domain = "exposeme.arch7tect.org"
-routing_mode = "path"
+
+# Routing mode: "path", "subdomain", or "both"
+# For wildcard certificates, use "subdomain" or "both"
+routing_mode = "both"
 
 [ssl]
 enabled = true
 provider = "letsencrypt"
 
-# Email will be overridden via environment variable
+# Contact email for Let's Encrypt
 email = "arch7tect@gmail.com"
 
-# Staging will be overridden via environment variable
+# Use production Let's Encrypt (set to true for testing)
 staging = false
-cert_cache_dir = "/etc/exposeme/certs"
-wildcard=false
-#dns_provider = { provider = "digitalocean", config = { api_token = "your-do-token" } }
 
+# Certificate cache directory
+cert_cache_dir = "/etc/exposeme/certs"
+
+# Enable wildcard certificates (required for subdomain routing)
+wildcard = true
+
+# DNS provider configuration (will be overridden by environment variables)
+[ssl.dns_provider]
+provider = "digitalocean"
+
+[ssl.dns_provider.config]
+api_token = "your-do-token-will-be-set-via-env"
+timeout_seconds = 30
 
 [auth]
 # Tokens for client authorization
-# In production better to use environment variables
+# Will be overridden by environment variables in production
 tokens = [
-    "dev",
-    "team-token-1",
-    "team-token-2"
+    "dev"
 ]
 
 [limits]

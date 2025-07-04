@@ -1,7 +1,7 @@
 // src/bin/server.rs
 use base64::Engine;
 use clap::Parser;
-use exposeme::{ChallengeStore, Message, ServerArgs, ServerConfig, SslManager, SslProvider};
+use exposeme::{ChallengeStore, Message, RoutingMode, ServerArgs, ServerConfig, SslManager, SslProvider};
 use futures_util::{SinkExt, StreamExt};
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto::Builder;
@@ -381,29 +381,30 @@ async fn handle_tunnel_request(
     pending_requests: PendingRequests,
     config: ServerConfig,
 ) -> Result<Response<ResponseBody>, BoxError> {
-    let path = req.uri().path().to_string();
     let method = req.method().clone();
 
-    // Parse tunnel_id from path: /{tunnel_id}/...
-    let path_parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-    if path_parts.is_empty() {
-        return Ok(Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(boxed_body("Tunnel ID required"))
-            .unwrap());
-    }
+    // Extract tunnel ID and forwarded path based on routing mode
+    let (tunnel_id, forwarded_path) = match extract_tunnel_id_from_request(&req, &config) {
+        Ok(result) => result,
+        Err(e) => {
+            warn!("Failed to extract tunnel ID: {}", e);
+            return Ok(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(boxed_body(format!("Invalid request: {}", e)))
+                .unwrap());
+        }
+    };
 
-    let tunnel_id = path_parts[0].to_string();
-    let forwarded_path = format!(
-        "/{}{}",
-        path_parts[1..].join("/"),
-        req.uri()
-            .query()
-            .map_or(String::new(), |q| format!("?{}", q))
-    );
     info!(
-        "Request for tunnel '{}': {} {}",
-        tunnel_id, method, forwarded_path
+        "Request for tunnel '{}' ({}): {} {}",
+        tunnel_id,
+        match config.server.routing_mode {
+            RoutingMode::Path => "path",
+            RoutingMode::Subdomain => "subdomain", 
+            RoutingMode::Both => "both",
+        },
+        method,
+        forwarded_path
     );
 
     // Check if tunnel exists
@@ -675,6 +676,20 @@ where
                         } => {
                             info!("Auth request for tunnel '{}'", requested_tunnel_id);
 
+                            // Validate tunnel ID
+                            if let Err(e) = config.validate_tunnel_id(&requested_tunnel_id) {
+                                let error_msg = Message::AuthError {
+                                    error: "invalid_tunnel_id".to_string(),
+                                    message: format!("Invalid tunnel ID: {}", e),
+                                };
+                                if let Err(err) = tx.send(error_msg) {
+                                    error!("Failed to send tunnel ID validation error to client: {}", err);
+                                    break;
+                                }
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                break;
+                            }
+
                             // Token validation using config
                             if !config.auth.tokens.contains(&token) {
                                 let error_msg = Message::AuthError {
@@ -745,11 +760,7 @@ where
 
                             let success_msg = Message::AuthSuccess {
                                 tunnel_id: requested_tunnel_id.clone(),
-                                public_url: format!(
-                                    "{}/{}",
-                                    config.public_url_base(),
-                                    requested_tunnel_id
-                                ),
+                                public_url: config.get_public_url(&requested_tunnel_id),
                             };
 
                             if let Err(err) = tx.send(success_msg) {
@@ -960,6 +971,101 @@ async fn handle_certificate_api(
                 .header("Content-Type", "application/json")
                 .body(boxed_body(response.to_string()))
                 .unwrap())
+        }
+    }
+}
+
+fn extract_tunnel_id_from_request(
+    req: &Request<Incoming>,
+    config: &ServerConfig,
+) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+    let uri = req.uri();
+    let path = uri.path();
+
+    // Get Host header
+    let host = req
+        .headers()
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .ok_or("Missing Host header")?;
+
+    // Remove port if present
+    let host_without_port = host.split(':').next().unwrap_or(host);
+
+    match config.server.routing_mode {
+        RoutingMode::Path => {
+            // Original logic: /tunnel-id/path
+            let path_parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            if path_parts.is_empty() || path_parts[0].is_empty() {
+                return Err("Tunnel ID required in path".into());
+            }
+
+            let tunnel_id = path_parts[0].to_string();
+            let forwarded_path = format!(
+                "/{}{}",
+                path_parts[1..].join("/"),
+                uri.query().map_or(String::new(), |q| format!("?{}", q))
+            );
+
+            Ok((tunnel_id, forwarded_path))
+        }
+
+        RoutingMode::Subdomain => {
+            // New logic: tunnel-id.domain.com/path
+            let base_domain = &config.server.domain;
+
+            if host_without_port == base_domain {
+                return Err("No tunnel specified in subdomain".into());
+            }
+
+            // Extract tunnel_id from subdomain
+            let tunnel_id = if let Some(subdomain) = host_without_port.strip_suffix(&format!(".{}", base_domain)) {
+                subdomain.to_string()
+            } else {
+                return Err("Invalid subdomain format".into());
+            };
+
+            // For subdomain mode, forward the full path
+            let forwarded_path = format!(
+                "{}{}",
+                path,
+                uri.query().map_or(String::new(), |q| format!("?{}", q))
+            );
+
+            Ok((tunnel_id, forwarded_path))
+        }
+
+        RoutingMode::Both => {
+            // Try subdomain first, then path
+            let base_domain = &config.server.domain;
+
+            // Check if it's a subdomain request
+            if host_without_port != base_domain {
+                if let Some(subdomain) = host_without_port.strip_suffix(&format!(".{}", base_domain)) {
+                    let tunnel_id = subdomain.to_string();
+                    let forwarded_path = format!(
+                        "{}{}",
+                        path,
+                        uri.query().map_or(String::new(), |q| format!("?{}", q))
+                    );
+                    return Ok((tunnel_id, forwarded_path));
+                }
+            }
+
+            // Fall back to path-based routing
+            let path_parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            if path_parts.is_empty() || path_parts[0].is_empty() {
+                return Err("Tunnel ID required in path or subdomain".into());
+            }
+
+            let tunnel_id = path_parts[0].to_string();
+            let forwarded_path = format!(
+                "/{}{}",
+                path_parts[1..].join("/"),
+                uri.query().map_or(String::new(), |q| format!("?{}", q))
+            );
+
+            Ok((tunnel_id, forwarded_path))
         }
     }
 }

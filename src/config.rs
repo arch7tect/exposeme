@@ -29,7 +29,7 @@ pub struct ServerSettings {
 #[serde(rename_all = "lowercase")]
 pub enum RoutingMode {
     Path,      // /tunnel-id/path
-    Subdomain, // tunnel-id.domain.com/path  
+    Subdomain, // tunnel-id.domain.com/path
     Both,      // поддержка обоих
 }
 
@@ -91,16 +91,16 @@ impl Default for ServerConfig {
                 ws_bind: "0.0.0.0".to_string(),
                 ws_port: 8081,
                 domain: "localhost".to_string(),
-                routing_mode: RoutingMode::Path,
+                routing_mode: RoutingMode::Path, // Can be changed to RoutingMode::Both
             },
             ssl: SslSettings {
                 enabled: false,
                 provider: SslProvider::LetsEncrypt,
                 email: "admin@example.com".to_string(),
                 staging: true,
-                cert_cache_dir: "/tmp/exposeme-certs".to_string(),
-                wildcard: false,
-                dns_provider: None,
+                cert_cache_dir: "/etc/exposeme-certs".to_string(),
+                wildcard: false, // Set to true for subdomain support
+                dns_provider: None, // Required for wildcard certificates
             },
             auth: AuthSettings {
                 tokens: vec!["dev".to_string()],
@@ -113,7 +113,7 @@ impl Default for ServerConfig {
     }
 }
 
-/// Client configuration (без изменений)
+/// Client configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub client: ClientSettings,
@@ -203,6 +203,40 @@ pub struct ClientArgs {
 }
 
 impl ServerConfig {
+    pub fn validate_tunnel_id(&self, tunnel_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Basic validation for all modes
+        if tunnel_id.is_empty() {
+            return Err("Tunnel ID cannot be empty".into());
+        }
+
+        if tunnel_id.len() > 63 {
+            return Err("Tunnel ID too long (max 63 characters)".into());
+        }
+
+        // Additional validation for subdomain routing
+        match self.server.routing_mode {
+            RoutingMode::Subdomain | RoutingMode::Both => {
+                // RFC 1123 hostname validation
+                if !tunnel_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                    return Err("Tunnel ID contains invalid characters for subdomain (only alphanumeric and hyphen allowed)".into());
+                }
+
+                if tunnel_id.starts_with('-') || tunnel_id.ends_with('-') {
+                    return Err("Tunnel ID cannot start or end with hyphen".into());
+                }
+
+                // Reserved subdomains
+                let reserved = ["www", "mail", "ftp", "localhost", "api", "admin", "root"];
+                if reserved.contains(&tunnel_id) {
+                    return Err("Tunnel ID is reserved".into());
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+    
     pub fn load(args: &ServerArgs) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut config = if args.config.exists() {
             let content = fs::read_to_string(&args.config)?;
@@ -253,6 +287,116 @@ impl ServerConfig {
                 "both" => RoutingMode::Both,
                 _ => return Err(format!("Invalid routing mode: {}", mode).into()),
             };
+        }
+
+        if let Ok(domain) = std::env::var("EXPOSEME_DOMAIN") {
+            config.server.domain = domain;
+            tracing::info!("Domain set from EXPOSEME_DOMAIN environment variable");
+        }
+
+        if let Ok(http_bind) = std::env::var("EXPOSEME_HTTP_BIND") {
+            config.server.http_bind = http_bind;
+        }
+
+        if let Ok(http_port) = std::env::var("EXPOSEME_HTTP_PORT") {
+            if let Ok(port) = http_port.parse::<u16>() {
+                config.server.http_port = port;
+            }
+        }
+
+        if let Ok(https_port) = std::env::var("EXPOSEME_HTTPS_PORT") {
+            if let Ok(port) = https_port.parse::<u16>() {
+                config.server.https_port = port;
+            }
+        }
+
+        if let Ok(ws_port) = std::env::var("EXPOSEME_WS_PORT") {
+            if let Ok(port) = ws_port.parse::<u16>() {
+                config.server.ws_port = port;
+            }
+        }
+
+        // SSL settings
+        if let Ok(email) = std::env::var("EXPOSEME_EMAIL") {
+            config.ssl.email = email;
+            tracing::info!("Email set from EXPOSEME_EMAIL environment variable");
+        }
+
+        if let Ok(staging) = std::env::var("EXPOSEME_STAGING") {
+            config.ssl.staging = staging.parse().unwrap_or(false);
+        }
+
+        if let Ok(wildcard) = std::env::var("EXPOSEME_WILDCARD") {
+            config.ssl.wildcard = wildcard.parse().unwrap_or(false);
+            tracing::info!("Wildcard certificates enabled from EXPOSEME_WILDCARD");
+        }
+
+        // NEW: Routing mode environment variable
+        if let Ok(routing_mode) = std::env::var("EXPOSEME_ROUTING_MODE") {
+            config.server.routing_mode = match routing_mode.as_str() {
+                "path" => RoutingMode::Path,
+                "subdomain" => RoutingMode::Subdomain,
+                "both" => RoutingMode::Both,
+                _ => {
+                    tracing::warn!("Invalid EXPOSEME_ROUTING_MODE: {}, using default", routing_mode);
+                    RoutingMode::Path
+                }
+            };
+            tracing::info!("Routing mode set to {:?} from EXPOSEME_ROUTING_MODE", config.server.routing_mode);
+        }
+
+        // NEW: DNS Provider configuration from environment
+        if let Ok(dns_provider) = std::env::var("EXPOSEME_DNS_PROVIDER") {
+            if let Ok(api_token) = std::env::var("EXPOSEME_DNS_API_TOKEN") {
+                use serde_json::json;
+
+                let dns_config = match dns_provider.as_str() {
+                    "digitalocean" => {
+                        json!({
+                            "api_token": api_token,
+                            "timeout_seconds": 30
+                        })
+                    }
+                    "cloudflare" => {
+                        json!({
+                            "api_token": api_token,
+                            "timeout_seconds": 30
+                        })
+                    }
+                    _ => {
+                        tracing::warn!("Unsupported DNS provider: {}", dns_provider);
+                        return Err(format!("Unsupported DNS provider: {}", dns_provider).into());
+                    }
+                };
+
+                config.ssl.dns_provider = Some(DnsProviderConfig {
+                    provider: dns_provider.clone(),
+                    config: dns_config,
+                });
+
+                tracing::info!("DNS provider set to {} from environment variables", dns_provider);
+            } else {
+                tracing::warn!("EXPOSEME_DNS_PROVIDER set but EXPOSEME_DNS_API_TOKEN missing");
+            }
+        }
+
+        // Authentication tokens from environment
+        if let Ok(token) = std::env::var("EXPOSEME_AUTH_TOKEN") {
+            config.auth.tokens = vec![token];
+            tracing::info!("Authentication token set from EXPOSEME_AUTH_TOKEN");
+        }
+
+        // Automatic configuration for subdomain routing
+        if matches!(config.server.routing_mode, RoutingMode::Subdomain | RoutingMode::Both) {
+            if config.ssl.enabled && !config.ssl.wildcard {
+                tracing::warn!("Subdomain routing with SSL requires wildcard certificates");
+                tracing::warn!("Setting wildcard = true automatically");
+                config.ssl.wildcard = true;
+            }
+
+            if config.ssl.wildcard && config.ssl.dns_provider.is_none() {
+                return Err("Wildcard certificates require DNS provider configuration".into());
+            }
         }
 
         Ok(config)

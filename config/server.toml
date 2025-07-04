@@ -9,22 +9,28 @@ ws_bind = "0.0.0.0"
 ws_port = 8081
 
 # Domain will be overridden via environment variable
-domain = "sip.flametree.dev.enfint.tech"
+domain = "exposeme.arch7tect.org"
+routing_mode = "path"
 
 [ssl]
 enabled = true
 provider = "letsencrypt"
+
 # Email will be overridden via environment variable
-email = "orlov@enfint.tech"
+email = "arch7tect@gmail.com"
+
 # Staging will be overridden via environment variable
 staging = false
 cert_cache_dir = "/etc/exposeme/certs"
+dns_provider = "digitalocean"
 
 [auth]
 # Tokens for client authorization
 # In production better to use environment variables
 tokens = [
-    "your-secure-token-here"
+    "dev",
+    "team-token-1",
+    "team-token-2"
 ]
 
 [limits]

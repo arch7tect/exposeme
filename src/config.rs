@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ServerConfig {
     pub server: ServerSettings,
     pub ssl: SslSettings,
@@ -14,7 +15,8 @@ pub struct ServerConfig {
     pub limits: LimitSettings,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct ServerSettings {
     pub http_bind: String,
     pub http_port: u16,
@@ -22,7 +24,7 @@ pub struct ServerSettings {
     pub ws_bind: String,
     pub ws_port: u16,
     pub domain: String,
-    pub routing_mode: RoutingMode, // Новое поле
+    pub routing_mode: RoutingMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,15 +41,16 @@ impl Default for RoutingMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct SslSettings {
     pub enabled: bool,
     pub provider: SslProvider,
     pub email: String,
     pub staging: bool,
     pub cert_cache_dir: String,
-    pub wildcard: bool,                    // Add this field
-    pub dns_provider: Option<DnsProviderConfig>, // Add this field
+    pub wildcard: bool,
+    pub dns_provider: Option<DnsProviderConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,7 +239,7 @@ impl ServerConfig {
 
         Ok(())
     }
-    
+
     pub fn load(args: &ServerArgs) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut config = if args.config.exists() {
             let content = fs::read_to_string(&args.config)?;

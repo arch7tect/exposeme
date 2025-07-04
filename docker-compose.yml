@@ -19,9 +19,7 @@ services:
 
     environment:
       # Override configuration via environment variables
-      - EXPOSEME_DOMAIN=${EXPOSEME_DOMAIN:-localhost}
-      - EXPOSEME_EMAIL=${EXPOSEME_EMAIL:-admin@localhost}
-      - EXPOSEME_STAGING=${EXPOSEME_STAGING:-true}
+      - EXPOSEME_STAGING=${EXPOSEME_STAGING:-false}
       - RUST_LOG=${RUST_LOG:-info}
 
     # Security settings

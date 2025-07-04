@@ -1,4 +1,4 @@
-# docker-compose.yml
+# docker-compose.yml - Improved version with better SSL handling
 
 services:
   exposeme-server:
@@ -18,9 +18,25 @@ services:
       - ./exposeme-certs:/etc/exposeme/certs:rw
 
     environment:
-      # Override configuration via environment variables
-      - EXPOSEME_STAGING=${EXPOSEME_STAGING:-false}
-      - RUST_LOG=${RUST_LOG:-info}
+      # Domain configuration
+      - EXPOSEME_DOMAIN=exposeme.arch7tect.org
+      - EXPOSEME_EMAIL=arch7tect@gmail.com
+
+      # SSL configuration
+      - EXPOSEME_STAGING=false
+      - EXPOSEME_WILDCARD=true
+      - EXPOSEME_ROUTING_MODE=both
+
+      # DNS Provider (DigitalOcean)
+      - EXPOSEME_DNS_PROVIDER=digitalocean
+      - EXPOSEME_DNS_API_TOKEN=${DIGITALOCEAN_TOKEN}
+
+      # Auth token
+      - EXPOSEME_AUTH_TOKEN=${EXPOSEME_AUTH_TOKEN:-dev}
+
+      # Logging
+      - RUST_LOG=info
+      - RUST_BACKTRACE=1
 
     # Security settings
     security_opt:
@@ -30,19 +46,23 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: '0.5'
+          memory: 1G          # Increased memory for SSL operations
+          cpus: '1.0'         # Increased CPU for SSL operations
         reservations:
-          memory: 128M
-          cpus: '0.1'
+          memory: 256M        # Increased base memory
+          cpus: '0.2'
 
-    # Health check
+    # Health check - improved to handle SSL startup time
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 40s
+      retries: 5              # Increased retries
+      start_period: 120s      # Increased startup time for SSL
+
+    # Add environment file support
+    env_file:
+      - .env
 
 networks:
   default:

@@ -45,13 +45,21 @@ pub struct CertificateInfo {
 impl SslManager {
     pub fn new(config: ServerConfig) -> Self {
         let dns_provider = if let Some(dns_config) = &config.ssl.dns_provider {
-            match create_dns_provider(&dns_config.provider, &dns_config.config) {
+            // Pass TOML config to provider (if available)
+            let toml_config = if dns_config.config.is_null() {
+                None
+            } else {
+                Some(&dns_config.config)
+            };
+
+            // Just try to create the provider - no pre-validation
+            match create_dns_provider(&dns_config.provider, toml_config) {
                 Ok(provider) => {
                     info!("✅ DNS provider '{}' initialized", dns_config.provider);
                     Some(provider)
                 }
                 Err(e) => {
-                    error!("❌ Failed to initialize DNS provider: {}", e);
+                    error!("❌ Failed to initialize DNS provider '{}': {}", dns_config.provider, e);
                     None
                 }
             }
@@ -112,9 +120,9 @@ impl SslManager {
     }
 
     /// Setup Let's Encrypt certificates - COMPREHENSIVE FIX
-    async fn setup_letsencrypt(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    async fn setup_letsencrypt(&mut self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         let domain = &self.config.server.domain;
-        let email = &self.config.ssl.email;
+        let email = &self.config.ssl.email.clone();
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
 
         // Create cache directory
@@ -170,7 +178,7 @@ impl SslManager {
     }
 
     /// Obtain certificate from Let's Encrypt for multiple domains
-    async fn obtain_certificate_for_domains(&self, domains: &[String], email: &str) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+    async fn obtain_certificate_for_domains(&mut self, domains: &[String], email: &str) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
         // Choose ACME directory based on staging flag
         let directory_url = if self.config.ssl.staging {
             LetsEncrypt::Staging.url()
@@ -303,12 +311,24 @@ impl SslManager {
 
     /// Process DNS-01 challenge - IMPROVED VERSION
     async fn process_dns_challenge(
-        &self,
+        &mut self,
         order: &mut instant_acme::Order,
         auth: &instant_acme::Authorization,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let dns_provider = self.dns_provider.as_ref()
-            .ok_or("DNS provider not configured for DNS-01 challenge")?;
+        // Extract values before any borrows to avoid conflicts
+        let domain = match &auth.identifier {
+            Identifier::Dns(domain) => domain.clone(),
+        };
+
+        let record_domain = if domain.starts_with("*.") {
+            domain[2..].to_string()
+        } else {
+            domain.clone()
+        };
+
+        let record_name = "_acme-challenge";
+
+        info!("Setting up DNS-01 challenge for {}", domain);
 
         // Find DNS-01 challenge
         let challenge = auth
@@ -320,62 +340,59 @@ impl SslManager {
         // Calculate DNS record value
         let dns_value = order.key_authorization(challenge).dns_value();
 
-        let domain = match &auth.identifier {
-            Identifier::Dns(domain) => domain,
-        };
-
-        // For wildcard certificates, we need to create the record for the base domain
-        let record_domain = if domain.starts_with("*.") {
-            &domain[2..] // Remove "*." prefix
-        } else {
-            domain
-        };
-
-        let record_name = "_acme-challenge";
-
-        info!("Setting up DNS-01 challenge for {}", domain);
         info!("Creating TXT record: {}.{} = {}", record_name, record_domain, dns_value);
 
-        // Create DNS record
-        let record_id = dns_provider.create_txt_record(record_domain, record_name, &dns_value).await?;
+        // Step 1: Create DNS record (scoped mutable borrow)
+        let record_id = {
+            let dns_provider = self.dns_provider.as_mut()
+                .ok_or("DNS provider not configured for DNS-01 challenge")?;
+            dns_provider.create_txt_record(&record_domain, &record_name, &dns_value).await?
+        }; // mutable borrow ends here
 
-        // Wait for DNS propagation
-        dns_provider.wait_for_propagation(record_domain, record_name, &dns_value).await?;
+        // Step 2: Wait for DNS propagation (scoped mutable borrow)
+        {
+            let dns_provider = self.dns_provider.as_mut()
+                .ok_or("DNS provider not configured for DNS-01 challenge")?;
+            dns_provider.wait_for_propagation(&record_domain, &record_name, &dns_value).await?;
+        } // mutable borrow ends here
 
-        // Notify Let's Encrypt
+        // Step 3: Notify Let's Encrypt
         info!("Notifying Let's Encrypt that DNS challenge is ready...");
         order.set_challenge_ready(&challenge.url).await?;
 
-        // Wait for authorization
-        let auth_result = self.wait_for_authorization(order, domain).await;
+        // Step 4: Wait for authorization (immutable borrow - now safe)
+        let auth_result = self.wait_for_authorization(order, &domain).await;
 
-        // Clean up DNS record
+        // Step 5: Clean up DNS record (scoped mutable borrow)
         info!("Cleaning up DNS record...");
-        if let Err(e) = dns_provider.delete_txt_record(record_domain, &record_id).await {
-            warn!("Failed to clean up DNS record: {}", e);
-        }
+        {
+            let dns_provider = self.dns_provider.as_mut()
+                .ok_or("DNS provider not configured for DNS-01 challenge")?;
+            if let Err(e) = dns_provider.delete_txt_record(&record_domain, &record_id).await {
+                warn!("Failed to clean up DNS record: {}", e);
+            }
+        } // mutable borrow ends here
 
         auth_result
     }
-
-    /// Wait for authorization to complete - IMPROVED VERSION
+    
+    /// Wait for authorization to complete
     async fn wait_for_authorization(
-        &self,
+        &self, // Note: &self, not &mut self
         order: &mut instant_acme::Order,
         domain: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut attempts = 0;
-        const MAX_ATTEMPTS: u32 = 60; // Increased timeout for DNS propagation
-        const RETRY_DELAY: u64 = 5; // Increased retry delay
+        const MAX_ATTEMPTS: u32 = 60;
+        const RETRY_DELAY: u64 = 5;
 
         info!("Waiting for authorization for domain: {}", domain);
 
         loop {
-            sleep(Duration::from_secs(RETRY_DELAY)).await;
+            tokio::time::sleep(Duration::from_secs(RETRY_DELAY)).await;
 
             let fresh_auths = order.authorizations().await?;
 
-            // Find authorization for this domain
             let current_auth = fresh_auths.iter()
                 .find(|auth| {
                     match &auth.identifier {
@@ -390,7 +407,6 @@ impl SslManager {
                     break;
                 }
                 AuthorizationStatus::Invalid => {
-                    // Log challenge details for debugging
                     for challenge in &current_auth.challenges {
                         if let Some(error) = &challenge.error {
                             error!("Challenge error for {}: {:?}", domain, error);
@@ -569,18 +585,24 @@ impl SslManager {
     }
 
     pub async fn force_renewal(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let domain = self.config.server.domain.as_str();
+        // Clone ALL values we need upfront to avoid any borrowing conflicts
+        let domain = self.config.server.domain.clone(); // CLONE, don't borrow!
+        let wildcard = self.config.ssl.wildcard;
+        let cert_cache_dir = self.config.ssl.cert_cache_dir.clone();
+        let ssl_provider = self.config.ssl.provider.clone();
+
         info!("🚨 Start certificate renewal for {}", domain);
 
-        let cert_filename = if self.config.ssl.wildcard {
+        let cert_filename = if wildcard {
             format!("wildcard-{}", domain.replace('.', "-"))
         } else {
             domain.replace('.', "-")
         };
 
-        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", cert_filename));
-        let key_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", cert_filename));
+        let cert_path = Path::new(&cert_cache_dir).join(format!("{}.pem", cert_filename));
+        let key_path = Path::new(&cert_cache_dir).join(format!("{}.key", cert_filename));
 
+        // Remove existing certificates
         if cert_path.exists() {
             fs::remove_file(&cert_path)?;
         }
@@ -588,14 +610,16 @@ impl SslManager {
             fs::remove_file(&key_path)?;
         }
 
-        let new_config = match self.config.ssl.provider {
+        // Get new certificate (mutable borrow - now safe because domain is cloned)
+        let new_config = match ssl_provider {
             SslProvider::LetsEncrypt => self.setup_letsencrypt().await?,
             SslProvider::SelfSigned => self.generate_self_signed()?,
-            _ => return Err(format!("Unsupported SSL provider for renewal: {:?}", self.config.ssl.provider).into()),
+            _ => return Err(format!("Unsupported SSL provider for renewal: {:?}", ssl_provider).into()),
         };
 
         self.rustls_config = Some(Arc::new(new_config));
 
+        // Use cloned domain - no borrowing conflicts!
         info!("✅ Certificate renewal completed for {}", domain);
         Ok(())
     }

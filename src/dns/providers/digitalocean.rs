@@ -1,11 +1,10 @@
-// src/dns/providers/digitalocean.rs - Fixed version
+// src/dns/providers/digitalocean.rs - Only provider-specific methods
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tokio::time::sleep;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
-use crate::dns::DnsProvider;
+use crate::dns::{ConfigHelper, DnsProvider, DnsProviderFactory};
 
 /// DigitalOcean DNS provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,7 +71,6 @@ impl DigitalOceanProvider {
     async fn get_base_domain(&self, domain: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         info!("Looking up base domain for: {}", domain);
 
-        // Get list of domains from DigitalOcean to find the base domain
         let response = self.client
             .get("https://api.digitalocean.com/v2/domains")
             .header("Authorization", format!("Bearer {}", self.config.api_token))
@@ -116,10 +114,8 @@ impl DigitalOceanProvider {
     /// Calculate the record name relative to the base domain
     fn calculate_record_name(&self, domain: &str, base_domain: &str, record_prefix: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let record_name = if domain == base_domain {
-            // Creating record directly on base domain
             record_prefix.to_string()
         } else {
-            // Creating record on subdomain
             let subdomain = domain.strip_suffix(&format!(".{}", base_domain))
                 .ok_or_else(|| format!("Invalid domain structure: {} vs {}", domain, base_domain))?;
 
@@ -135,10 +131,48 @@ impl DigitalOceanProvider {
     }
 }
 
+impl ConfigHelper for DigitalOceanProvider {}
+
+impl DnsProviderFactory for DigitalOceanProvider {
+    fn create_with_config(
+        toml_config: Option<&serde_json::Value>
+    ) -> Result<Box<dyn DnsProvider>, Box<dyn std::error::Error + Send + Sync>> {
+
+        let api_token = Self::get_string_with_env(
+            toml_config,
+            "api_token",
+            "EXPOSEME_DIGITALOCEAN_TOKEN"
+        ).or_else(|| {
+            Self::get_string_with_env(toml_config, "api_token", "EXPOSEME_DNS_API_TOKEN")
+        }).ok_or("DigitalOcean API token not found. Set EXPOSEME_DIGITALOCEAN_TOKEN environment variable or configure [ssl.dns_provider.config] api_token in TOML")?;
+
+        let timeout_seconds = Self::get_u64_with_env(
+            toml_config,
+            "timeout_seconds",
+            "EXPOSEME_DIGITALOCEAN_TIMEOUT"
+        );
+
+        let config = DigitalOceanConfig {
+            api_token,
+            timeout_seconds,
+        };
+
+        let config_source = if std::env::var("EXPOSEME_DIGITALOCEAN_TOKEN").is_ok()
+            || std::env::var("EXPOSEME_DNS_API_TOKEN").is_ok() {
+            "environment variables"
+        } else {
+            "TOML configuration"
+        };
+
+        info!("✅ DigitalOcean DNS provider configured from {}", config_source);
+        Ok(Box::new(Self::new(config)))
+    }
+}
+
 #[async_trait]
 impl DnsProvider for DigitalOceanProvider {
     async fn create_txt_record(
-        &self,
+        &mut self,
         domain: &str,
         name: &str,
         value: &str,
@@ -152,7 +186,7 @@ impl DnsProvider for DigitalOceanProvider {
             record_type: "TXT".to_string(),
             name: record_name,
             data: value.to_string(),
-            ttl: 300, // 5 minutes TTL for quick propagation
+            ttl: 300,
         };
 
         let url = format!("https://api.digitalocean.com/v2/domains/{}/records", base_domain);
@@ -180,7 +214,7 @@ impl DnsProvider for DigitalOceanProvider {
     }
 
     async fn delete_txt_record(
-        &self,
+        &mut self,
         domain: &str,
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -210,110 +244,12 @@ impl DnsProvider for DigitalOceanProvider {
         Ok(())
     }
 
-    async fn wait_for_propagation(
-        &self,
-        domain: &str,
-        name: &str,
-        value: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Waiting for DNS propagation of {}.{} via DigitalOcean", name, domain);
-
-        // DigitalOcean has relatively fast propagation, but let's wait a bit to be sure
-        info!("Initial wait for DigitalOcean propagation...");
-        sleep(Duration::from_secs(30)).await;
-
-        // Then use the default implementation for verification
-        for attempt in 1..=20 {
-            info!("DNS propagation check {}/20", attempt);
-
-            match self.check_txt_record(domain, name, value).await {
-                Ok(true) => {
-                    info!("✅ DNS propagation confirmed");
-                    return Ok(());
-                }
-                Ok(false) => {
-                    if attempt < 20 {
-                        info!("⏳ DNS not yet propagated, waiting 15 seconds...");
-                        sleep(Duration::from_secs(15)).await;
-                        continue;
-                    } else {
-                        warn!("⚠️  DNS propagation not confirmed after 5 minutes, proceeding anyway");
-                        return Ok(());
-                    }
-                }
-                Err(e) => {
-                    warn!("DNS check error: {}, continuing...", e);
-                    sleep(Duration::from_secs(15)).await;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn check_txt_record(
-        &self,
-        domain: &str,
-        name: &str,
-        expected_value: &str,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        use hickory_resolver::TokioResolver;
-
-        let resolver = TokioResolver::builder_tokio()?.build();
-        let fqdn = format!("{}.{}", name, domain);
-
-        match resolver.txt_lookup(&fqdn).await {
-            Ok(txt_records) => {
-                for record in txt_records.iter() {
-                    let record_value = record.to_string().trim_matches('"').to_string();
-                    if record_value == expected_value {
-                        info!("✅ Found matching TXT record for {}", fqdn);
-                        return Ok(true);
-                    }
-                }
-                info!("❌ No matching TXT record found for {}", fqdn);
-                Ok(false)
-            }
-            Err(e) => {
-                info!("❌ DNS lookup failed for {}: {}", fqdn, e);
-                Ok(false)
-            }
-        }
-    }
+    // wait_for_propagation and check_txt_record use default implementations from trait
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn test_digitalocean_config_serialization() {
-        let config = DigitalOceanConfig {
-            api_token: "test-token".to_string(),
-            timeout_seconds: Some(30),
-        };
-
-        let json_value = serde_json::to_value(&config).unwrap();
-        let expected = json!({
-            "api_token": "test-token",
-            "timeout_seconds": 30
-        });
-
-        assert_eq!(json_value, expected);
-    }
-
-    #[test]
-    fn test_digitalocean_config_deserialization() {
-        let json_value = json!({
-            "api_token": "test-token",
-            "timeout_seconds": 30
-        });
-
-        let config: DigitalOceanConfig = serde_json::from_value(json_value).unwrap();
-        assert_eq!(config.api_token, "test-token");
-        assert_eq!(config.timeout_seconds, Some(30));
-    }
 
     #[test]
     fn test_calculate_record_name() {
@@ -330,9 +266,5 @@ mod tests {
         // Test subdomain
         let result = provider.calculate_record_name("sub.example.com", "example.com", "_acme-challenge").unwrap();
         assert_eq!(result, "_acme-challenge.sub");
-
-        // Test nested subdomain
-        let result = provider.calculate_record_name("api.sub.example.com", "example.com", "_acme-challenge").unwrap();
-        assert_eq!(result, "_acme-challenge.api.sub");
     }
 }

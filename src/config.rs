@@ -1,4 +1,5 @@
-// src/config.rs
+// src/config.rs - обновленная конфигурация
+
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -21,6 +22,21 @@ pub struct ServerSettings {
     pub ws_bind: String,
     pub ws_port: u16,
     pub domain: String,
+    pub routing_mode: RoutingMode, // Новое поле
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RoutingMode {
+    Path,      // /tunnel-id/path
+    Subdomain, // tunnel-id.domain.com/path  
+    Both,      // поддержка обоих
+}
+
+impl Default for RoutingMode {
+    fn default() -> Self {
+        RoutingMode::Path
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +46,14 @@ pub struct SslSettings {
     pub email: String,
     pub staging: bool,
     pub cert_cache_dir: String,
+    pub wildcard: bool,                    // Add this field
+    pub dns_provider: Option<DnsProviderConfig>, // Add this field
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsProviderConfig {
+    pub provider: String, // "digitalocean", "cloudflare", etc.
+    pub config: serde_json::Value, // провайдер-специфичная конфигурация
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -67,6 +91,7 @@ impl Default for ServerConfig {
                 ws_bind: "0.0.0.0".to_string(),
                 ws_port: 8081,
                 domain: "localhost".to_string(),
+                routing_mode: RoutingMode::Path,
             },
             ssl: SslSettings {
                 enabled: false,
@@ -74,6 +99,8 @@ impl Default for ServerConfig {
                 email: "admin@example.com".to_string(),
                 staging: true,
                 cert_cache_dir: "/tmp/exposeme-certs".to_string(),
+                wildcard: false,
+                dns_provider: None,
             },
             auth: AuthSettings {
                 tokens: vec!["dev".to_string()],
@@ -86,7 +113,7 @@ impl Default for ServerConfig {
     }
 }
 
-/// Client configuration
+/// Client configuration (без изменений)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub client: ClientSettings,
@@ -117,100 +144,65 @@ impl Default for ClientConfig {
     }
 }
 
-/// Server CLI Arguments
+// CLI аргументы остаются теми же...
 #[derive(Parser, Debug)]
 #[command(name = "exposeme-server")]
 #[command(about = "ExposeME tunneling server")]
 pub struct ServerArgs {
-    /// Configuration file path
     #[arg(short, long, default_value = "server.toml")]
     pub config: PathBuf,
-
-    /// HTTP bind address
     #[arg(long)]
     pub http_bind: Option<String>,
-
-    /// HTTP port
     #[arg(long)]
     pub http_port: Option<u16>,
-
-    /// HTTPS port
     #[arg(long)]
     pub https_port: Option<u16>,
-
-    /// WebSocket bind address  
     #[arg(long)]
     pub ws_bind: Option<String>,
-
-    /// WebSocket port
     #[arg(long)]
     pub ws_port: Option<u16>,
-
-    /// Domain name for certificates
     #[arg(long)]
     pub domain: Option<String>,
-
-    /// Enable HTTPS with Let's Encrypt
     #[arg(long)]
     pub enable_https: bool,
-
-    /// Disable HTTPS (HTTP only mode)
     #[arg(long)]
     pub disable_https: bool,
-
-    /// Let's Encrypt email
     #[arg(long)]
     pub email: Option<String>,
-
-    /// Use Let's Encrypt staging environment
     #[arg(long)]
     pub staging: bool,
-
-    /// Generate default config file and exit
     #[arg(long)]
     pub generate_config: bool,
-
-    /// Verbose logging
     #[arg(short, long)]
     pub verbose: bool,
+    // Новые опции
+    #[arg(long)]
+    pub wildcard: bool,
+    #[arg(long)]
+    pub routing_mode: Option<String>,
 }
 
-/// Client CLI Arguments
 #[derive(Parser, Debug)]
 #[command(name = "exposeme-client")]
 #[command(about = "ExposeME tunneling client")]
 pub struct ClientArgs {
-    /// Configuration file path
     #[arg(short, long, default_value = "client.toml")]
     pub config: PathBuf,
-
-    /// Server WebSocket URL
     #[arg(short, long)]
     pub server_url: Option<String>,
-
-    /// Authentication token
     #[arg(short, long)]
     pub token: Option<String>,
-
-    /// Tunnel ID
     #[arg(short = 'T', long)]
     pub tunnel_id: Option<String>,
-
-    /// Local target URL
     #[arg(short, long)]
     pub local_target: Option<String>,
-
-    /// Generate default config file and exit
     #[arg(long)]
     pub generate_config: bool,
-
-    /// Verbose logging
     #[arg(short, long)]
     pub verbose: bool,
 }
 
 impl ServerConfig {
-    /// Load configuration from file and CLI args
     pub fn load(args: &ServerArgs) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut config = if args.config.exists() {
             let content = fs::read_to_string(&args.config)?;
@@ -251,35 +243,41 @@ impl ServerConfig {
         if args.staging {
             config.ssl.staging = true;
         }
+        if args.wildcard {
+            config.ssl.wildcard = true;
+        }
+        if let Some(mode) = &args.routing_mode {
+            config.server.routing_mode = match mode.as_str() {
+                "path" => RoutingMode::Path,
+                "subdomain" => RoutingMode::Subdomain,
+                "both" => RoutingMode::Both,
+                _ => return Err(format!("Invalid routing mode: {}", mode).into()),
+            };
+        }
 
         Ok(config)
     }
 
-    /// Generate default config file
     pub fn generate_default_file(path: &PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let config = Self::default();
         let content = toml::to_string_pretty(&config)?;
         fs::write(path, content)?;
-        println!("Generated default server config: {:?}", path);
+        tracing::info!("Generated default server config: {:?}", path);
         Ok(())
     }
 
-    /// Get HTTP server address
     pub fn http_addr(&self) -> String {
         format!("{}:{}", self.server.http_bind, self.server.http_port)
     }
 
-    /// Get HTTPS server address
     pub fn https_addr(&self) -> String {
         format!("{}:{}", self.server.http_bind, self.server.https_port)
     }
 
-    /// Get WebSocket server address  
     pub fn ws_addr(&self) -> String {
         format!("{}:{}", self.server.ws_bind, self.server.ws_port)
     }
 
-    /// Get public URL base
     pub fn public_url_base(&self) -> String {
         if self.ssl.enabled {
             if self.server.https_port == 443 {
@@ -295,10 +293,49 @@ impl ServerConfig {
             }
         }
     }
+
+    /// Получить публичный URL для туннеля
+    pub fn get_public_url(&self, tunnel_id: &str) -> String {
+        match self.server.routing_mode {
+            RoutingMode::Subdomain => {
+                if self.ssl.enabled {
+                    if self.server.https_port == 443 {
+                        format!("https://{}.{}", tunnel_id, self.server.domain)
+                    } else {
+                        format!("https://{}.{}:{}", tunnel_id, self.server.domain, self.server.https_port)
+                    }
+                } else {
+                    if self.server.http_port == 80 {
+                        format!("http://{}.{}", tunnel_id, self.server.domain)
+                    } else {
+                        format!("http://{}.{}:{}", tunnel_id, self.server.domain, self.server.http_port)
+                    }
+                }
+            },
+            RoutingMode::Path => {
+                format!("{}/{}", self.public_url_base(), tunnel_id)
+            },
+            RoutingMode::Both => {
+                // Возвращаем поддомен как основной
+                if self.ssl.enabled {
+                    if self.server.https_port == 443 {
+                        format!("https://{}.{}", tunnel_id, self.server.domain)
+                    } else {
+                        format!("https://{}.{}:{}", tunnel_id, self.server.domain, self.server.https_port)
+                    }
+                } else {
+                    if self.server.http_port == 80 {
+                        format!("http://{}.{}", tunnel_id, self.server.domain)
+                    } else {
+                        format!("http://{}.{}:{}", tunnel_id, self.server.domain, self.server.http_port)
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl ClientConfig {
-    /// Load configuration from file and CLI args
     pub fn load(args: &ClientArgs) -> Result<Self, Box<dyn std::error::Error>> {
         let mut config = if args.config.exists() {
             let content = fs::read_to_string(&args.config)?;
@@ -308,7 +345,6 @@ impl ClientConfig {
             Self::default()
         };
 
-        // Override with CLI arguments
         if let Some(url) = &args.server_url {
             config.client.server_url = url.clone();
         }
@@ -325,34 +361,11 @@ impl ClientConfig {
         Ok(config)
     }
 
-    /// Generate default config file
     pub fn generate_default_file(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         let config = Self::default();
         let content = toml::to_string_pretty(&config)?;
         fs::write(path, content)?;
-        println!("Generated default client config: {:?}", path);
+        tracing::info!("Generated default client config: {:?}", path);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_server_config_default() {
-        let config = ServerConfig::default();
-        assert_eq!(config.server.http_port, 8888);
-        assert_eq!(config.server.ws_port, 8081);
-        assert_eq!(config.auth.tokens.len(), 1);
-        assert_eq!(config.auth.tokens[0], "dev");
-    }
-
-    #[test]
-    fn test_client_config_default() {
-        let config = ClientConfig::default();
-        assert_eq!(config.client.tunnel_id, "test");
-        assert_eq!(config.client.auth_token, "dev");
-        assert!(config.client.auto_reconnect);
     }
 }

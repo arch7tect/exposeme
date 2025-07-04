@@ -1,4 +1,4 @@
-// src/ssl.rs
+// src/ssl.rs - Final completely fixed version
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
@@ -12,23 +12,25 @@ use instant_acme::{
     Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder,
     OrderStatus,
 };
-use rcgen::{generate_simple_self_signed, CertificateParams};
-use rustls::{Certificate, PrivateKey, ServerConfig as RustlsConfig};
-use rustls_pemfile::{certs, pkcs8_private_keys, read_one, Item};
+use rcgen::generate_simple_self_signed;
+use rustls::ServerConfig as RustlsConfig;
+use rustls_pemfile::{read_one, Item};
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use tracing::{info, warn};
+use tracing::{info, warn, error};
 use x509_parser::parse_x509_certificate;
+
 use crate::config::{ServerConfig, SslProvider};
+use crate::dns::{DnsProvider, create_dns_provider};
 
 /// Global challenge store
 pub type ChallengeStore = Arc<RwLock<HashMap<String, String>>>;
 
-#[derive(Debug, Clone)]
 pub struct SslManager {
     config: ServerConfig,
     rustls_config: Option<Arc<RustlsConfig>>,
     challenge_store: ChallengeStore,
+    dns_provider: Option<Box<dyn DnsProvider>>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,10 +44,26 @@ pub struct CertificateInfo {
 
 impl SslManager {
     pub fn new(config: ServerConfig) -> Self {
+        let dns_provider = if let Some(dns_config) = &config.ssl.dns_provider {
+            match create_dns_provider(&dns_config.provider, &dns_config.config) {
+                Ok(provider) => {
+                    info!("✅ DNS provider '{}' initialized", dns_config.provider);
+                    Some(provider)
+                }
+                Err(e) => {
+                    error!("❌ Failed to initialize DNS provider: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             config,
             rustls_config: None,
             challenge_store: Arc::new(RwLock::new(HashMap::new())),
+            dns_provider,
         }
     }
 
@@ -54,14 +72,14 @@ impl SslManager {
         self.challenge_store.clone()
     }
 
-    /// Add ACME challenge
+    /// Add ACME challenge for HTTP-01
     async fn add_challenge(&self, token: &str, key_auth: &str) {
         let mut store = self.challenge_store.write().await;
         store.insert(token.to_string(), key_auth.to_string());
         info!("Added ACME challenge for token: {}", token);
     }
 
-    /// Remove ACME challenge
+    /// Remove ACME challenge for HTTP-01
     async fn remove_challenge(&self, token: &str) {
         let mut store = self.challenge_store.write().await;
         store.remove(token);
@@ -102,24 +120,44 @@ impl SslManager {
         // Create cache directory
         fs::create_dir_all(cache_dir)?;
 
-        let cert_path = cache_dir.join(format!("{}.pem", domain));
-        let key_path = cache_dir.join(format!("{}.key", domain));
+        // Determine certificate type
+        let cert_domain = if self.config.ssl.wildcard {
+            format!("*.{}", domain)
+        } else {
+            domain.clone()
+        };
+
+        let cert_filename = if self.config.ssl.wildcard {
+            format!("wildcard-{}", domain.replace('.', "-"))
+        } else {
+            domain.replace('.', "-")
+        };
+
+        let cert_path = cache_dir.join(format!("{}.pem", cert_filename));
+        let key_path = cache_dir.join(format!("{}.key", cert_filename));
 
         // Check if certificates exist and are valid
         if cert_path.exists() && key_path.exists() {
             info!("Found existing certificates, checking validity...");
             if let Ok(config) = self.load_certificates(&cert_path, &key_path) {
-                // TODO: Add certificate expiry check
                 info!("Using existing certificates");
                 return Ok(config);
             }
             warn!("Existing certificates invalid, obtaining new ones");
         }
 
-        info!("Obtaining new Let's Encrypt certificate for {}", domain);
+        if self.config.ssl.wildcard {
+            info!("Obtaining wildcard Let's Encrypt certificate for *.{}", domain);
+
+            if self.dns_provider.is_none() {
+                return Err("Wildcard certificates require DNS provider configuration".into());
+            }
+        } else {
+            info!("Obtaining Let's Encrypt certificate for {}", domain);
+        }
 
         // Get certificate from Let's Encrypt
-        let (cert_pem, key_pem) = self.obtain_certificate(domain, email).await?;
+        let (cert_pem, key_pem) = self.obtain_certificate(&cert_domain, email).await?;
 
         // Save certificates
         fs::write(&cert_path, &cert_pem)?;
@@ -142,7 +180,7 @@ impl SslManager {
         info!("Using ACME directory: {}", directory_url);
 
         // Create account
-        let account = Account::create(
+        let (account, _account_credentials) = Account::create(
             &NewAccount {
                 contact: &[&format!("mailto:{}", email)],
                 terms_of_service_agreed: true,
@@ -166,91 +204,205 @@ impl SslManager {
         info!("ACME order created");
 
         // Get order state and authorizations
-        let _order_state = order.state();
         let authorizations = order.authorizations().await?;
 
         // Process authorizations
         for auth in authorizations {
-            // Find HTTP-01 challenge
-            let challenge = auth
-                .challenges
-                .iter()
-                .find(|c| c.r#type == ChallengeType::Http01)
-                .ok_or_else(|| "No HTTP-01 challenge found")?;
+            // Get domain from identifier
+            let auth_domain = match &auth.identifier {
+                Identifier::Dns(domain) => domain,
+            };
 
-            let key_authorization = order.key_authorization(challenge);
-            let key_auth = key_authorization.as_str().to_string();
-
-            info!("Setting up HTTP-01 challenge for {}", domain);
-            info!("Challenge token: {}", challenge.token);
-
-            // Add challenge to store for HTTP server to serve
-            self.add_challenge(&challenge.token, &key_auth).await;
-
-            // Validate challenge
-            info!("Notifying Let's Encrypt that challenge is ready...");
-            order.set_challenge_ready(&challenge.url).await?;
-
-            // Wait for authorization - refresh authorizations
-            let mut attempts = 0;
-            const MAX_ATTEMPTS: u32 = 30; // 1 minute total
-
-            loop {
-                sleep(Duration::from_secs(2)).await;
-
-                // Get fresh authorizations to check status
-                let fresh_auths = order.authorizations().await?;
-
-                // For single domain, take the first authorization
-                let current_auth = fresh_auths.first()
-                    .ok_or_else(|| "No authorizations found")?;
-
-                match current_auth.status {
-                    AuthorizationStatus::Valid => {
-                        info!("✅ Authorization completed for {}", domain);
-                        break;
-                    }
-                    AuthorizationStatus::Invalid => {
-                        // Clean up challenge
-                        self.remove_challenge(&challenge.token).await;
-                        return Err(format!("❌ Authorization failed for {}", domain).into());
-                    }
-                    AuthorizationStatus::Pending => {
-                        attempts += 1;
-                        if attempts >= MAX_ATTEMPTS {
-                            self.remove_challenge(&challenge.token).await;
-                            return Err(format!("❌ Authorization timeout for {}", domain).into());
-                        }
-                        info!("⏳ Authorization pending for {} (attempt {}/{})", domain, attempts, MAX_ATTEMPTS);
-                    }
-                    status => {
-                        info!("⏳ Authorization status: {:?} for {}", status, domain);
-                    }
-                }
+            if self.config.ssl.wildcard && self.dns_provider.is_some() {
+                // Use DNS-01 challenge for wildcard
+                info!("Processing DNS-01 challenge for {}", auth_domain);
+                self.process_dns_challenge(&mut order, &auth).await?;
+            } else {
+                // Use HTTP-01 challenge for regular certificates
+                info!("Processing HTTP-01 challenge for {}", auth_domain);
+                self.process_http_challenge(&mut order, &auth).await?;
             }
-
-            // Clean up challenge after successful authorization
-            self.remove_challenge(&challenge.token).await;
         }
 
-        // Generate certificate signing request
-        let mut params = CertificateParams::new(vec![domain.to_string()]);
-        params.distinguished_name.push(rcgen::DnType::CommonName, domain);
+        // Generate certificate signing request with new rcgen API
+        let base_domain = if domain.starts_with("*.") {
+            &domain[2..]
+        } else {
+            domain
+        };
 
-        let cert = rcgen::Certificate::from_params(params)?;
-        let csr = cert.serialize_request_der()?;
+        let mut params = rcgen::CertificateParams::new(vec![domain.to_string()])?;
+        params.distinguished_name.push(rcgen::DnType::CommonName, base_domain);
+
+        let key_pair = rcgen::KeyPair::generate()?;
+        let csr = params.serialize_request(&key_pair)?;
 
         // Finalize order
         info!("Finalizing certificate order...");
-        order.finalize(&csr).await?;
+        order.finalize(&csr.der()).await?;
 
         // Wait for certificate
+        self.wait_for_certificate_issuance(&mut order, domain).await?;
+
+        // Download certificate
+        let cert_chain_pem = order.certificate().await?.ok_or_else(|| {
+            "Certificate not available"
+        })?;
+
+        let private_key_pem = key_pair.serialize_pem();
+
+        info!("🎉 Successfully obtained certificate for {}", domain);
+        Ok((cert_chain_pem, private_key_pem))
+    }
+
+    /// Process HTTP-01 challenge
+    async fn process_http_challenge(
+        &self,
+        order: &mut instant_acme::Order,
+        auth: &instant_acme::Authorization,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Find HTTP-01 challenge
+        let challenge = auth
+            .challenges
+            .iter()
+            .find(|c| c.r#type == ChallengeType::Http01)
+            .ok_or_else(|| "No HTTP-01 challenge found")?;
+
+        let key_authorization = order.key_authorization(challenge);
+        let key_auth = key_authorization.as_str().to_string();
+
+        info!("Setting up HTTP-01 challenge");
+        info!("Challenge token: {}", challenge.token);
+
+        // Add challenge to store for HTTP server to serve
+        self.add_challenge(&challenge.token, &key_auth).await;
+
+        // Validate challenge
+        info!("Notifying Let's Encrypt that challenge is ready...");
+        order.set_challenge_ready(&challenge.url).await?;
+
+        // Wait for authorization
+        let auth_domain = match &auth.identifier {
+            Identifier::Dns(domain) => domain,
+        };
+        self.wait_for_authorization(order, auth_domain).await?;
+
+        // Clean up challenge after successful authorization
+        self.remove_challenge(&challenge.token).await;
+
+        Ok(())
+    }
+
+    /// Process DNS-01 challenge
+    async fn process_dns_challenge(
+        &self,
+        order: &mut instant_acme::Order,
+        auth: &instant_acme::Authorization,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let dns_provider = self.dns_provider.as_ref()
+            .ok_or("DNS provider not configured for DNS-01 challenge")?;
+
+        // Find DNS-01 challenge
+        let challenge = auth
+            .challenges
+            .iter()
+            .find(|c| c.r#type == ChallengeType::Dns01)
+            .ok_or_else(|| "No DNS-01 challenge found")?;
+
+        // Calculate DNS record value
+        let dns_value = order.key_authorization(challenge).dns_value();
+
+        let domain = match &auth.identifier {
+            Identifier::Dns(domain) => domain,
+        };
+        let record_name = "_acme-challenge";
+
+        info!("Setting up DNS-01 challenge for {}", domain);
+        info!("Creating TXT record: {}.{} = {}", record_name, domain, dns_value);
+
+        // Create DNS record
+        let record_id = dns_provider.create_txt_record(domain, record_name, &dns_value).await?;
+
+        // Wait for DNS propagation
+        dns_provider.wait_for_propagation(domain, record_name, &dns_value).await?;
+
+        // Notify Let's Encrypt
+        info!("Notifying Let's Encrypt that DNS challenge is ready...");
+        order.set_challenge_ready(&challenge.url).await?;
+
+        // Wait for authorization
+        let auth_result = self.wait_for_authorization(order, domain).await;
+
+        // Clean up DNS record
+        info!("Cleaning up DNS record...");
+        if let Err(e) = dns_provider.delete_txt_record(domain, &record_id).await {
+            warn!("Failed to clean up DNS record: {}", e);
+        }
+
+        auth_result
+    }
+
+    /// Wait for authorization to complete
+    async fn wait_for_authorization(
+        &self,
+        order: &mut instant_acme::Order,
+        domain: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: u32 = 30;
+
+        loop {
+            sleep(Duration::from_secs(2)).await;
+
+            let fresh_auths = order.authorizations().await?;
+
+            // Find authorization for this domain
+            let current_auth = fresh_auths.iter()
+                .find(|auth| {
+                    match &auth.identifier {
+                        Identifier::Dns(auth_domain) => auth_domain == domain,
+                    }
+                })
+                .ok_or_else(|| format!("No authorization found for {}", domain))?;
+
+            match current_auth.status {
+                AuthorizationStatus::Valid => {
+                    info!("✅ Authorization completed for {}", domain);
+                    break;
+                }
+                AuthorizationStatus::Invalid => {
+                    return Err(format!("❌ Authorization failed for {}", domain).into());
+                }
+                AuthorizationStatus::Pending => {
+                    attempts += 1;
+                    if attempts >= MAX_ATTEMPTS {
+                        return Err(format!("❌ Authorization timeout for {}", domain).into());
+                    }
+                    info!("⏳ Authorization pending for {} (attempt {}/{})", domain, attempts, MAX_ATTEMPTS);
+                }
+                status => {
+                    info!("⏳ Authorization status: {:?} for {}", status, domain);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Wait for certificate issuance
+    async fn wait_for_certificate_issuance(
+        &self,
+        order: &mut instant_acme::Order,
+        domain: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut attempts = 0;
         const MAX_ATTEMPTS: u32 = 60;
+
         loop {
             sleep(Duration::from_secs(2)).await;
             let order_state = order.state();
             info!("Certificate order status: {:?} for {}", order_state.status, domain);
+
             match order_state.status {
                 OrderStatus::Valid => {
                     info!("✅ Certificate issued for {}", domain);
@@ -269,15 +421,7 @@ impl SslManager {
             }
         }
 
-        // Download certificate
-        let cert_chain_pem = order.certificate().await?.ok_or_else(|| {
-            "Certificate not available"
-        })?;
-
-        let private_key_pem = cert.serialize_private_key_pem();
-
-        info!("🎉 Successfully obtained certificate for {}", domain);
-        Ok((cert_chain_pem, private_key_pem))
+        Ok(())
     }
 
     /// Load certificates from files
@@ -286,24 +430,16 @@ impl SslManager {
 
         // Read certificate file
         let cert_file = fs::read(cert_path)?;
-        let cert_chain = certs(&mut cert_file.as_slice())?
-            .into_iter()
-            .map(Certificate)
-            .collect();
+        let cert_chain = rustls_pemfile::certs(&mut cert_file.as_slice())
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Read private key file
         let key_file = fs::read(key_path)?;
-        let mut keys = pkcs8_private_keys(&mut key_file.as_slice())?;
-
-        if keys.is_empty() {
-            return Err("No private keys found".into());
-        }
-
-        let private_key = PrivateKey(keys.remove(0));
+        let private_key = rustls_pemfile::private_key(&mut key_file.as_slice())?
+            .ok_or("No private key found")?;
 
         // Build rustls config
         let config = RustlsConfig::builder()
-            .with_safe_defaults()
             .with_no_client_auth()
             .with_single_cert(cert_chain, private_key)?;
 
@@ -312,7 +448,6 @@ impl SslManager {
 
     /// Load manual certificates
     fn load_manual_certificates(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
-        // For manual certificates, user should provide cert and key files
         let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", self.config.server.domain));
         let key_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", self.config.server.domain));
 
@@ -328,46 +463,47 @@ impl SslManager {
 
     /// Generate self-signed certificate (for development)
     pub fn generate_self_signed(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
-        let domain =  self.config.server.domain.as_str();
+        let domain = self.config.server.domain.as_str();
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
         fs::create_dir_all(cache_dir)?;
         let cert_path = cache_dir.join(format!("{}.pem", domain));
         let key_path = cache_dir.join(format!("{}.key", domain));
 
-        // Check if certificates exist and are valid
         if !cert_path.exists() || !key_path.exists() {
             warn!("Generating self-signed certificate for {}", domain);
             warn!("This should only be used for development!");
 
-            let subject_alt_names = vec![domain.to_string()];
+            let subject_alt_names = if self.config.ssl.wildcard {
+                vec![domain.to_string(), format!("*.{}", domain)]
+            } else {
+                vec![domain.to_string()]
+            };
+
             let cert = generate_simple_self_signed(subject_alt_names)?;
-            
-            // Serialize to PEM
-            let cert_pem = cert.serialize_pem()?;
-            let key_pem = cert.serialize_private_key_pem();
 
-            // Save to files
-            fs::write(cert_path, &cert_pem)?;
-            fs::write(key_path, &key_pem)?;
+            let cert_pem = cert.cert.pem();
+            let key_pem = cert.signing_key.serialize_pem();
 
-            // Convert to DER for rustls
-            let cert_der = cert.serialize_der()?;
-            let private_key_der = cert.serialize_private_key_der();
+            fs::write(&cert_path, &cert_pem)?;
+            fs::write(&key_path, &key_pem)?;
 
-            let cert_chain = vec![Certificate(cert_der)];
-            let private_key = PrivateKey(private_key_der);
+            // Convert to rustls types
+            let cert_der = cert.cert.der().clone();
+            let private_key_der = cert.signing_key.serialize_der().try_into()?;
+
+            let cert_chain = vec![cert_der];
+            let private_key = private_key_der;
 
             let config = RustlsConfig::builder()
-                .with_safe_defaults()
                 .with_no_client_auth()
                 .with_single_cert(cert_chain, private_key)?;
 
             Ok(config)
-        }
-        else {
+        } else {
             self.load_certificates(&cert_path, &key_path)
         }
     }
+
     pub fn get_certificate_info(&self) -> Result<CertificateInfo, Box<dyn std::error::Error + Send + Sync>> {
         let domain = self.config.server.domain.as_str();
         let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", domain));
@@ -411,9 +547,14 @@ impl SslManager {
         let domain = self.config.server.domain.as_str();
         info!("🚨 Start certificate renewal for {}", domain);
 
-        // Remove existing certificate to force renewal
-        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", domain));
-        let key_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", domain));
+        let cert_filename = if self.config.ssl.wildcard {
+            format!("wildcard-{}", domain.replace('.', "-"))
+        } else {
+            domain.replace('.', "-")
+        };
+
+        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", cert_filename));
+        let key_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", cert_filename));
 
         if cert_path.exists() {
             fs::remove_file(&cert_path)?;
@@ -422,12 +563,12 @@ impl SslManager {
             fs::remove_file(&key_path)?;
         }
 
-        // Perform renewal
         let new_config = match self.config.ssl.provider {
             SslProvider::LetsEncrypt => self.setup_letsencrypt().await?,
             SslProvider::SelfSigned => self.generate_self_signed()?,
             _ => return Err(format!("Unsupported SSL provider for renewal: {:?}", self.config.ssl.provider).into()),
         };
+
         self.rustls_config = Some(Arc::new(new_config));
 
         info!("✅ Certificate renewal completed for {}", domain);

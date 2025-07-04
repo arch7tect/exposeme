@@ -111,7 +111,7 @@ impl SslManager {
         self.rustls_config.clone()
     }
 
-    /// Setup Let's Encrypt certificates
+    /// Setup Let's Encrypt certificates - COMPREHENSIVE FIX
     async fn setup_letsencrypt(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         let domain = &self.config.server.domain;
         let email = &self.config.ssl.email;
@@ -120,17 +120,18 @@ impl SslManager {
         // Create cache directory
         fs::create_dir_all(cache_dir)?;
 
-        // Determine certificate type
-        let cert_domain = if self.config.ssl.wildcard {
-            format!("*.{}", domain)
+        // Determine what domains to request
+        let (cert_domains, cert_filename) = if self.config.ssl.wildcard {
+            // For wildcard certificates, request both wildcard and base domain
+            let wildcard_domain = format!("*.{}", domain);
+            let domains = vec![wildcard_domain.clone(), domain.clone()];
+            let filename = format!("wildcard-{}", domain.replace('.', "-"));
+            (domains, filename)
         } else {
-            domain.clone()
-        };
-
-        let cert_filename = if self.config.ssl.wildcard {
-            format!("wildcard-{}", domain.replace('.', "-"))
-        } else {
-            domain.replace('.', "-")
+            // For regular certificates, just request the domain
+            let domains = vec![domain.clone()];
+            let filename = domain.replace('.', "-");
+            (domains, filename)
         };
 
         let cert_path = cache_dir.join(format!("{}.pem", cert_filename));
@@ -147,17 +148,17 @@ impl SslManager {
         }
 
         if self.config.ssl.wildcard {
-            info!("Obtaining wildcard Let's Encrypt certificate for *.{}", domain);
+            info!("Obtaining wildcard Let's Encrypt certificate for domains: {:?}", cert_domains);
 
             if self.dns_provider.is_none() {
                 return Err("Wildcard certificates require DNS provider configuration".into());
             }
         } else {
-            info!("Obtaining Let's Encrypt certificate for {}", domain);
+            info!("Obtaining Let's Encrypt certificate for domain: {}", domain);
         }
 
         // Get certificate from Let's Encrypt
-        let (cert_pem, key_pem) = self.obtain_certificate(&cert_domain, email).await?;
+        let (cert_pem, key_pem) = self.obtain_certificate_for_domains(&cert_domains, email).await?;
 
         // Save certificates
         fs::write(&cert_path, &cert_pem)?;
@@ -168,8 +169,8 @@ impl SslManager {
         self.load_certificates(&cert_path, &key_path)
     }
 
-    /// Obtain certificate from Let's Encrypt
-    async fn obtain_certificate(&self, domain: &str, email: &str) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+    /// Obtain certificate from Let's Encrypt for multiple domains
+    async fn obtain_certificate_for_domains(&self, domains: &[String], email: &str) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
         // Choose ACME directory based on staging flag
         let directory_url = if self.config.ssl.staging {
             LetsEncrypt::Staging.url()
@@ -193,15 +194,20 @@ impl SslManager {
 
         info!("ACME account created");
 
+        // Create identifiers for all domains
+        let identifiers: Vec<Identifier> = domains
+            .iter()
+            .map(|d| Identifier::Dns(d.clone()))
+            .collect();
+
         // Create order
-        let identifier = Identifier::Dns(domain.to_string());
         let mut order = account
             .new_order(&NewOrder {
-                identifiers: &[identifier],
+                identifiers: &identifiers,
             })
             .await?;
 
-        info!("ACME order created");
+        info!("ACME order created for domains: {:?}", domains);
 
         // Get order state and authorizations
         let authorizations = order.authorizations().await?;
@@ -224,37 +230,27 @@ impl SslManager {
             }
         }
 
-        // Generate certificate signing request - SIMPLE WORKING VERSION
-        info!("Generating CSR for domain: {}", domain);
+        // Generate certificate signing request for all domains
+        info!("Generating CSR for domains: {:?}", domains);
 
-        // Create the domain list for the certificate
-        let mut domains = vec![domain.to_string()];
+        // Create certificate parameters with all domains
+        let mut params = rcgen::CertificateParams::new(domains.to_vec())?;
 
-        // For wildcard certificates, also include the base domain if needed
-        if self.config.ssl.wildcard && domain.starts_with("*.") {
-            let base_domain = &domain[2..]; // Remove "*."
-            domains.push(base_domain.to_string());
-            info!("Certificate will include: {} and {}", domain, base_domain);
-        }
-
-        // Create certificate parameters - this automatically handles SAN entries
-        let mut params = rcgen::CertificateParams::new(domains)?;
-
-        // Set the Common Name to match the primary domain
-        params.distinguished_name.push(rcgen::DnType::CommonName, domain);
+        // Set the Common Name to the first domain (usually the wildcard or primary domain)
+        params.distinguished_name.push(rcgen::DnType::CommonName, &domains[0]);
 
         // Generate key pair and CSR
         let key_pair = rcgen::KeyPair::generate()?;
         let csr = params.serialize_request(&key_pair)?;
 
-        info!("CSR generated successfully for domain: {}", domain);
+        info!("CSR generated successfully for domains: {:?}", domains);
 
         // Finalize order
         info!("Finalizing certificate order...");
         order.finalize(&csr.der()).await?;
 
         // Wait for certificate
-        self.wait_for_certificate_issuance(&mut order, domain).await?;
+        self.wait_for_certificate_issuance(&mut order, &domains[0]).await?;
 
         // Download certificate
         let cert_chain_pem = order.certificate().await?.ok_or_else(|| {
@@ -263,7 +259,7 @@ impl SslManager {
 
         let private_key_pem = key_pair.serialize_pem();
 
-        info!("🎉 Successfully obtained certificate for {}", domain);
+        info!("🎉 Successfully obtained certificate for domains: {:?}", domains);
         Ok((cert_chain_pem, private_key_pem))
     }
     

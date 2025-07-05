@@ -48,6 +48,11 @@ struct CreateRecordResponse {
     domain_record: DnsRecord,
 }
 
+#[derive(Deserialize)]
+struct RecordsResponse {
+    domain_records: Vec<DnsRecord>,
+}
+
 /// DigitalOcean DNS provider implementation
 pub struct DigitalOceanProvider {
     config: DigitalOceanConfig,
@@ -129,6 +134,69 @@ impl DigitalOceanProvider {
         info!("Calculated record name: {} for domain: {}", record_name, domain);
         Ok(record_name)
     }
+    async fn cleanup_existing_txt_records(&mut self, base_domain: &str, record_name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("🧹 Cleaning up existing TXT records: {}.{}", record_name, base_domain);
+
+        // Get all records for the domain
+        let url = format!("https://api.digitalocean.com/v2/domains/{}/records", base_domain);
+        let response = self.client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.config.api_token))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            warn!("⚠️  Failed to list DNS records for cleanup");
+            return Ok(()); // Don't fail the whole process for cleanup issues
+        }
+
+        let records_response: RecordsResponse = response.json().await?;
+
+        // Find existing TXT records with matching name
+        let matching_records: Vec<&DnsRecord> = records_response.domain_records
+            .iter()
+            .filter(|record| {
+                record.record_type == "TXT" && record.name == record_name
+            })
+            .collect();
+
+        if matching_records.is_empty() {
+            info!("✅ No existing TXT records to clean up");
+            return Ok(());
+        }
+
+        info!("🗑️  Found {} existing TXT record(s) to clean up", matching_records.len());
+
+        // Delete each matching record
+        for record in matching_records {
+            if let Some(record_id) = record.id {
+                info!("🗑️  Deleting old TXT record ID: {}", record_id);
+
+                let delete_url = format!(
+                    "https://api.digitalocean.com/v2/domains/{}/records/{}",
+                    base_domain,
+                    record_id
+                );
+
+                match self.client
+                    .delete(&delete_url)
+                    .header("Authorization", format!("Bearer {}", self.config.api_token))
+                    .send()
+                    .await
+                {
+                    Ok(response) if response.status().is_success() => {
+                        info!("✅ Deleted old TXT record {}", record_id);
+                    }
+                    Ok(_) | Err(_) => {
+                        warn!("⚠️  Failed to delete old TXT record {}, continuing...", record_id);
+                    }
+                }
+            }
+        }
+
+        info!("🧹 Cleanup completed");
+        Ok(())
+    }
 }
 
 impl ConfigHelper for DigitalOceanProvider {}
@@ -179,6 +247,10 @@ impl DnsProvider for DigitalOceanProvider {
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let base_domain = self.get_base_domain(domain).await?;
         let record_name = self.calculate_record_name(domain, &base_domain, name)?;
+
+        if let Err(e) = self.cleanup_existing_txt_records(&base_domain, &record_name).await {
+            warn!("⚠️  Cleanup failed (continuing anyway): {}", e);
+        }
 
         info!("Creating TXT record: {}.{} = {}", record_name, base_domain, value);
 

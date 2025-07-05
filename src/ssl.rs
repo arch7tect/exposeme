@@ -489,8 +489,15 @@ impl SslManager {
 
     /// Load manual certificates
     fn load_manual_certificates(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
-        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", self.config.server.domain));
-        let key_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", self.config.server.domain));
+        let domain = &self.config.server.domain;
+        let cert_filename = if self.config.ssl.wildcard {
+            format!("wildcard-{}", domain.replace('.', "-"))
+        } else {
+            domain.replace('.', "-")
+        };
+
+        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", cert_filename));
+        let key_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", cert_filename));
 
         if !cert_path.exists() || !key_path.exists() {
             return Err(format!(
@@ -504,11 +511,17 @@ impl SslManager {
 
     /// Generate self-signed certificate (for development)
     pub fn generate_self_signed(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
-        let domain = self.config.server.domain.as_str();
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
         fs::create_dir_all(cache_dir)?;
-        let cert_path = cache_dir.join(format!("{}.pem", domain));
-        let key_path = cache_dir.join(format!("{}.key", domain));
+        let domain = self.config.server.domain.as_str();
+        let cert_filename = if self.config.ssl.wildcard {
+            format!("wildcard-{}", domain.replace('.', "-"))
+        } else {
+            domain.replace('.', "-")
+        };
+
+        let cert_path = cache_dir.join(format!("{}.pem", cert_filename));
+        let key_path = cache_dir.join(format!("{}.key", cert_filename));
 
         if !cert_path.exists() || !key_path.exists() {
             warn!("Generating self-signed certificate for {}", domain);
@@ -546,8 +559,14 @@ impl SslManager {
     }
 
     pub fn get_certificate_info(&self) -> Result<CertificateInfo, Box<dyn std::error::Error + Send + Sync>> {
-        let domain = self.config.server.domain.as_str();
-        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", domain));
+        let domain = &self.config.server.domain;
+        let cert_filename = if self.config.ssl.wildcard {
+            format!("wildcard-{}", domain.replace('.', "-"))
+        } else {
+            domain.replace('.', "-")
+        };
+
+        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", cert_filename));
 
         if !cert_path.exists() {
             return Ok(CertificateInfo {

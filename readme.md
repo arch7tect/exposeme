@@ -15,7 +15,7 @@ A fast, secure HTTP tunneling solution written in Rust that exposes local servic
 - **DNS providers**: DigitalOcean, Azure (with more coming soon)
 - **Auto-renewal** of certificates when < 30 days left
 - **Docker support** with pre-built images
-- **Token-based authentication** for secure access
+- **Token-based authentication** for secure tunnel access control
 - **Multiple concurrent tunnels** with configurable limits
 - **Auto-reconnection** for reliable connections
 - **Health check** and certificate status APIs
@@ -33,6 +33,28 @@ ExposeME creates secure HTTP tunnels to expose local services:
 - **Server**: Receives HTTP/HTTPS requests from the internet and forwards them to clients
 - **Client**: Connects to server via secure WebSocket (WSS/WS) and forwards requests to local services
 - **Tunnel Flow**: Internet → Server → WebSocket → Client → Local Service → Response back
+
+## Authentication & Security
+
+ExposeME uses **token-based authentication** to control who can create tunnels on your server:
+
+### Authentication Flow
+1. **Server Configuration**: Server is configured with one or more authentication tokens
+2. **Client Connection**: Client presents a token when connecting via WebSocket
+3. **Token Validation**: Server validates the token before allowing tunnel creation
+4. **Tunnel Authorization**: Only authenticated clients can expose services
+
+### Security Model
+- **Token Controls Access**: Anyone with a valid token can create tunnels
+- **Tunnel Isolation**: Each tunnel has a unique ID and can't interfere with others
+- **Transport Security**: WSS encrypts all tunnel communication (when SSL enabled)
+- **No Public Discovery**: Tunnel URLs are only known to those who create them
+
+```bash
+# Example: Generate a secure token
+openssl rand -base64 32
+# Result: a1b2c3d4e5f6789... (use this as your EXPOSEME_AUTH_TOKEN)
+```
 
 ## Routing Modes
 
@@ -443,12 +465,12 @@ curl http://your-domain.com/api/certificates/status
 Response:
 ```json
 {
-   "domain": "your-domain.com",
-   "exists": true,
-   "expiry_date": "2024-08-15T10:30:00Z",
-   "days_until_expiry": 45,
-   "needs_renewal": false,
-   "auto_renewal": true
+  "domain": "your-domain.com",
+  "exists": true,
+  "expiry_date": "2024-08-15T10:30:00Z",
+  "days_until_expiry": 45,
+  "needs_renewal": false,
+  "auto_renewal": true
 }
 ```
 

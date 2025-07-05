@@ -8,7 +8,7 @@ A fast, secure HTTP tunneling solution written in Rust that exposes local servic
 - **HTTPS support** with automatic Let's Encrypt certificates
 - **Wildcard certificates** for subdomain routing
 - **Multiple routing modes**: Path-based, subdomain-based, or both
-- **DNS providers**: DigitalOcean (with more coming soon)
+- **DNS providers**: DigitalOcean, Azure (with more coming soon)
 - **Multiple SSL providers**: Let's Encrypt, self-signed, or manual certificates
 - **Auto-renewal** of certificates when < 30 days left
 - **Docker support** with pre-built images
@@ -59,6 +59,13 @@ Supports both routing methods simultaneously
 ```bash
 # .env
 DIGITALOCEAN_TOKEN=your_digitalocean_api_token
+# OR for Azure
+AZURE_SUBSCRIPTION_ID=your_azure_subscription_id
+AZURE_RESOURCE_GROUP=your_resource_group
+AZURE_CLIENT_ID=your_client_id
+AZURE_CLIENT_SECRET=your_client_secret
+AZURE_TENANT_ID=your_tenant_id
+
 EXPOSEME_AUTH_TOKEN=your_secure_auth_token
 ```
 
@@ -67,62 +74,71 @@ EXPOSEME_AUTH_TOKEN=your_secure_auth_token
 ```yaml
 # docker-compose.yml
 services:
-  exposeme-server:
-    image: arch7tect/exposeme-server:latest
-    container_name: exposeme-server
-    restart: unless-stopped
+   exposeme-server:
+      image: arch7tect/exposeme-server:latest
+      container_name: exposeme-server
+      restart: unless-stopped
 
-    ports:
-      - "80:80"       # HTTP (ACME challenges + redirects)
-      - "443:443"     # HTTPS
-      - "8081:8081"   # WebSocket
+      ports:
+         - "80:80"       # HTTP (ACME challenges + redirects)
+         - "443:443"     # HTTPS
+         - "8081:8081"   # WebSocket
 
-    volumes:
-      - ./config/server.toml:/etc/exposeme/server.toml:ro
-      - ./exposeme-certs:/etc/exposeme/certs:rw
+      volumes:
+         - ./config/server.toml:/etc/exposeme/server.toml:ro
+         - ./exposeme-certs:/etc/exposeme/certs:rw
 
-    environment:
-      # Domain configuration
-      - EXPOSEME_DOMAIN=your-domain.com
-      - EXPOSEME_EMAIL=admin@your-domain.com
-      
-      # SSL configuration
-      - EXPOSEME_STAGING=false
-      - EXPOSEME_WILDCARD=true
-      - EXPOSEME_ROUTING_MODE=both
-      
-      # DNS Provider (for wildcard certificates)
-      - EXPOSEME_DNS_PROVIDER=digitalocean
-      - EXPOSEME_DNS_API_TOKEN=${DIGITALOCEAN_TOKEN}
-      
-      # Authentication
-      - EXPOSEME_AUTH_TOKEN=${EXPOSEME_AUTH_TOKEN}
-      
-      # Logging
-      - RUST_LOG=info
+      environment:
+         # Domain configuration
+         - EXPOSEME_DOMAIN=your-domain.com
+         - EXPOSEME_EMAIL=admin@your-domain.com
 
-    env_file:
-      - .env
+         # SSL configuration
+         - EXPOSEME_STAGING=false
+         - EXPOSEME_WILDCARD=true
+         - EXPOSEME_ROUTING_MODE=both
 
-    security_opt:
-      - no-new-privileges:true
+         # DNS Provider - Choose one:
+         # For DigitalOcean:
+         - EXPOSEME_DNS_PROVIDER=digitalocean
+         - EXPOSEME_DIGITALOCEAN_TOKEN=${DIGITALOCEAN_TOKEN}
 
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '1.0'
+         # For Azure:
+         # - EXPOSEME_DNS_PROVIDER=azure
+         # - EXPOSEME_AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID}
+         # - EXPOSEME_AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP}
+         # - EXPOSEME_AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
+         # - EXPOSEME_AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}
+         # - EXPOSEME_AZURE_TENANT_ID=${AZURE_TENANT_ID}
 
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
+         # Authentication
+         - EXPOSEME_AUTH_TOKEN=${EXPOSEME_AUTH_TOKEN}
+
+         # Logging
+         - RUST_LOG=info
+
+      env_file:
+         - .env
+
+      security_opt:
+         - no-new-privileges:true
+
+      deploy:
+         resources:
+            limits:
+               memory: 1G
+               cpus: '1.0'
+
+      healthcheck:
+         test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
+         interval: 30s
+         timeout: 10s
+         retries: 5
+         start_period: 120s
 
 networks:
-  default:
-    name: exposeme-network
+   default:
+      name: exposeme-network
 ```
 
 3. **Create server configuration:**
@@ -147,7 +163,21 @@ cert_cache_dir = "/etc/exposeme/certs"
 wildcard = true  # Required for subdomain routing
 
 [ssl.dns_provider]
-provider = "digitalocean"
+provider = "digitalocean"  # or "azure"
+
+# DigitalOcean specific config (can be overridden by env vars):
+[ssl.dns_provider.config]
+api_token = "your-do-token-will-be-set-via-env"
+timeout_seconds = 30
+
+# Azure specific config (uncomment if using Azure):
+# [ssl.dns_provider.config]
+# subscription_id = "your-subscription-id"
+# resource_group = "your-resource-group"
+# client_id = "your-client-id"
+# client_secret = "your-client-secret"
+# tenant_id = "your-tenant-id"
+# timeout_seconds = 30
 
 [auth]
 tokens = ["dev"]  # Will be overridden by environment
@@ -199,13 +229,31 @@ docker run -it --rm \
 3. **Set environment variables:**
    ```bash
    EXPOSEME_DNS_PROVIDER=digitalocean
-   EXPOSEME_DNS_API_TOKEN=your_do_token
+   EXPOSEME_DIGITALOCEAN_TOKEN=your_do_token
    ```
 
-### Future Providers
-- Cloudflare (planned)
-- Route53 (planned)
-- Namecheap (planned)
+### Azure DNS
+
+1. **Create a Service Principal** with DNS Zone Contributor role:
+   ```bash
+   # Create service principal
+   az ad sp create-for-rbac --name "exposeme-dns" \
+     --role "DNS Zone Contributor" \
+     --scopes "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/YOUR_RG"
+   ```
+
+2. **Add your domain** to Azure DNS (create DNS zone)
+3. **Set environment variables:**
+   ```bash
+   EXPOSEME_DNS_PROVIDER=azure
+   EXPOSEME_AZURE_SUBSCRIPTION_ID=your_subscription_id
+   EXPOSEME_AZURE_RESOURCE_GROUP=your_resource_group_with_dns_zone
+   EXPOSEME_AZURE_CLIENT_ID=your_service_principal_client_id
+   EXPOSEME_AZURE_CLIENT_SECRET=your_service_principal_secret
+   EXPOSEME_AZURE_TENANT_ID=your_azure_tenant_id
+   ```
+
+
 
 ## Configuration Reference
 
@@ -222,8 +270,25 @@ docker run -it --rm \
 | `[ssl]` | `wildcard` | Use wildcard certificates | `false` |
 | `[ssl]` | `provider` | `letsencrypt`, `manual`, `selfsigned` | `letsencrypt` |
 | `[ssl]` | `staging` | Use Let's Encrypt staging | `true` |
-| `[ssl.dns_provider]` | `provider` | DNS provider name | - |
+| `[ssl.dns_provider]` | `provider` | DNS provider name (`digitalocean`, `azure`) | - |
 | `[auth]` | `tokens` | Authentication tokens | `["dev"]` |
+| `[limits]` | `max_tunnels` | Maximum concurrent tunnels | `50` |
+
+#### DigitalOcean DNS Provider Config
+| Section | Option | Description | Default |
+|---------|--------|-------------|---------|
+| `[ssl.dns_provider.config]` | `api_token` | DigitalOcean API token (TOML fallback) | - |
+| `[ssl.dns_provider.config]` | `timeout_seconds` | DNS API timeout in seconds | `30` |
+
+#### Azure DNS Provider Config
+| Section | Option | Description | Default |
+|---------|--------|-------------|---------|
+| `[ssl.dns_provider.config]` | `subscription_id` | Azure subscription ID (TOML fallback) | - |
+| `[ssl.dns_provider.config]` | `resource_group` | Azure resource group (TOML fallback) | - |
+| `[ssl.dns_provider.config]` | `client_id` | Azure client ID (TOML fallback) | - |
+| `[ssl.dns_provider.config]` | `client_secret` | Azure client secret (TOML fallback) | - |
+| `[ssl.dns_provider.config]` | `tenant_id` | Azure tenant ID (TOML fallback) | - |
+| `[ssl.dns_provider.config]` | `timeout_seconds` | DNS API timeout in seconds | `30` |
 | `[limits]` | `max_tunnels` | Maximum concurrent tunnels | `50` |
 
 ### Environment Variables
@@ -235,9 +300,24 @@ docker run -it --rm \
 | `EXPOSEME_STAGING` | Use staging certificates | `false` |
 | `EXPOSEME_WILDCARD` | Enable wildcard certificates | `true` |
 | `EXPOSEME_ROUTING_MODE` | Routing mode | `both` |
-| `EXPOSEME_DNS_PROVIDER` | DNS provider | `digitalocean` |
-| `EXPOSEME_DNS_API_TOKEN` | DNS provider API token | `your_token` |
+| `EXPOSEME_DNS_PROVIDER` | DNS provider | `digitalocean` or `azure` |
 | `EXPOSEME_AUTH_TOKEN` | Authentication token | `secure_token` |
+
+#### DigitalOcean DNS Variables
+| Variable | Description |
+|----------|-------------|
+| `EXPOSEME_DIGITALOCEAN_TOKEN` | DigitalOcean API token |
+| `EXPOSEME_DIGITALOCEAN_TIMEOUT` | Request timeout in seconds |
+
+#### Azure DNS Variables
+| Variable | Description |
+|----------|-------------|
+| `EXPOSEME_AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
+| `EXPOSEME_AZURE_RESOURCE_GROUP` | Resource group containing DNS zone |
+| `EXPOSEME_AZURE_CLIENT_ID` | Service principal client ID |
+| `EXPOSEME_AZURE_CLIENT_SECRET` | Service principal secret |
+| `EXPOSEME_AZURE_TENANT_ID` | Azure tenant ID |
+| `EXPOSEME_AZURE_TIMEOUT` | Request timeout in seconds |
 
 ### Client Configuration
 
@@ -272,8 +352,6 @@ Response:
   "auto_renewal": true
 }
 ```
-
-
 
 ## Building from Source
 
@@ -341,23 +419,6 @@ docker-compose logs -f exposeme-server
 docker logs -f client-container-name
 ```
 
-### Common Issues
-
-**Certificate generation fails:**
-- Check DNS provider token has correct permissions
-- Verify domain is added to DNS provider
-- Check domain DNS settings point to your server
-
-**Client can't connect:**
-- Verify auth token matches server configuration
-- Check WebSocket port (8081) is accessible
-- Confirm server is running and healthy
-
-**Tunnel not accessible:**
-- Check routing mode configuration
-- Verify tunnel ID is valid (alphanumeric + hyphens only)
-- Test local service is responding
-
 ### Certificate Management
 
 **Check certificate status:**
@@ -371,15 +432,6 @@ curl http://your-domain.com/api/certificates/status
 /etc/exposeme/certs/your-domain-com.pem
 /etc/exposeme/certs/your-domain-com.key
 ```
-
-## Security Considerations
-
-- Use strong authentication tokens
-- Keep DNS provider tokens secure
-- Regularly rotate authentication tokens
-- Monitor certificate expiration
-- Use HTTPS in production
-- Restrict tunnel access by IP if needed
 
 ## License
 

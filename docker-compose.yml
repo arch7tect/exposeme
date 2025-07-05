@@ -29,7 +29,7 @@ services:
 
       # DNS Provider (DigitalOcean)
       - EXPOSEME_DNS_PROVIDER=digitalocean
-      - EXPOSEME_DNS_API_TOKEN=${DIGITALOCEAN_TOKEN}
+      - EXPOSEME_DIGITALOCEAN_TOKEN=${DIGITALOCEAN_TOKEN}
 
       # Auth token
       - EXPOSEME_AUTH_TOKEN=${EXPOSEME_AUTH_TOKEN:-dev}

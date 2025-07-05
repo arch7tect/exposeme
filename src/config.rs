@@ -1,5 +1,4 @@
-// src/config.rs - обновленная конфигурация
-
+// src/config.rs
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -55,7 +54,7 @@ pub struct SslSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsProviderConfig {
-    pub provider: String, // "digitalocean", "cloudflare", etc.
+    pub provider: String, // "digitalocean", "azure", etc.
     pub config: serde_json::Value, // провайдер-специфичная конфигурация
 }
 
@@ -292,6 +291,7 @@ impl ServerConfig {
             };
         }
 
+        // Environment variable overrides
         if let Ok(domain) = std::env::var("EXPOSEME_DOMAIN") {
             config.server.domain = domain;
             tracing::info!("Domain set from EXPOSEME_DOMAIN environment variable");
@@ -334,7 +334,7 @@ impl ServerConfig {
             tracing::info!("Wildcard certificates enabled from EXPOSEME_WILDCARD");
         }
 
-        // NEW: Routing mode environment variable
+        // Routing mode environment variable
         if let Ok(routing_mode) = std::env::var("EXPOSEME_ROUTING_MODE") {
             config.server.routing_mode = match routing_mode.as_str() {
                 "path" => RoutingMode::Path,
@@ -348,38 +348,15 @@ impl ServerConfig {
             tracing::info!("Routing mode set to {:?} from EXPOSEME_ROUTING_MODE", config.server.routing_mode);
         }
 
-        // NEW: DNS Provider configuration from environment
+        // DNS Provider configuration - only set provider name from environment
         if let Ok(dns_provider) = std::env::var("EXPOSEME_DNS_PROVIDER") {
-            if let Ok(api_token) = std::env::var("EXPOSEME_DNS_API_TOKEN") {
-                use serde_json::json;
-
-                let dns_config = match dns_provider.as_str() {
-                    "digitalocean" => {
-                        json!({
-                            "api_token": api_token,
-                            "timeout_seconds": 30
-                        })
-                    }
-                    "cloudflare" => {
-                        json!({
-                            "api_token": api_token,
-                            "timeout_seconds": 30
-                        })
-                    }
-                    _ => {
-                        tracing::warn!("Unsupported DNS provider: {}", dns_provider);
-                        return Err(format!("Unsupported DNS provider: {}", dns_provider).into());
-                    }
-                };
-
+            if config.ssl.dns_provider.is_none() {
                 config.ssl.dns_provider = Some(DnsProviderConfig {
                     provider: dns_provider.clone(),
-                    config: dns_config,
+                    config: serde_json::Value::Null, // Empty config - providers will use env vars
                 });
-
-                tracing::info!("DNS provider set to {} from environment variables", dns_provider);
-            } else {
-                tracing::warn!("EXPOSEME_DNS_PROVIDER set but EXPOSEME_DNS_API_TOKEN missing");
+                tracing::info!("DNS provider set to '{}' from EXPOSEME_DNS_PROVIDER", dns_provider);
+                tracing::info!("DNS provider will be configured from its specific environment variables");
             }
         }
 

@@ -1,4 +1,4 @@
-// src/dns/providers/digitalocean.rs - Only provider-specific methods
+// src/dns/providers/digitalocean.rs
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -134,6 +134,7 @@ impl DigitalOceanProvider {
         info!("Calculated record name: {} for domain: {}", record_name, domain);
         Ok(record_name)
     }
+
     async fn cleanup_existing_txt_records(&mut self, base_domain: &str, record_name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("🧹 Cleaning up existing TXT records: {}.{}", record_name, base_domain);
 
@@ -206,13 +207,12 @@ impl DnsProviderFactory for DigitalOceanProvider {
         toml_config: Option<&serde_json::Value>
     ) -> Result<Box<dyn DnsProvider>, Box<dyn std::error::Error + Send + Sync>> {
 
+        // Only use provider-specific environment variable for uniformity
         let api_token = Self::get_string_with_env(
             toml_config,
             "api_token",
             "EXPOSEME_DIGITALOCEAN_TOKEN"
-        ).or_else(|| {
-            Self::get_string_with_env(toml_config, "api_token", "EXPOSEME_DNS_API_TOKEN")
-        }).ok_or("DigitalOcean API token not found. Set EXPOSEME_DIGITALOCEAN_TOKEN environment variable or configure [ssl.dns_provider.config] api_token in TOML")?;
+        ).ok_or("DigitalOcean API token not found. Set EXPOSEME_DIGITALOCEAN_TOKEN environment variable or configure [ssl.dns_provider.config] api_token in TOML")?;
 
         let timeout_seconds = Self::get_u64_with_env(
             toml_config,
@@ -225,8 +225,7 @@ impl DnsProviderFactory for DigitalOceanProvider {
             timeout_seconds,
         };
 
-        let config_source = if std::env::var("EXPOSEME_DIGITALOCEAN_TOKEN").is_ok()
-            || std::env::var("EXPOSEME_DNS_API_TOKEN").is_ok() {
+        let config_source = if std::env::var("EXPOSEME_DIGITALOCEAN_TOKEN").is_ok() {
             "environment variables"
         } else {
             "TOML configuration"

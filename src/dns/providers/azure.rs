@@ -1,4 +1,4 @@
-// src/dns/providers/azure.rs - Only provider-specific methods
+// src/dns/providers/azure.rs
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -39,6 +39,34 @@ struct DnsRecordProperties {
 
 #[derive(Debug, Serialize)]
 struct TxtRecord {
+    value: Vec<String>,
+}
+
+// Response structures for listing records
+#[derive(Debug, Deserialize)]
+struct RecordSetsResponse {
+    value: Vec<RecordSetInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecordSetInfo {
+    name: String,
+    #[serde(rename = "type")]
+    record_type: String,
+    #[allow(dead_code)]
+    properties: Option<RecordSetProperties>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecordSetProperties {
+    #[serde(rename = "TXTRecords")]
+    #[allow(dead_code)]
+    txt_records: Option<Vec<TxtRecordInfo>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TxtRecordInfo {
+    #[allow(dead_code)]
     value: Vec<String>,
 }
 
@@ -172,6 +200,79 @@ impl AzureProvider {
             }
         }
     }
+
+    /// Clean up existing TXT records before creating new challenge record
+    async fn cleanup_existing_txt_records(&mut self, zone: &str, record_name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("🧹 Cleaning up existing TXT records: {}.{}", record_name, zone);
+
+        let token = self.get_access_token().await?;
+
+        // List all TXT recordsets in the zone
+        let list_url = format!(
+            "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/recordsets?api-version=2018-05-01&$filter=recordType eq 'TXT'",
+            self.config.subscription_id,
+            self.config.resource_group,
+            zone
+        );
+
+        let response = self.client
+            .get(&list_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            warn!("⚠️  Failed to list DNS records for cleanup");
+            return Ok(()); // Don't fail the whole process for cleanup issues
+        }
+
+        let recordsets_response: RecordSetsResponse = response.json().await?;
+
+        // Find existing TXT records with matching name
+        let matching_records: Vec<&RecordSetInfo> = recordsets_response.value
+            .iter()
+            .filter(|record| {
+                record.record_type == "Microsoft.Network/dnszones/TXT" && record.name == record_name
+            })
+            .collect();
+
+        if matching_records.is_empty() {
+            info!("✅ No existing TXT records to clean up");
+            return Ok(());
+        }
+
+        info!("🗑️  Found {} existing TXT record(s) to clean up", matching_records.len());
+
+        // Delete each matching record
+        for record in matching_records {
+            info!("🗑️  Deleting old TXT record: {}", record.name);
+
+            let delete_url = format!(
+                "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/TXT/{}?api-version=2018-05-01",
+                self.config.subscription_id,
+                self.config.resource_group,
+                zone,
+                record.name
+            );
+
+            match self.client
+                .delete(&delete_url)
+                .header("Authorization", format!("Bearer {}", token))
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    info!("✅ Deleted old TXT record: {}", record.name);
+                }
+                Ok(_) | Err(_) => {
+                    warn!("⚠️  Failed to delete old TXT record {}, continuing...", record.name);
+                }
+            }
+        }
+
+        info!("🧹 Cleanup completed");
+        Ok(())
+    }
 }
 
 impl ConfigHelper for AzureProvider {}
@@ -231,6 +332,11 @@ impl DnsProvider for AzureProvider {
         let token = self.get_access_token().await?;
         let zone = self.get_dns_zone(domain).await?;
         let record_name = self.calculate_record_name(domain, &zone, name);
+
+        // Clean up existing TXT records before creating new one
+        if let Err(e) = self.cleanup_existing_txt_records(&zone, &record_name).await {
+            warn!("⚠️  Cleanup failed (continuing anyway): {}", e);
+        }
 
         info!("Creating TXT record: {}.{} = {}", record_name, zone, value);
 

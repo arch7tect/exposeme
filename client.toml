@@ -5,7 +5,7 @@
 server_url = "wss://exposeme.arch7tect.org:8081"
 
 # Authentication token (must match server config)
-auth_token = "dev"
+auth_token = "AvoiQ6lrQ5avjoDc"
 
 # Tunnel identifier (choose unique name)
 tunnel_id = "my-tunnel"

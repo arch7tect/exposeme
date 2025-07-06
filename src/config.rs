@@ -128,20 +128,39 @@ pub struct ClientSettings {
     pub tunnel_id: String,
     pub local_target: String,
     pub auto_reconnect: bool,
+    #[serde(default)]
     pub reconnect_delay_secs: u64,
+    #[serde(default)]
+    pub websocket_cleanup_interval_secs: u64,
+    #[serde(default)]
+    pub websocket_connection_timeout_secs: u64,
+    #[serde(default)]
+    pub websocket_max_idle_secs: u64,
+    #[serde(default)]
+    pub websocket_monitoring_interval_secs: u64,
+}
+
+impl Default for ClientSettings {
+    fn default() -> Self {
+        Self {
+            server_url: "ws://localhost:8081".to_string(),
+            auth_token: "dev".to_string(),
+            tunnel_id: "test".to_string(),
+            local_target: "http://localhost:3300".to_string(),
+            auto_reconnect: true,
+            reconnect_delay_secs: 5,
+            websocket_cleanup_interval_secs: 60,
+            websocket_connection_timeout_secs: 10,
+            websocket_max_idle_secs: 600,
+            websocket_monitoring_interval_secs: 30,
+        }
+    }
 }
 
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            client: ClientSettings {
-                server_url: "ws://localhost:8081".to_string(),
-                auth_token: "dev".to_string(),
-                tunnel_id: "test".to_string(),
-                local_target: "http://localhost:3300".to_string(),
-                auto_reconnect: true,
-                reconnect_delay_secs: 5,
-            },
+            client: ClientSettings::default(),
         }
     }
 }
@@ -203,6 +222,14 @@ pub struct ClientArgs {
     pub generate_config: bool,
     #[arg(short, long)]
     pub verbose: bool,
+    #[arg(long, help = "WebSocket cleanup check interval in seconds")]
+    pub websocket_cleanup_interval: Option<u64>,
+    #[arg(long, help = "WebSocket connection timeout in seconds")]
+    pub websocket_connection_timeout: Option<u64>,
+    #[arg(long, help = "WebSocket maximum connection idle in seconds")]
+    pub websocket_max_idle: Option<u64>,
+    #[arg(long, help = "WebSocket monitoring interval in seconds")]
+    pub websocket_monitoring_interval: Option<u64>,
 }
 
 impl ServerConfig {
@@ -294,7 +321,7 @@ impl ServerConfig {
         if let Some(timeout) = args.request_timeout {
             config.limits.request_timeout_secs = timeout;
         }
-        
+
         // Environment variable overrides
         if let Ok(domain) = std::env::var("EXPOSEME_DOMAIN") {
             config.server.domain = domain;
@@ -379,7 +406,7 @@ impl ServerConfig {
                 tracing::warn!("Invalid EXPOSEME_REQUEST_TIMEOUT value: {}", timeout);
             }
         }
-        
+
         // Automatic configuration for subdomain routing
         if matches!(config.server.routing_mode, RoutingMode::Subdomain | RoutingMode::Both) {
             if config.ssl.enabled && !config.ssl.wildcard {
@@ -494,6 +521,18 @@ impl ClientConfig {
         }
         if let Some(target) = &args.local_target {
             config.client.local_target = target.clone();
+        }
+        if let Some(interval) = args.websocket_cleanup_interval {
+            config.client.websocket_cleanup_interval_secs = interval;
+        }
+        if let Some(timeout) = args.websocket_connection_timeout {
+            config.client.websocket_connection_timeout_secs = timeout;
+        }
+        if let Some(max_idle) = args.websocket_max_idle {
+            config.client.websocket_max_idle_secs = max_idle;
+        }
+        if let Some(monitoring) = args.websocket_monitoring_interval {
+            config.client.websocket_monitoring_interval_secs = monitoring;
         }
 
         Ok(config)

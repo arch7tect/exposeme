@@ -1,41 +1,76 @@
 // src/bin/server.rs
 use base64::Engine;
 use clap::Parser;
-use exposeme::{ChallengeStore, Message, RoutingMode, ServerArgs, ServerConfig, SslManager, SslProvider};
+use exposeme::{
+    ChallengeStore, Message, RoutingMode, ServerArgs, ServerConfig, SslManager, SslProvider,
+};
 use futures_util::{SinkExt, StreamExt};
+use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use hyper::{body::Incoming, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
-use hyper::{body::Incoming, Request, Response, StatusCode};
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use rustls::ServerConfig as RustlsConfig;
+use serde_json::json;
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::{RwLock, mpsc};
-use tokio_rustls::TlsAcceptor;
-use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
-use tracing::{error, info, warn};
-use serde_json::json;
-use tower::Service;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::{mpsc, RwLock};
+use tokio_rustls::TlsAcceptor;
+use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
+use tower::Service;
+use tracing::{error, info, warn};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type ResponseBody = BoxBody<bytes::Bytes, BoxError>;
 
 type TunnelMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>>;
 type PendingRequests =
-Arc<RwLock<HashMap<String, mpsc::UnboundedSender<(u16, HashMap<String, String>, String)>>>>;
+    Arc<RwLock<HashMap<String, mpsc::UnboundedSender<(u16, HashMap<String, String>, String)>>>>;
 
-fn boxed_body(text: impl Into<bytes::Bytes>) -> BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>> {
+#[derive(Debug)]
+struct WebSocketConnection {
+    connection_id: String,
+    tunnel_id: String,
+    created_at: std::time::Instant,
+}
+
+type ActiveWebSockets = Arc<RwLock<HashMap<String, WebSocketConnection>>>;
+
+#[derive(Debug, Clone)]
+enum ConnectionState {
+    Http,
+    WebSocketUpgrading,
+    WebSocketActive,
+}
+
+fn is_websocket_upgrade(req: &Request<Incoming>) -> bool {
+    let connection_header = req
+        .headers()
+        .get("connection")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+
+    let upgrade_header = req
+        .headers()
+        .get("upgrade")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+
+    connection_header.to_lowercase().contains("upgrade")
+        && upgrade_header.to_lowercase() == "websocket"
+}
+
+fn boxed_body(
+    text: impl Into<bytes::Bytes>,
+) -> BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>> {
     Full::new(text.into())
-        .map_err(|e: Infallible| -> Box<dyn std::error::Error + Send + Sync> {
-            Box::new(e)
-        })
+        .map_err(|e: Infallible| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
         .boxed()
 }
 
@@ -45,7 +80,7 @@ async fn main() -> Result<(), BoxError> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install ring CryptoProvider");
-    
+
     // Parse CLI arguments
     let args = ServerArgs::parse();
 
@@ -85,10 +120,12 @@ async fn main() -> Result<(), BoxError> {
     // Shared state
     let tunnels: TunnelMap = Arc::new(RwLock::new(HashMap::new()));
     let pending_requests: PendingRequests = Arc::new(RwLock::new(HashMap::new()));
+    let active_websockets: ActiveWebSockets = Arc::new(RwLock::new(HashMap::new()));
 
     // Clone for servers
     let tunnels_http = tunnels.clone();
     let pending_requests_http = pending_requests.clone();
+    let active_websockets_http = active_websockets.clone();
     let config_http = config.clone();
     let challenge_store_http = challenge_store.clone();
     let ssl_manager_http = ssl_manager.clone();
@@ -99,9 +136,12 @@ async fn main() -> Result<(), BoxError> {
             config_http,
             tunnels_http,
             pending_requests_http,
+            active_websockets_http,
             challenge_store_http,
             ssl_manager_http,
-        ).await {
+        )
+        .await
+        {
             error!("❌ HTTP server error: {}", e);
         }
     });
@@ -115,6 +155,7 @@ async fn main() -> Result<(), BoxError> {
     let https_handle = if config.ssl.enabled {
         let tunnels_https = tunnels.clone();
         let pending_requests_https = pending_requests.clone();
+        let active_websockets_https = active_websockets.clone();
         let config_https = config.clone();
         let ssl_config_for_https = ssl_manager.read().await.get_rustls_config().unwrap();
 
@@ -123,9 +164,10 @@ async fn main() -> Result<(), BoxError> {
                 config_https,
                 tunnels_https,
                 pending_requests_https,
+                active_websockets_https,
                 ssl_config_for_https,
             )
-                .await;
+            .await;
         }))
     } else {
         None
@@ -157,22 +199,28 @@ async fn main() -> Result<(), BoxError> {
             let mut interval = tokio::time::interval(Duration::from_secs(24 * 60 * 60));
             loop {
                 interval.tick().await;
-                info!("🔍 Daily certificate renewal check for {}", config.server.domain);
+                info!(
+                    "🔍 Daily certificate renewal check for {}",
+                    config.server.domain
+                );
                 let mut manager = ssl_manager.write().await;
                 match manager.get_certificate_info() {
                     Ok(info) => {
                         if let Some(days_until_expiry) = info.days_until_expiry {
-                            info!("📅 Certificate for {} expires in {} days", config.server.domain, days_until_expiry);
+                            info!(
+                                "📅 Certificate for {} expires in {} days",
+                                config.server.domain, days_until_expiry
+                            );
                             if info.needs_renewal {
                                 if let Err(e) = manager.force_renewal().await {
                                     error!("Failed to renew certificate: {}", e);
                                 }
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         error!("Failed to get certificate info: {}", e);
-                    },
+                    }
                 }
             }
         }))
@@ -182,25 +230,23 @@ async fn main() -> Result<(), BoxError> {
 
     // Wait for all servers
     match https_handle {
-        Some(https_handle) => {
-            match renew_handle {
-                Some(renew_handle) => {
-                    tokio::select! {
-                        _ = http_handle => info!("HTTP server terminated"),
-                        _ = https_handle => info!("HTTPS server terminated"),
-                        _ = ws_handle => info!("WebSocket server terminated"),
-                        _ = renew_handle => info!("Renewal task terminated"),
-                    }
-                },
-                None => {
-                    tokio::select! {
-                        _ = http_handle => info!("HTTP server terminated"),
-                        _ = https_handle => info!("HTTPS server terminated"),
-                        _ = ws_handle => info!("WebSocket server terminated"),
-                    }
-                },
+        Some(https_handle) => match renew_handle {
+            Some(renew_handle) => {
+                tokio::select! {
+                    _ = http_handle => info!("HTTP server terminated"),
+                    _ = https_handle => info!("HTTPS server terminated"),
+                    _ = ws_handle => info!("WebSocket server terminated"),
+                    _ = renew_handle => info!("Renewal task terminated"),
+                }
             }
-        }
+            None => {
+                tokio::select! {
+                    _ = http_handle => info!("HTTP server terminated"),
+                    _ = https_handle => info!("HTTPS server terminated"),
+                    _ = ws_handle => info!("WebSocket server terminated"),
+                }
+            }
+        },
         None => {
             tokio::select! {
                 _ = http_handle => info!("HTTP server terminated"),
@@ -218,6 +264,7 @@ async fn main() -> Result<(), BoxError> {
 struct HttpService {
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
+    active_websockets: ActiveWebSockets,
     config: ServerConfig,
     challenge_store: ChallengeStore,
     ssl_manager: Arc<RwLock<SslManager>>,
@@ -235,12 +282,22 @@ impl Service<Request<Incoming>> for HttpService {
     fn call(&mut self, req: Request<Incoming>) -> Self::Future {
         let tunnels = self.tunnels.clone();
         let pending_requests = self.pending_requests.clone();
+        let active_websockets = self.active_websockets.clone();
         let config = self.config.clone();
         let challenge_store = self.challenge_store.clone();
         let ssl_manager = self.ssl_manager.clone();
 
         Box::pin(async move {
-            handle_http_request(req, tunnels, pending_requests, config, challenge_store, ssl_manager).await
+            handle_http_request(
+                req,
+                tunnels,
+                pending_requests,
+                active_websockets,
+                config,
+                challenge_store,
+                ssl_manager,
+            )
+            .await
         })
     }
 }
@@ -249,6 +306,7 @@ async fn start_http_server(
     config: ServerConfig,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
+    active_websockets: ActiveWebSockets,
     challenge_store: ChallengeStore,
     ssl_manager: Arc<RwLock<SslManager>>,
 ) -> Result<(), BoxError> {
@@ -264,6 +322,7 @@ async fn start_http_server(
         let service = HttpService {
             tunnels: tunnels.clone(),
             pending_requests: pending_requests.clone(),
+            active_websockets: active_websockets.clone(),
             config: config.clone(),
             challenge_store: challenge_store.clone(),
             ssl_manager: ssl_manager.clone(),
@@ -284,6 +343,7 @@ async fn handle_http_request(
     req: Request<Incoming>,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
+    active_websockets: ActiveWebSockets,
     config: ServerConfig,
     challenge_store: ChallengeStore,
     ssl_manager: Arc<RwLock<SslManager>>,
@@ -323,9 +383,116 @@ async fn handle_http_request(
             .body(boxed_body("Redirecting to HTTPS"))
             .unwrap())
     } else {
+        // Check if this is a WebSocket upgrade request
+        if is_websocket_upgrade(&req) {
+            info!("🔌 WebSocket upgrade request detected");
+            return handle_websocket_upgrade_request(req, tunnels, active_websockets, config).await;
+        }
+
         // Handle normal HTTP requests (when HTTPS is disabled)
         handle_tunnel_request(req, tunnels, pending_requests, config).await
     }
+}
+
+async fn handle_websocket_upgrade_request(
+    req: Request<Incoming>,
+    tunnels: TunnelMap,
+    active_websockets: ActiveWebSockets,
+    config: ServerConfig,
+) -> Result<Response<ResponseBody>, BoxError> {
+    let method = req.method().clone();
+
+    // Extract tunnel ID and forwarded path based on routing mode
+    let (tunnel_id, forwarded_path) = match extract_tunnel_id_from_request(&req, &config) {
+        Ok(result) => result,
+        Err(e) => {
+            warn!("Failed to extract tunnel ID for WebSocket: {}", e);
+            return Ok(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(boxed_body(format!("Invalid WebSocket request: {}", e)))
+                .unwrap());
+        }
+    };
+
+    info!(
+        "🔌 WebSocket upgrade for tunnel '{}': {} {}",
+        tunnel_id, method, forwarded_path
+    );
+
+    // Check if tunnel exists
+    let tunnel_sender = tunnels.read().await.get(&tunnel_id).cloned();
+
+    let tunnel_sender = match tunnel_sender {
+        Some(sender) => sender,
+        None => {
+            warn!("Tunnel '{}' not found for WebSocket upgrade", tunnel_id);
+            return Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .body(boxed_body("Tunnel not available"))
+                .unwrap());
+        }
+    };
+
+    // Generate connection ID
+    let connection_id = uuid::Uuid::new_v4().to_string();
+
+    // Extract headers
+    let mut headers = HashMap::new();
+    for (name, value) in req.headers() {
+        headers.insert(name.to_string(), value.to_str().unwrap_or("").to_string());
+    }
+
+    // Create WebSocket upgrade message
+    let upgrade_message = Message::WebSocketUpgrade {
+        connection_id: connection_id.clone(),
+        method: method.to_string(),
+        path: forwarded_path,
+        headers,
+    };
+
+    // Register WebSocket connection
+    {
+        let mut websockets = active_websockets.write().await;
+        websockets.insert(
+            connection_id.clone(),
+            WebSocketConnection {
+                connection_id: connection_id.clone(),
+                tunnel_id: tunnel_id.clone(),
+                created_at: std::time::Instant::now(),
+            },
+        );
+    }
+
+    // Send upgrade request to client
+    if let Err(e) = tunnel_sender.send(upgrade_message) {
+        error!(
+            "Failed to send WebSocket upgrade to tunnel '{}': {}",
+            tunnel_id, e
+        );
+
+        // Clean up connection on error
+        {
+            let mut websockets = active_websockets.write().await;
+            websockets.remove(&connection_id);
+        }
+
+        return Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(boxed_body("Tunnel communication error"))
+            .unwrap());
+    }
+
+    info!(
+        "✅ WebSocket upgrade request sent to tunnel '{}'",
+        tunnel_id
+    );
+
+    // TODO: We need to implement the actual WebSocket upgrade response handling
+    // For now, return a placeholder response indicating that upgrade is being processed
+    Ok(Response::builder()
+        .status(StatusCode::ACCEPTED)
+        .body(boxed_body("WebSocket upgrade in progress"))
+        .unwrap())
 }
 
 async fn handle_acme_challenge(
@@ -400,7 +567,7 @@ async fn handle_tunnel_request(
         tunnel_id,
         match config.server.routing_mode {
             RoutingMode::Path => "path",
-            RoutingMode::Subdomain => "subdomain", 
+            RoutingMode::Subdomain => "subdomain",
             RoutingMode::Both => "both",
         },
         method,
@@ -472,7 +639,7 @@ async fn handle_tunnel_request(
         Duration::from_secs(config.limits.request_timeout_secs),
         response_rx.recv(),
     )
-        .await;
+    .await;
 
     // Clean up pending request
     {
@@ -496,7 +663,9 @@ async fn handle_tunnel_request(
                     error!("Failed to decode base64 body from client: {}", e);
                     return Ok(Response::builder()
                         .status(StatusCode::BAD_GATEWAY)
-                        .body(boxed_body("Tunnel communication error: invalid data format"))
+                        .body(boxed_body(
+                            "Tunnel communication error: invalid data format",
+                        ))
                         .unwrap());
                 }
             };
@@ -520,9 +689,7 @@ async fn handle_tunnel_request(
     }
 }
 
-async fn wait_for_http_server_ready(
-    config: &ServerConfig,
-) -> Result<(), BoxError> {
+async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxError> {
     let test_url = format!(
         "http://127.0.0.1:{}/.well-known/acme-challenge/readiness-test",
         config.server.http_port
@@ -560,6 +727,7 @@ async fn start_https_server(
     config: ServerConfig,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
+    active_websockets: ActiveWebSockets,
     tls_config: Arc<RustlsConfig>,
 ) {
     let tls_acceptor = TlsAcceptor::from(tls_config);
@@ -576,6 +744,7 @@ async fn start_https_server(
                 let tls_acceptor = tls_acceptor.clone();
                 let tunnels = tunnels.clone();
                 let pending_requests = pending_requests.clone();
+                let active_websockets = active_websockets.clone();
                 let config = config.clone();
 
                 tokio::spawn(async move {
@@ -585,6 +754,7 @@ async fn start_https_server(
                             let service = HttpsService {
                                 tunnels,
                                 pending_requests,
+                                active_websockets,
                                 config,
                             };
 
@@ -613,6 +783,7 @@ async fn start_https_server(
 struct HttpsService {
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
+    active_websockets: ActiveWebSockets,
     config: ServerConfig,
 }
 
@@ -628,9 +799,16 @@ impl Service<Request<Incoming>> for HttpsService {
     fn call(&mut self, req: Request<Incoming>) -> Self::Future {
         let tunnels = self.tunnels.clone();
         let pending_requests = self.pending_requests.clone();
+        let active_websockets = self.active_websockets.clone();
         let config = self.config.clone();
 
         Box::pin(async move {
+            // Check for WebSocket upgrade first
+            if is_websocket_upgrade(&req) {
+                info!("🔒 Secure WebSocket (WSS) upgrade request detected");
+                return handle_websocket_upgrade_request(req, tunnels, active_websockets, config).await;
+            }
+
             handle_tunnel_request(req, tunnels, pending_requests, config).await
         })
     }
@@ -683,7 +861,10 @@ where
                                     message: format!("Invalid tunnel ID: {}", e),
                                 };
                                 if let Err(err) = tx.send(error_msg) {
-                                    error!("Failed to send tunnel ID validation error to client: {}", err);
+                                    error!(
+                                        "Failed to send tunnel ID validation error to client: {}",
+                                        err
+                                    );
                                     break;
                                 }
                                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -919,7 +1100,8 @@ async fn handle_certificate_api(
                         .unwrap())
                 }
                 Err(e) => {
-                    let response = json!({"error": format!("Failed to get certificate info: {}", e)});
+                    let response =
+                        json!({"error": format!("Failed to get certificate info: {}", e)});
                     Ok(Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .header("Content-Type", "application/json")
@@ -1019,7 +1201,9 @@ fn extract_tunnel_id_from_request(
             }
 
             // Extract tunnel_id from subdomain
-            let tunnel_id = if let Some(subdomain) = host_without_port.strip_suffix(&format!(".{}", base_domain)) {
+            let tunnel_id = if let Some(subdomain) =
+                host_without_port.strip_suffix(&format!(".{}", base_domain))
+            {
                 subdomain.to_string()
             } else {
                 return Err("Invalid subdomain format".into());
@@ -1041,7 +1225,9 @@ fn extract_tunnel_id_from_request(
 
             // Check if it's a subdomain request
             if host_without_port != base_domain {
-                if let Some(subdomain) = host_without_port.strip_suffix(&format!(".{}", base_domain)) {
+                if let Some(subdomain) =
+                    host_without_port.strip_suffix(&format!(".{}", base_domain))
+                {
                     let tunnel_id = subdomain.to_string();
                     let forwarded_path = format!(
                         "{}{}",

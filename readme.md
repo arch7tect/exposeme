@@ -5,6 +5,7 @@ A fast, secure HTTP tunneling solution written in Rust that exposes local servic
 ## Features
 
 - **Secure HTTP tunneling** via WebSocket connections
+- **WebSocket proxying** for real-time applications
 - **HTTPS support** with multiple certificate options:
     - **Automatic Let's Encrypt certificates** (HTTP-01 or DNS-01 challenges)
     - **Manual certificates** (bring your own)
@@ -19,12 +20,6 @@ A fast, secure HTTP tunneling solution written in Rust that exposes local servic
 - **Multiple concurrent tunnels** with configurable limits
 - **Auto-reconnection** for reliable connections
 - **Health check** and certificate status APIs
-
-## ⚠️ Current Limitations
-
-- **WebSocket proxying is NOT supported** - Only HTTP/HTTPS requests are proxied
-- For applications requiring WebSocket connections (like Socket.IO), force HTTP polling transport
-- Real-time bidirectional connections are not supported
 
 ## Architecture
 
@@ -304,8 +299,6 @@ If you're using manual certificates or self-signed certificates, DNS providers a
    EXPOSEME_AZURE_TENANT_ID=your_azure_tenant_id
    ```
 
-
-
 ## Configuration Reference
 
 ### Configuration Priority (highest to lowest)
@@ -377,6 +370,12 @@ OPTIONS:
         --generate-config         Generate default configuration file
     -v, --verbose                 Enable verbose logging
     -h, --help                    Print help information
+        
+    # WebSocket Configuration
+        --websocket-cleanup-interval <SECS>    Cleanup check interval
+        --websocket-connection-timeout <SECS>  Connection timeout
+        --websocket-max-idle <SECS>            Maximum idle time
+        --websocket-monitoring-interval <SECS> Monitoring interval
 ```
 
 ### Server Configuration
@@ -397,22 +396,19 @@ OPTIONS:
 | `[limits]` | `max_tunnels` | Maximum concurrent tunnels | `50` |
 | `[limits]` | `request_timeout_secs` | HTTP request timeout in seconds | `30` |
 
-#### DigitalOcean DNS Provider Config
-| Section | Option | Description | Default |
-|---------|--------|-------------|---------|
-| `[ssl.dns_provider.config]` | `api_token` | DigitalOcean API token (TOML fallback) | - |
-| `[ssl.dns_provider.config]` | `timeout_seconds` | DNS API timeout in seconds | `30` |
+### Client Configuration
 
-#### Azure DNS Provider Config
 | Section | Option | Description | Default |
 |---------|--------|-------------|---------|
-| `[ssl.dns_provider.config]` | `subscription_id` | Azure subscription ID (TOML fallback) | - |
-| `[ssl.dns_provider.config]` | `resource_group` | Azure resource group (TOML fallback) | - |
-| `[ssl.dns_provider.config]` | `client_id` | Azure client ID (TOML fallback) | - |
-| `[ssl.dns_provider.config]` | `client_secret` | Azure client secret (TOML fallback) | - |
-| `[ssl.dns_provider.config]` | `tenant_id` | Azure tenant ID (TOML fallback) | - |
-| `[ssl.dns_provider.config]` | `timeout_seconds` | DNS API timeout in seconds | `30` |
-| `[limits]` | `max_tunnels` | Maximum concurrent tunnels | `50` |
+| `[client]` | `server_url` | WebSocket server URL | `ws://localhost:8081` |
+| `[client]` | `auth_token` | Authentication token | `dev` |
+| `[client]` | `tunnel_id` | Unique tunnel identifier | `test` |
+| `[client]` | `local_target` | Local service URL | `http://localhost:3300` |
+| `[client]` | `auto_reconnect` | Auto-reconnect on disconnect | `true` |
+| `[client]` | `websocket_cleanup_interval_secs` | Cleanup check interval | `60` |
+| `[client]` | `websocket_connection_timeout_secs` | Connection timeout | `10` |
+| `[client]` | `websocket_max_idle_secs` | Maximum idle time | `600` |
+| `[client]` | `websocket_monitoring_interval_secs` | Monitoring interval | `30` |
 
 ### Environment Variables
 
@@ -427,31 +423,6 @@ OPTIONS:
 | `EXPOSEME_AUTH_TOKEN` | Authentication token | `secure_token` |
 | `EXPOSEME_REQUEST_TIMEOUT` | HTTP request timeout in seconds | `30` |
 
-#### DigitalOcean DNS Variables (for wildcard certificates only)
-| Variable | Description |
-|----------|-------------|
-| `EXPOSEME_DIGITALOCEAN_TOKEN` | DigitalOcean API token |
-| `EXPOSEME_DIGITALOCEAN_TIMEOUT` | Request timeout in seconds |
-
-#### Azure DNS Variables (for wildcard certificates only)
-| Variable | Description |
-|----------|-------------|
-| `EXPOSEME_AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
-| `EXPOSEME_AZURE_RESOURCE_GROUP` | Resource group containing DNS zone |
-| `EXPOSEME_AZURE_CLIENT_ID` | Service principal client ID |
-| `EXPOSEME_AZURE_CLIENT_SECRET` | Service principal secret |
-| `EXPOSEME_AZURE_TENANT_ID` | Azure tenant ID |
-| `EXPOSEME_AZURE_TIMEOUT` | Request timeout in seconds |
-
-### Client Configuration
-
-| Section | Option | Description | Default |
-|---------|--------|-------------|---------|
-| `[client]` | `server_url` | WebSocket server URL | `ws://localhost:8081` |
-| `[client]` | `auth_token` | Authentication token | `dev` |
-| `[client]` | `tunnel_id` | Unique tunnel identifier | `test` |
-| `[client]` | `local_target` | Local service URL | `http://localhost:3300` |
-| `[client]` | `auto_reconnect` | Auto-reconnect on disconnect | `true` |
 
 ## API Endpoints
 
@@ -512,23 +483,12 @@ docker build -t exposeme-server --target server .
 docker build -t exposeme-client --target client .
 ```
 
-## WebSocket Limitations & Socket.IO
-
-ExposeME **does not support WebSocket proxying**. For Socket.IO applications, force HTTP polling:
-
-```javascript
-// Frontend configuration
-const socket = io('https://your-tunnel-url', {
-    transports: ['polling'],  // Force HTTP polling
-    upgrade: false            // Disable WebSocket upgrade
-});
-```
-
 ## Use Cases
 
 - **Development environments**: Expose local dev servers for testing
 - **Webhooks**: Receive webhooks on local development machines
 - **API testing**: Share REST APIs with external services
+- **Real-time applications**: WebSocket-based chat, gaming, collaboration tools
 - **Static sites**: Host local static sites temporarily
 - **Demo applications**: Share work-in-progress applications
 

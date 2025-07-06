@@ -177,11 +177,12 @@ pub struct ServerArgs {
     pub generate_config: bool,
     #[arg(short, long)]
     pub verbose: bool,
-    // Новые опции
     #[arg(long)]
     pub wildcard: bool,
     #[arg(long)]
     pub routing_mode: Option<String>,
+    #[arg(long)]
+    pub request_timeout: Option<u64>,
 }
 
 #[derive(Parser, Debug)]
@@ -290,7 +291,10 @@ impl ServerConfig {
                 _ => return Err(format!("Invalid routing mode: {}", mode).into()),
             };
         }
-
+        if let Some(timeout) = args.request_timeout {
+            config.limits.request_timeout_secs = timeout;
+        }
+        
         // Environment variable overrides
         if let Ok(domain) = std::env::var("EXPOSEME_DOMAIN") {
             config.server.domain = domain;
@@ -366,6 +370,16 @@ impl ServerConfig {
             tracing::info!("Authentication token set from EXPOSEME_AUTH_TOKEN");
         }
 
+        // Request timeout from environment
+        if let Ok(timeout) = std::env::var("EXPOSEME_REQUEST_TIMEOUT") {
+            if let Ok(secs) = timeout.parse::<u64>() {
+                config.limits.request_timeout_secs = secs;
+                tracing::info!("Request timeout set to {} seconds from EXPOSEME_REQUEST_TIMEOUT", secs);
+            } else {
+                tracing::warn!("Invalid EXPOSEME_REQUEST_TIMEOUT value: {}", timeout);
+            }
+        }
+        
         // Automatic configuration for subdomain routing
         if matches!(config.server.routing_mode, RoutingMode::Subdomain | RoutingMode::Both) {
             if config.ssl.enabled && !config.ssl.wildcard {

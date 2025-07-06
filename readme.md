@@ -6,9 +6,9 @@ A fast, secure HTTP tunneling solution written in Rust that exposes local servic
 
 - **Secure HTTP tunneling** via WebSocket connections
 - **HTTPS support** with multiple certificate options:
-   - **Automatic Let's Encrypt certificates** (HTTP-01 or DNS-01 challenges)
-   - **Manual certificates** (bring your own)
-   - **Self-signed certificates** (development only)
+    - **Automatic Let's Encrypt certificates** (HTTP-01 or DNS-01 challenges)
+    - **Manual certificates** (bring your own)
+    - **Self-signed certificates** (development only)
 - **Wildcard certificates** for subdomain routing (requires DNS provider)
 - **HTTP challenges** for single-domain certificates (no DNS provider needed)
 - **Multiple routing modes**: Path-based, subdomain-based, or both
@@ -260,8 +260,8 @@ docker run -it --rm \
 ```
 
 3. **Access your service:**
-   - Subdomain: `https://my-app.your-domain.com/`
-   - Path-based: `https://your-domain.com/my-app/`
+    - Subdomain: `https://my-app.your-domain.com/`
+    - Path-based: `https://your-domain.com/my-app/`
 
 ## DNS Provider Setup
 
@@ -358,6 +358,7 @@ OPTIONS:
         --staging                 Use Let's Encrypt staging environment
         --wildcard                Enable wildcard certificates
         --routing-mode <MODE>     Routing mode: path, subdomain, or both
+        --request-timeout <SECS>  HTTP request timeout in seconds
         --generate-config         Generate default configuration file
     -v, --verbose                 Enable verbose logging
     -h, --help                    Print help information
@@ -394,6 +395,7 @@ OPTIONS:
 | `[ssl.dns_provider]` | `provider` | DNS provider name (`digitalocean`, `azure`) | - |
 | `[auth]` | `tokens` | Authentication tokens | `["dev"]` |
 | `[limits]` | `max_tunnels` | Maximum concurrent tunnels | `50` |
+| `[limits]` | `request_timeout_secs` | HTTP request timeout in seconds | `30` |
 
 #### DigitalOcean DNS Provider Config
 | Section | Option | Description | Default |
@@ -423,6 +425,7 @@ OPTIONS:
 | `EXPOSEME_ROUTING_MODE` | Routing mode | `both` |
 | `EXPOSEME_DNS_PROVIDER` | DNS provider (only for wildcard certificates) | `digitalocean` or `azure` |
 | `EXPOSEME_AUTH_TOKEN` | Authentication token | `secure_token` |
+| `EXPOSEME_REQUEST_TIMEOUT` | HTTP request timeout in seconds | `30` |
 
 #### DigitalOcean DNS Variables (for wildcard certificates only)
 | Variable | Description |
@@ -516,8 +519,8 @@ ExposeME **does not support WebSocket proxying**. For Socket.IO applications, fo
 ```javascript
 // Frontend configuration
 const socket = io('https://your-tunnel-url', {
-   transports: ['polling'],  // Force HTTP polling
-   upgrade: false            // Disable WebSocket upgrade
+    transports: ['polling'],  // Force HTTP polling
+    upgrade: false            // Disable WebSocket upgrade
 });
 ```
 

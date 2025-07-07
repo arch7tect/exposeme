@@ -22,11 +22,11 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::{mpsc, RwLock};
 use tokio_rustls::TlsAcceptor;
-use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
+use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage, WebSocketStream};
 use tower::Service;
 use tracing::{debug, error, info, warn};
 use sha1::{Digest, Sha1};
-
+use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type ResponseBody = BoxBody<bytes::Bytes, BoxError>;
@@ -359,7 +359,7 @@ async fn start_http_server(
 
         tokio::spawn(async move {
             if let Err(err) = Builder::new(hyper_util::rt::TokioExecutor::new())
-                .serve_connection(io, TowerToHyperService::new(service))
+                .serve_connection_with_upgrades(io, TowerToHyperService::new(service))
                 .await
             {
                 error!("Failed to serve connection: {}", err);
@@ -478,13 +478,13 @@ async fn handle_websocket_upgrade_request(
     info!("🔌 Processing WebSocket upgrade for connection {}", connection_id);
 
     // Check if hyper upgrade is possible
-    if hyper::upgrade::on(&mut req).await.is_err() {
-        error!("Failed to setup WebSocket upgrade for {}", connection_id);
-        return Ok(Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(boxed_body("Upgrade setup failed"))
-            .unwrap());
-    }
+    // if hyper::upgrade::on(&mut req).await.is_err() {
+    //     error!("Failed to setup WebSocket upgrade for {}", connection_id);
+    //     return Ok(Response::builder()
+    //         .status(StatusCode::INTERNAL_SERVER_ERROR)
+    //         .body(boxed_body("Upgrade setup failed"))
+    //         .unwrap());
+    // }
 
     // Calculate WebSocket accept key
     let ws_key = req.headers()
@@ -578,8 +578,12 @@ async fn handle_websocket_proxy_connection(
     let upgraded = hyper::upgrade::on(req).await?;
 
     // Convert to WebSocket
-    let io = TokioIo::new(upgraded);
-    let ws_stream = accept_async(io).await?;
+    let ws_stream = WebSocketStream::from_raw_socket(
+        TokioIo::new(upgraded),
+        Role::Server,
+        Some(WebSocketConfig::default()),
+    ).await;
+
     let (mut original_sink, mut original_stream) = ws_stream.split();
 
     // Create channels for communication with tunnel client
@@ -715,7 +719,7 @@ async fn send_to_tunnel(
     };
 
     // Send to correct tunnel
-    { 
+    {
         let tunnels_guard = tunnels.read().await;
         let tunnel_sender = tunnels_guard.get(&tunnel_id).ok_or("Tunnel not found")?;
         tunnel_sender.send(message).map_err(|e| format!("Failed to send: {}", e))?;
@@ -988,7 +992,7 @@ async fn start_https_server(
                             };
 
                             if let Err(e) = Builder::new(hyper_util::rt::TokioExecutor::new())
-                                .serve_connection(io, TowerToHyperService::new(service))
+                                .serve_connection_with_upgrades(io, TowerToHyperService::new(service))
                                 .await
                             {
                                 error!("HTTPS connection error: {}", e);
@@ -1277,9 +1281,36 @@ where
 
     // Clean up tunnel on disconnect
     if let Some(tunnel_id) = tunnel_id {
-        let mut tunnels_guard = tunnels.write().await;
-        tunnels_guard.remove(&tunnel_id);
-        info!("Tunnel '{}' removed", tunnel_id);
+        {
+            let mut tunnels_guard = tunnels.write().await;
+            tunnels_guard.remove(&tunnel_id);
+            info!("ExposeME client disconnected. Tunnel '{}' removed", tunnel_id);
+        }
+        let websocket_connections_to_cleanup = {
+            let websockets = active_websockets.read().await;
+            websockets.iter()
+                .filter(|(_, conn)| conn.tunnel_id == tunnel_id)
+                .map(|(id, _)| id.clone())
+                .collect::<Vec<_>>()
+        };
+        if !websocket_connections_to_cleanup.is_empty() {
+            info!("🧹 Cleaning up {} WebSocket connections", websocket_connections_to_cleanup.len());
+            for connection_id in websocket_connections_to_cleanup {
+                if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
+                    info!("🗑️  Cleaned up WebSocket connection: {}", connection_id);
+                    // Close the browser WebSocket connection gracefully
+                    if let Some(ws_tx) = &connection.ws_tx {
+                        let close_msg = WsMessage::Close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                            code: 1001u16.into(), // Going away
+                            reason: "ExposeME client disconnected".into(),
+                        }));
+                        if let Err(e) = ws_tx.send(close_msg) {
+                            warn!("Failed to close browser WebSocket {}: {}", connection_id, e);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Wait for outgoing task to finish

@@ -492,6 +492,7 @@ async fn handle_websocket_upgrade(
                     while let Some(msg) = local_stream.next().await {
                         match msg {
                             Ok(WsMessage::Text(text)) => {
+                                connection.log_info(&format!("📤 Forwarding text to server: {} chars", text.len()));
                                 let text_string = text.to_string();
                                 let data = base64::engine::general_purpose::STANDARD.encode(text_string.as_bytes());
                                 let message = Message::WebSocketData {
@@ -506,6 +507,7 @@ async fn handle_websocket_upgrade(
                                 }
                             }
                             Ok(WsMessage::Binary(bytes)) => {
+                                connection.log_info(&format!("📤 Forwarding binary to server: {} bytes", bytes.len()));
                                 let bytes_vec = bytes.to_vec();
                                 let data = base64::engine::general_purpose::STANDARD.encode(&bytes_vec);
                                 let message = Message::WebSocketData {

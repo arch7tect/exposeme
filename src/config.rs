@@ -122,21 +122,17 @@ pub struct ClientConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ClientSettings {
     pub server_url: String,
     pub auth_token: String,
     pub tunnel_id: String,
     pub local_target: String,
     pub auto_reconnect: bool,
-    #[serde(default)]
     pub reconnect_delay_secs: u64,
-    #[serde(default)]
     pub websocket_cleanup_interval_secs: u64,
-    #[serde(default)]
     pub websocket_connection_timeout_secs: u64,
-    #[serde(default)]
     pub websocket_max_idle_secs: u64,
-    #[serde(default)]
     pub websocket_monitoring_interval_secs: u64,
 }
 

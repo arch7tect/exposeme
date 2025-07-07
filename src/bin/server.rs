@@ -424,7 +424,7 @@ async fn handle_http_request(
 }
 
 async fn handle_websocket_upgrade_request(
-    mut req: Request<Incoming>,
+    req: Request<Incoming>,
     tunnels: TunnelMap,
     active_websockets: ActiveWebSockets,
     config: ServerConfig,

@@ -60,5 +60,6 @@ x509-parser = "0.17.0"
 async-trait = "0.1.88"
 tower = "0.5.2"
 bytes = "1.10.1"
+sha1 = "0.10.6"
 
 [dev-dependencies]

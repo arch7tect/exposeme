@@ -25,6 +25,8 @@ use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 use tower::Service;
 use tracing::{error, info, warn};
+use sha1::{Digest, Sha1};
+
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type ResponseBody = BoxBody<bytes::Bytes, BoxError>;
@@ -38,16 +40,11 @@ struct WebSocketConnection {
     connection_id: String,
     tunnel_id: String,
     created_at: std::time::Instant,
+    // Channel to send messages to this WebSocket connection
+    ws_tx: Option<mpsc::UnboundedSender<WsMessage>>,
 }
 
 type ActiveWebSockets = Arc<RwLock<HashMap<String, WebSocketConnection>>>;
-
-#[derive(Debug, Clone)]
-enum ConnectionState {
-    Http,
-    WebSocketUpgrading,
-    WebSocketActive,
-}
 
 fn is_websocket_upgrade(req: &Request<Incoming>) -> bool {
     let connection_header = req
@@ -176,6 +173,7 @@ async fn main() -> Result<(), BoxError> {
     // Start WebSocket server
     let tunnels_ws = tunnels.clone();
     let pending_requests_ws = pending_requests.clone();
+    let active_websockets_ws = active_websockets.clone();
     let config_ws = config.clone();
     let ssl_config_for_ws = if config.ssl.enabled {
         ssl_manager.read().await.get_rustls_config()
@@ -186,11 +184,11 @@ async fn main() -> Result<(), BoxError> {
     let ws_handle = tokio::spawn(async move {
         if let Some(tls_config) = ssl_config_for_ws {
             // Start WSS (secure WebSocket)
-            start_secure_websocket_server(config_ws, tunnels_ws, pending_requests_ws, tls_config)
+            start_secure_websocket_server(config_ws, tunnels_ws, pending_requests_ws, active_websockets_ws, tls_config)
                 .await;
         } else {
             // Start WS (regular WebSocket)
-            start_regular_websocket_server(config_ws, tunnels_ws, pending_requests_ws).await;
+            start_regular_websocket_server(config_ws, tunnels_ws, pending_requests_ws, active_websockets_ws).await;
         }
     });
 
@@ -395,14 +393,22 @@ async fn handle_http_request(
 }
 
 async fn handle_websocket_upgrade_request(
-    req: Request<Incoming>,
+    mut req: Request<Incoming>,
     tunnels: TunnelMap,
     active_websockets: ActiveWebSockets,
     config: ServerConfig,
 ) -> Result<Response<ResponseBody>, BoxError> {
     let method = req.method().clone();
 
-    // Extract tunnel ID and forwarded path based on routing mode
+    // Validate WebSocket upgrade headers
+    if !is_websocket_upgrade(&req) {
+        return Ok(Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(boxed_body("Not a WebSocket upgrade request"))
+            .unwrap());
+    }
+
+    // Extract tunnel ID and forwarded path
     let (tunnel_id, forwarded_path) = match extract_tunnel_id_from_request(&req, &config) {
         Ok(result) => result,
         Err(e) => {
@@ -414,14 +420,10 @@ async fn handle_websocket_upgrade_request(
         }
     };
 
-    info!(
-        "🔌 WebSocket upgrade for tunnel '{}': {} {}",
-        tunnel_id, method, forwarded_path
-    );
+    info!("🔌 WebSocket upgrade for tunnel '{}': {} {}", tunnel_id, method, forwarded_path);
 
     // Check if tunnel exists
     let tunnel_sender = tunnels.read().await.get(&tunnel_id).cloned();
-
     let tunnel_sender = match tunnel_sender {
         Some(sender) => sender,
         None => {
@@ -436,21 +438,41 @@ async fn handle_websocket_upgrade_request(
     // Generate connection ID
     let connection_id = uuid::Uuid::new_v4().to_string();
 
-    // Extract headers
+    // Extract headers for forwarding
     let mut headers = HashMap::new();
     for (name, value) in req.headers() {
         headers.insert(name.to_string(), value.to_str().unwrap_or("").to_string());
     }
 
-    // Create WebSocket upgrade message
-    let upgrade_message = Message::WebSocketUpgrade {
-        connection_id: connection_id.clone(),
-        method: method.to_string(),
-        path: forwarded_path,
-        headers,
-    };
+    info!("🔌 Processing WebSocket upgrade for connection {}", connection_id);
 
-    // Register WebSocket connection
+    // Check if hyper upgrade is possible
+    if hyper::upgrade::on(&mut req).await.is_err() {
+        error!("Failed to setup WebSocket upgrade for {}", connection_id);
+        return Ok(Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(boxed_body("Upgrade setup failed"))
+            .unwrap());
+    }
+
+    // Calculate WebSocket accept key
+    let ws_key = req.headers()
+        .get("sec-websocket-key")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+
+    let accept_key = calculate_websocket_accept_key(ws_key);
+
+    // Create successful WebSocket upgrade response
+    let response = Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Accept", accept_key)
+        .body(boxed_body(""))
+        .unwrap();
+
+    // Register WebSocket connection (initially without ws_tx)
     {
         let mut websockets = active_websockets.write().await;
         websockets.insert(
@@ -459,40 +481,193 @@ async fn handle_websocket_upgrade_request(
                 connection_id: connection_id.clone(),
                 tunnel_id: tunnel_id.clone(),
                 created_at: std::time::Instant::now(),
+                ws_tx: None, // Will be set after upgrade completes
             },
         );
     }
 
-    // Send upgrade request to client
+    // Send upgrade request to tunnel client
+    let upgrade_message = Message::WebSocketUpgrade {
+        connection_id: connection_id.clone(),
+        method: method.to_string(),
+        path: forwarded_path,
+        headers,
+    };
+
     if let Err(e) = tunnel_sender.send(upgrade_message) {
-        error!(
-            "Failed to send WebSocket upgrade to tunnel '{}': {}",
-            tunnel_id, e
-        );
-
+        error!("Failed to send WebSocket upgrade to tunnel '{}': {}", tunnel_id, e);
         // Clean up connection on error
-        {
-            let mut websockets = active_websockets.write().await;
-            websockets.remove(&connection_id);
-        }
-
+        active_websockets.write().await.remove(&connection_id);
         return Ok(Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(boxed_body("Tunnel communication error"))
             .unwrap());
     }
 
-    info!(
-        "✅ WebSocket upgrade request sent to tunnel '{}'",
-        tunnel_id
-    );
+    // Start WebSocket proxy task AFTER sending response
+    let tunnels_clone = tunnels.clone();
+    let active_websockets_clone = active_websockets.clone();
+    let config_clone = config.clone();
+    let connection_id_clone = connection_id.clone();
 
-    // TODO: We need to implement the actual WebSocket upgrade response handling
-    // For now, return a placeholder response indicating that upgrade is being processed
-    Ok(Response::builder()
-        .status(StatusCode::ACCEPTED)
-        .body(boxed_body("WebSocket upgrade in progress"))
-        .unwrap())
+    tokio::spawn(async move {
+        // Wait a moment for the response to be sent
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Now handle the upgraded connection
+        if let Err(e) = handle_websocket_proxy_connection(
+            req,
+            connection_id_clone,
+            tunnels_clone,
+            active_websockets_clone,
+            config_clone,
+        ).await {
+            error!("WebSocket proxy error: {}", e);
+        }
+    });
+
+    info!("✅ WebSocket upgrade response sent for {}", connection_id);
+    Ok(response)
+}
+
+fn calculate_websocket_accept_key(ws_key: &str) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(ws_key.as_bytes());
+    hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"); // WebSocket magic string
+    let hash = hasher.finalize();
+    base64::engine::general_purpose::STANDARD.encode(&hash)
+}
+
+// function to handle the upgraded WebSocket connection
+async fn handle_websocket_proxy_connection(
+    req: Request<Incoming>,
+    connection_id: String,
+    tunnels: TunnelMap,
+    active_websockets: ActiveWebSockets,
+    config: ServerConfig,
+) -> Result<(), BoxError> {
+    info!("🔌 Starting WebSocket proxy for connection {}", connection_id);
+
+    // Get the upgraded connection
+    let upgraded = hyper::upgrade::on(req).await?;
+
+    // Convert to WebSocket
+    let io = TokioIo::new(upgraded);
+    let ws_stream = accept_async(io).await?;
+    let (mut original_sink, mut original_stream) = ws_stream.split();
+
+    // Create channels for communication with tunnel client
+    let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsMessage>();
+
+    // Update the stored connection with ws_tx
+    {
+        let mut websockets = active_websockets.write().await;
+        if let Some(connection) = websockets.get_mut(&connection_id) {
+            connection.ws_tx = Some(ws_tx);
+        }
+    }
+
+    info!("🔌 WebSocket proxy established for {}", connection_id);
+
+    // Forward messages FROM original client TO tunnel client
+    let connection_id_clone = connection_id.clone();
+    let tunnels_clone = tunnels.clone();
+    let active_websockets_clone = active_websockets.clone();
+
+    let original_to_tunnel_task = tokio::spawn(async move {
+        while let Some(msg) = original_stream.next().await {
+            match msg {
+                Ok(WsMessage::Text(text)) => {
+                    let data = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+                    let message = Message::WebSocketData {
+                        connection_id: connection_id_clone.clone(),
+                        data,
+                    };
+
+                    // Send to tunnel client
+                    if let Some(tunnel_sender) = tunnels_clone.read().await.values().next() {
+                        if tunnel_sender.send(message).is_err() {
+                            break;
+                        }
+                    }
+                }
+                Ok(WsMessage::Binary(bytes)) => {
+                    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    let message = Message::WebSocketData {
+                        connection_id: connection_id_clone.clone(),
+                        data,
+                    };
+
+                    // Send to tunnel client
+                    if let Some(tunnel_sender) = tunnels_clone.read().await.values().next() {
+                        if tunnel_sender.send(message).is_err() {
+                            break;
+                        }
+                    }
+                }
+                Ok(WsMessage::Close(close_frame)) => {
+                    let (code, reason) = if let Some(frame) = close_frame {
+                        (Some(frame.code.into()), Some(frame.reason.to_string()))
+                    } else {
+                        (None, None)
+                    };
+
+                    let message = Message::WebSocketClose {
+                        connection_id: connection_id_clone.clone(),
+                        code,
+                        reason,
+                    };
+
+                    // Send close to tunnel client
+                    if let Some(tunnel_sender) = tunnels_clone.read().await.values().next() {
+                        let _ = tunnel_sender.send(message);
+                    }
+                    break;
+                }
+                Err(e) => {
+                    error!("Original WebSocket error for {}: {}", connection_id_clone, e);
+                    break;
+                }
+                _ => {} // Handle Ping/Pong
+            }
+        }
+
+        // Cleanup on task end
+        active_websockets_clone.write().await.remove(&connection_id_clone);
+        info!("🔌 Original-to-tunnel task ended for {}", connection_id_clone);
+    });
+
+    // Forward messages FROM tunnel client TO original client
+    let connection_id_clone = connection_id.clone();
+    let tunnel_to_original_task = tokio::spawn(async move {
+        while let Some(ws_message) = ws_rx.recv().await {
+            if original_sink.send(ws_message).await.is_err() {
+                error!("Failed to send to original WebSocket client for {}", connection_id_clone);
+                break;
+            }
+        }
+
+        info!("🔌 Tunnel-to-original task ended for {}", connection_id_clone);
+    });
+
+    // Wait for either task to complete
+    tokio::select! {
+        _ = original_to_tunnel_task => {
+            info!("Original client disconnected for {}", connection_id);
+        }
+        _ = tunnel_to_original_task => {
+            info!("Tunnel client disconnected for {}", connection_id);
+        }
+    }
+
+    // Final cleanup
+    {
+        let mut websockets = active_websockets.write().await;
+        websockets.remove(&connection_id);
+    }
+
+    info!("🔌 WebSocket proxy connection {} fully closed", connection_id);
+    Ok(())
 }
 
 async fn handle_acme_challenge(
@@ -818,6 +993,8 @@ async fn handle_websocket_connection<S>(
     stream: S,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
+    active_websockets: ActiveWebSockets,
+
     config: ServerConfig,
 ) -> Result<(), BoxError>
 where
@@ -968,6 +1145,65 @@ where
                             }
                         }
 
+                        Message::WebSocketUpgradeResponse { connection_id, status, headers: _ } => {
+                            info!("📡 Received WebSocket upgrade response: {} (status: {})", connection_id, status);
+
+                            // For now, just log the response - the upgrade is already handled
+                            if status == 101 {
+                                info!("✅ WebSocket upgrade successful for {}", connection_id);
+                            } else {
+                                warn!("❌ WebSocket upgrade failed for {}: status {}", connection_id, status);
+                                // Clean up failed connection
+                                active_websockets.write().await.remove(&connection_id);
+                            }
+                        }
+
+                        Message::WebSocketData { connection_id, data } => {
+                            if let Some(connection) = active_websockets.read().await.get(&connection_id) {
+                                if let Some(ws_tx) = &connection.ws_tx {
+                                    match base64::engine::general_purpose::STANDARD.decode(&data) {
+                                        Ok(binary_data) => {
+                                            let ws_message = if let Ok(text) = String::from_utf8(binary_data.clone()) {
+                                                WsMessage::Text(text.into())
+                                            } else {
+                                                WsMessage::Binary(binary_data.into())
+                                            };
+
+                                            if let Err(e) = ws_tx.send(ws_message) {
+                                                error!("Failed to forward WebSocket data to client {}: {}", connection_id, e);
+                                                active_websockets.write().await.remove(&connection_id);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to decode WebSocket data for {}: {}", connection_id, e);
+                                        }
+                                    }
+                                }
+                            } else {
+                                warn!("Received data for unknown WebSocket connection: {}", connection_id);
+                            }
+                        }
+
+                        Message::WebSocketClose { connection_id, code, reason } => {
+                            info!("📡 Received WebSocket close for {}: code={:?}, reason={:?}", connection_id, code, reason);
+
+                            if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
+                                if let Some(ws_tx) = &connection.ws_tx {
+                                    let close_frame = if let Some(code) = code {
+                                        Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                                            code: code.into(),
+                                            reason: reason.unwrap_or_default().into(),
+                                        })
+                                    } else {
+                                        None
+                                    };
+
+                                    let _ = ws_tx.send(WsMessage::Close(close_frame));
+                                }
+                                info!("✅ Cleaned up WebSocket connection {}", connection_id);
+                            }
+                        }
+
                         _ => {
                             warn!("Unexpected message type from client");
                         }
@@ -1003,6 +1239,7 @@ async fn start_regular_websocket_server(
     config: ServerConfig,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
+    active_websockets: ActiveWebSockets,
 ) {
     let listener = tokio::net::TcpListener::bind(&config.ws_addr())
         .await
@@ -1017,11 +1254,12 @@ async fn start_regular_websocket_server(
 
         let tunnels = tunnels.clone();
         let pending_requests = pending_requests.clone();
+        let active_websockets = active_websockets.clone();
         let config = config.clone();
 
         tokio::spawn(async move {
             if let Err(e) =
-                handle_websocket_connection(stream, tunnels, pending_requests, config).await
+                handle_websocket_connection(stream, tunnels, pending_requests, active_websockets, config).await
             {
                 error!("WebSocket connection error: {}", e);
             }
@@ -1033,6 +1271,7 @@ async fn start_secure_websocket_server(
     config: ServerConfig,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
+    active_websockets: ActiveWebSockets,
     tls_config: Arc<rustls::ServerConfig>,
 ) {
     let tls_acceptor = TlsAcceptor::from(tls_config);
@@ -1050,13 +1289,14 @@ async fn start_secure_websocket_server(
         let tls_acceptor = tls_acceptor.clone();
         let tunnels = tunnels.clone();
         let pending_requests = pending_requests.clone();
+        let active_websockets = active_websockets.clone();
         let config = config.clone();
 
         tokio::spawn(async move {
             match tls_acceptor.accept(stream).await {
                 Ok(tls_stream) => {
                     if let Err(e) =
-                        handle_websocket_connection(tls_stream, tunnels, pending_requests, config)
+                        handle_websocket_connection(tls_stream, tunnels, pending_requests, active_websockets, config)
                             .await
                     {
                         error!("Secure WebSocket connection error: {}", e);

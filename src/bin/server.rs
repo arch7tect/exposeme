@@ -24,7 +24,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 use tower::Service;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use sha1::{Digest, Sha1};
 
 
@@ -37,11 +37,42 @@ type PendingRequests =
 
 #[derive(Debug)]
 struct WebSocketConnection {
-    connection_id: String,
     tunnel_id: String,
     created_at: std::time::Instant,
     // Channel to send messages to this WebSocket connection
     ws_tx: Option<mpsc::UnboundedSender<WsMessage>>,
+}
+
+impl WebSocketConnection {
+    fn new(tunnel_id: String) -> Self {
+        Self {
+            tunnel_id,
+            created_at: std::time::Instant::now(),
+            ws_tx: None,
+        }
+    }
+
+    fn connection_age(&self) -> Duration {
+        self.created_at.elapsed()
+    }
+
+    fn age_info(&self) -> String {
+        let age = self.connection_age();
+        if age.as_secs() < 60 {
+            format!("{}s", age.as_secs())
+        } else {
+            format!("{}m", age.as_secs() / 60)
+        }
+    }
+
+    fn status_summary(&self) -> String {
+        format!(
+            "tunnel: {}, age: {}, ws: {}",
+            self.tunnel_id,
+            self.age_info(),
+            if self.ws_tx.is_some() { "active" } else { "upgrading" }
+        )
+    }
 }
 
 type ActiveWebSockets = Arc<RwLock<HashMap<String, WebSocketConnection>>>;
@@ -477,12 +508,7 @@ async fn handle_websocket_upgrade_request(
         let mut websockets = active_websockets.write().await;
         websockets.insert(
             connection_id.clone(),
-            WebSocketConnection {
-                connection_id: connection_id.clone(),
-                tunnel_id: tunnel_id.clone(),
-                created_at: std::time::Instant::now(),
-                ws_tx: None, // Will be set after upgrade completes
-            },
+            WebSocketConnection::new(tunnel_id.clone())
         );
     }
 
@@ -544,7 +570,7 @@ async fn handle_websocket_proxy_connection(
     connection_id: String,
     tunnels: TunnelMap,
     active_websockets: ActiveWebSockets,
-    config: ServerConfig,
+    _config: ServerConfig,
 ) -> Result<(), BoxError> {
     info!("🔌 Starting WebSocket proxy for connection {}", connection_id);
 
@@ -567,7 +593,13 @@ async fn handle_websocket_proxy_connection(
         }
     }
 
-    info!("🔌 WebSocket proxy established for {}", connection_id);
+    let connection_status = {
+        let websockets = active_websockets.read().await;
+        websockets.get(&connection_id)
+            .map(|conn| conn.status_summary())
+            .unwrap_or_else(|| "unknown".to_string())
+    };
+    info!("🔌 WebSocket proxy established: {}", connection_status);
 
     // Forward messages FROM original client TO tunnel client
     let connection_id_clone = connection_id.clone();
@@ -585,10 +617,9 @@ async fn handle_websocket_proxy_connection(
                     };
 
                     // Send to tunnel client
-                    if let Some(tunnel_sender) = tunnels_clone.read().await.values().next() {
-                        if tunnel_sender.send(message).is_err() {
-                            break;
-                        }
+                    if let Err(e) = send_to_tunnel(&connection_id_clone, message, &active_websockets_clone, &tunnels_clone).await {
+                        error!("Failed to send WebSocket text: {}", e);
+                        break;
                     }
                 }
                 Ok(WsMessage::Binary(bytes)) => {
@@ -599,10 +630,9 @@ async fn handle_websocket_proxy_connection(
                     };
 
                     // Send to tunnel client
-                    if let Some(tunnel_sender) = tunnels_clone.read().await.values().next() {
-                        if tunnel_sender.send(message).is_err() {
-                            break;
-                        }
+                    if let Err(e) = send_to_tunnel(&connection_id_clone, message, &active_websockets_clone, &tunnels_clone).await {
+                        error!("Failed to send WebSocket binary: {}", e);
+                        break;
                     }
                 }
                 Ok(WsMessage::Close(close_frame)) => {
@@ -619,8 +649,8 @@ async fn handle_websocket_proxy_connection(
                     };
 
                     // Send close to tunnel client
-                    if let Some(tunnel_sender) = tunnels_clone.read().await.values().next() {
-                        let _ = tunnel_sender.send(message);
+                    if let Err(e) = send_to_tunnel(&connection_id_clone, message, &active_websockets_clone, &tunnels_clone).await {
+                        error!("Failed to send close message: {}", e);
                     }
                     break;
                 }
@@ -667,6 +697,30 @@ async fn handle_websocket_proxy_connection(
     }
 
     info!("🔌 WebSocket proxy connection {} fully closed", connection_id);
+    Ok(())
+}
+
+async fn send_to_tunnel(
+    connection_id: &str,
+    message: Message,
+    active_websockets: &ActiveWebSockets,
+    tunnels: &TunnelMap,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Get tunnel_id from connection
+    let tunnel_id = {
+        let websockets = active_websockets.read().await;
+        websockets.get(connection_id)
+            .map(|conn| conn.tunnel_id.clone())
+            .ok_or("Connection not found")?
+    };
+
+    // Send to correct tunnel
+    { 
+        let tunnels_guard = tunnels.read().await;
+        let tunnel_sender = tunnels_guard.get(&tunnel_id).ok_or("Tunnel not found")?;
+        tunnel_sender.send(message).map_err(|e| format!("Failed to send: {}", e))?;
+    }
+
     Ok(())
 }
 
@@ -1160,6 +1214,7 @@ where
 
                         Message::WebSocketData { connection_id, data } => {
                             if let Some(connection) = active_websockets.read().await.get(&connection_id) {
+                                debug!("📡 Received data for {} (age: {}, {} bytes)", connection_id, connection.age_info(), data.len());
                                 if let Some(ws_tx) = &connection.ws_tx {
                                     match base64::engine::general_purpose::STANDARD.decode(&data) {
                                         Ok(binary_data) => {
@@ -1185,10 +1240,8 @@ where
                         }
 
                         Message::WebSocketClose { connection_id, code, reason } => {
-                            info!("📡 Received WebSocket close for {}: code={:?}, reason={:?}", connection_id, code, reason);
-
                             if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
-                                if let Some(ws_tx) = &connection.ws_tx {
+                                info!("📡 Close for {}: code={:?}, reason={:?}, final_status={}", connection_id, code, reason, connection.status_summary());                                if let Some(ws_tx) = &connection.ws_tx {
                                     let close_frame = if let Some(code) = code {
                                         Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
                                             code: code.into(),

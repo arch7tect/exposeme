@@ -1,9 +1,7 @@
 // src/bin/server.rs
 use base64::Engine;
 use clap::Parser;
-use exposeme::{
-    ChallengeStore, Message, RoutingMode, ServerArgs, ServerConfig, SslManager, SslProvider,
-};
+use exposeme::{ChallengeStore, Message, RoutingMode, ServerArgs, ServerConfig, SslManager, SslProvider};
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::{body::Incoming, Request, Response, StatusCode};
@@ -477,15 +475,6 @@ async fn handle_websocket_upgrade_request(
 
     info!("🔌 Processing WebSocket upgrade for connection {}", connection_id);
 
-    // Check if hyper upgrade is possible
-    // if hyper::upgrade::on(&mut req).await.is_err() {
-    //     error!("Failed to setup WebSocket upgrade for {}", connection_id);
-    //     return Ok(Response::builder()
-    //         .status(StatusCode::INTERNAL_SERVER_ERROR)
-    //         .body(boxed_body("Upgrade setup failed"))
-    //         .unwrap());
-    // }
-
     // Calculate WebSocket accept key
     let ws_key = req.headers()
         .get("sec-websocket-key")
@@ -698,9 +687,9 @@ async fn handle_websocket_proxy_connection(
     {
         let mut websockets = active_websockets.write().await;
         websockets.remove(&connection_id);
+        info!("🔌 WebSocket proxy connection {} fully closed", connection_id);
     }
 
-    info!("🔌 WebSocket proxy connection {} fully closed", connection_id);
     Ok(())
 }
 

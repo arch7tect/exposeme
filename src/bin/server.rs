@@ -475,23 +475,6 @@ async fn handle_websocket_upgrade_request(
 
     info!("🔌 Processing WebSocket upgrade for connection {}", connection_id);
 
-    // Calculate WebSocket accept key
-    let ws_key = req.headers()
-        .get("sec-websocket-key")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
-
-    let accept_key = calculate_websocket_accept_key(ws_key);
-
-    // Create successful WebSocket upgrade response
-    let response = Response::builder()
-        .status(StatusCode::SWITCHING_PROTOCOLS)
-        .header("Connection", "Upgrade")
-        .header("Upgrade", "websocket")
-        .header("Sec-WebSocket-Accept", accept_key)
-        .body(boxed_body(""))
-        .unwrap();
-
     // Register WebSocket connection (initially without ws_tx)
     {
         let mut websockets = active_websockets.write().await;
@@ -519,7 +502,21 @@ async fn handle_websocket_upgrade_request(
             .unwrap());
     }
 
-    // Start WebSocket proxy task AFTER sending response
+    // Create switch protocol response
+    let ws_key = req.headers()
+        .get("sec-websocket-key")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let accept_key = calculate_websocket_accept_key(ws_key);
+    let response = Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Accept", accept_key)
+        .body(boxed_body(""))
+        .unwrap();
+    
+    // Start WebSocket proxy task
     let tunnels_clone = tunnels.clone();
     let active_websockets_clone = active_websockets.clone();
     let config_clone = config.clone();
@@ -527,9 +524,9 @@ async fn handle_websocket_upgrade_request(
 
     tokio::spawn(async move {
         // Wait a moment for the response to be sent
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // Now handle the upgraded connection
+        // Upgrade and handle the connection
         if let Err(e) = handle_websocket_proxy_connection(
             req,
             connection_id_clone,
@@ -1270,42 +1267,46 @@ where
 
     // Clean up tunnel on disconnect
     if let Some(tunnel_id) = tunnel_id {
-        {
-            let mut tunnels_guard = tunnels.write().await;
-            tunnels_guard.remove(&tunnel_id);
-            info!("ExposeME client disconnected. Tunnel '{}' removed", tunnel_id);
-        }
-        let websocket_connections_to_cleanup = {
-            let websockets = active_websockets.read().await;
-            websockets.iter()
-                .filter(|(_, conn)| conn.tunnel_id == tunnel_id)
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>()
-        };
-        if !websocket_connections_to_cleanup.is_empty() {
-            info!("🧹 Cleaning up {} WebSocket connections", websocket_connections_to_cleanup.len());
-            for connection_id in websocket_connections_to_cleanup {
-                if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
-                    info!("🗑️  Cleaned up WebSocket connection: {}", connection_id);
-                    // Close the browser WebSocket connection gracefully
-                    if let Some(ws_tx) = &connection.ws_tx {
-                        let close_msg = WsMessage::Close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                            code: 1001u16.into(), // Going away
-                            reason: "ExposeME client disconnected".into(),
-                        }));
-                        if let Err(e) = ws_tx.send(close_msg) {
-                            warn!("Failed to close browser WebSocket {}: {}", connection_id, e);
-                        }
-                    }
-                }
-            }
-        }
+        shutdown_tunnel(tunnels, active_websockets, tunnel_id).await;
     }
 
     // Wait for outgoing task to finish
     outgoing_task.abort();
 
     Ok(())
+}
+
+async fn shutdown_tunnel(tunnels: TunnelMap, active_websockets: ActiveWebSockets, tunnel_id: String) {
+    {
+        let mut tunnels_guard = tunnels.write().await;
+        tunnels_guard.remove(&tunnel_id);
+        info!("ExposeME client disconnected. Tunnel '{}' removed", tunnel_id);
+    }
+    let websocket_connections_to_cleanup = {
+        let websockets = active_websockets.read().await;
+        websockets.iter()
+            .filter(|(_, conn)| conn.tunnel_id == tunnel_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>()
+    };
+    if !websocket_connections_to_cleanup.is_empty() {
+        info!("🧹 Cleaning up {} WebSocket connections", websocket_connections_to_cleanup.len());
+        for connection_id in websocket_connections_to_cleanup {
+            if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
+                info!("🗑️  Cleaned up WebSocket connection: {}", connection_id);
+                // Close the browser WebSocket connection gracefully
+                if let Some(ws_tx) = &connection.ws_tx {
+                    let close_msg = WsMessage::Close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                        code: 1001u16.into(), // Going away
+                        reason: "ExposeME client disconnected".into(),
+                    }));
+                    if let Err(e) = ws_tx.send(close_msg) {
+                        warn!("Failed to close browser WebSocket {}: {}", connection_id, e);
+                    }
+                }
+            }
+        }
+    }
 }
 
 async fn start_regular_websocket_server(
@@ -1413,8 +1414,7 @@ async fn handle_certificate_api(
                         .unwrap())
                 }
                 Err(e) => {
-                    let response =
-                        json!({"error": format!("Failed to get certificate info: {}", e)});
+                    let response = json!({"error": format!("Failed to get certificate info: {}", e)});
                     Ok(Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .header("Content-Type", "application/json")
@@ -1474,97 +1474,45 @@ fn extract_tunnel_id_from_request(
     req: &Request<Incoming>,
     config: &ServerConfig,
 ) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
-    let uri = req.uri();
-    let path = uri.path();
+    let query = req.uri().query().map_or(String::new(), |q| format!("?{}", q));
+    let path = req.uri().path();
 
-    // Get Host header
-    let host = req
-        .headers()
-        .get("host")
-        .and_then(|h| h.to_str().ok())
-        .ok_or("Missing Host header")?;
+    // tunnel-id.domain.com/path
+    if matches!(config.server.routing_mode, RoutingMode::Subdomain | RoutingMode::Both) {
+        let base_domain = &config.server.domain;
+        let host = req
+            .headers()
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .ok_or("Missing Host header")?;
+        let host_without_port = host.split(':').next().unwrap_or(host);
 
-    // Remove port if present
-    let host_without_port = host.split(':').next().unwrap_or(host);
-
-    match config.server.routing_mode {
-        RoutingMode::Path => {
-            // Original logic: /tunnel-id/path
-            let path_parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-            if path_parts.is_empty() || path_parts[0].is_empty() {
-                return Err("Tunnel ID required in path".into());
-            }
-
-            let tunnel_id = path_parts[0].to_string();
-            let forwarded_path = format!(
-                "/{}{}",
-                path_parts[1..].join("/"),
-                uri.query().map_or(String::new(), |q| format!("?{}", q))
-            );
-
-            Ok((tunnel_id, forwarded_path))
-        }
-
-        RoutingMode::Subdomain => {
-            // New logic: tunnel-id.domain.com/path
-            let base_domain = &config.server.domain;
-
-            if host_without_port == base_domain {
-                return Err("No tunnel specified in subdomain".into());
-            }
-
-            // Extract tunnel_id from subdomain
-            let tunnel_id = if let Some(subdomain) =
-                host_without_port.strip_suffix(&format!(".{}", base_domain))
+        if host_without_port != base_domain {
+            if let Some(subdomain) = host_without_port.strip_suffix(&format!(".{}", base_domain))
             {
-                subdomain.to_string()
-            } else {
-                return Err("Invalid subdomain format".into());
-            };
-
-            // For subdomain mode, forward the full path
-            let forwarded_path = format!(
-                "{}{}",
-                path,
-                uri.query().map_or(String::new(), |q| format!("?{}", q))
-            );
-
-            Ok((tunnel_id, forwarded_path))
-        }
-
-        RoutingMode::Both => {
-            // Try subdomain first, then path
-            let base_domain = &config.server.domain;
-
-            // Check if it's a subdomain request
-            if host_without_port != base_domain {
-                if let Some(subdomain) =
-                    host_without_port.strip_suffix(&format!(".{}", base_domain))
-                {
-                    let tunnel_id = subdomain.to_string();
-                    let forwarded_path = format!(
-                        "{}{}",
-                        path,
-                        uri.query().map_or(String::new(), |q| format!("?{}", q))
-                    );
-                    return Ok((tunnel_id, forwarded_path));
-                }
+                let tunnel_id = subdomain.to_string();
+                let forwarded_path = format!("{}{}", path, query);
+                return Ok((tunnel_id, forwarded_path));
             }
-
-            // Fall back to path-based routing
-            let path_parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-            if path_parts.is_empty() || path_parts[0].is_empty() {
-                return Err("Tunnel ID required in path or subdomain".into());
-            }
-
-            let tunnel_id = path_parts[0].to_string();
-            let forwarded_path = format!(
-                "/{}{}",
-                path_parts[1..].join("/"),
-                uri.query().map_or(String::new(), |q| format!("?{}", q))
-            );
-
-            Ok((tunnel_id, forwarded_path))
         }
+        if let RoutingMode::Subdomain = config.server.routing_mode {
+            return Err("Invalid subdomain format".into());
+        }
+    }
+
+    // domain.com/tunnel-id/path
+    let path_parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    if path_parts.is_empty() || path_parts[0].is_empty() {
+        if let RoutingMode::Path = config.server.routing_mode {
+            Err("Tunnel ID required in path".into())
+        }
+        else {
+            Err("Tunnel ID required in path or subdomain".into())
+        }
+    }
+    else {
+        let tunnel_id = path_parts[0].to_string();
+        let forwarded_path = format!("/{}{}", path_parts[1..].join("/"), query);
+        Ok((tunnel_id, forwarded_path))
     }
 }

@@ -812,7 +812,7 @@ async fn handle_websocket_data(
                 } else {
                     // Connection method already logged the error
                     // Remove dead connection
-                    // active_websockets.write().await.remove(&connection_id);
+                    active_websockets.write().await.remove(&connection_id);
                     connection.log_error("Failed to forward data to local WebSocket");
                 }
             }

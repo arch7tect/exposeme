@@ -4,26 +4,6 @@ This document outlines planned features and improvements for ExposeME.
 
 ## High Priority
 
-### WebSocket Tunneling Support
-
-**Status**: Not implemented  
-**Priority**: High  
-**Complexity**: Medium
-
-Currently, ExposeME only supports HTTP/HTTPS request tunneling. WebSocket proxying would enable real-time applications like Socket.IO, live chat, and interactive demos.
-
-**Approach**:
-- Extend existing `Message` enum with WebSocket-specific message types
-- Use HTTP upgrade detection → transparent TCP proxy pattern
-- Leverage existing stateful connection management (pending_requests architecture)
-- Implement bidirectional streaming after WebSocket handshake completes
-
-**Implementation**:
-- Add `Message::WebSocketUpgrade`, `Message::WebSocketData`, `Message::WebSocketClose`
-- Detect `Connection: upgrade` and `Upgrade: websocket` headers
-- Switch to raw TCP proxy mode after successful handshake
-- Maintain connection state until explicit close
-
 ### HTTP Request Streaming
 
 **Status**: Not implemented  
@@ -64,11 +44,6 @@ Current implementation uses `body.collect().await` which loads entire request bo
 - Implement when AWS data transfer costs become significant (>$100/month)
 - Maintain JSON for debugging and development
 
-**WebSocket Message Size Limits**:
-- Increase tokio-tungstenite limits from 64MB to 200-500MB
-- Document file size limitations clearly
-- Implement proper error messages for oversized requests
-
 ### DNS Provider Expansion
 
 **Status**: Partially implemented  
@@ -83,32 +58,6 @@ Current support: DigitalOcean, Azure DNS
 - Google Cloud DNS
 
 **Approach**: Follow existing provider-specific pattern rather than generic abstraction, as DNS APIs differ significantly in structure and authentication.
-
-### Enhanced Certificate Management
-
-**Status**: Basic implementation  
-**Priority**: Medium  
-**Complexity**: Low
-
-Current certificate management provides basic Let's Encrypt integration with automatic renewal. Several improvements would enhance production usability:
-
-**Certificate Monitoring**:
-- API endpoints for certificate expiration alerts
-- Integration with monitoring systems (Prometheus metrics)
-- Email notifications before certificate expiry
-- Detailed certificate chain validation
-
-**Multi-Domain Support**:
-- Support multiple domains per server instance
-- Domain-specific certificate management
-- Wildcard + specific domain combinations
-- Certificate backup and restore functionality
-
-**External Provider Integration**:
-- Support for custom CA certificates
-- Integration with corporate certificate management
-- Certificate upload/import functionality
-- ACME protocol extensions
 
 ## Future Enhancements
 

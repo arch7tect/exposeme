@@ -656,7 +656,7 @@ async fn handle_websocket_proxy_connection(
         }
 
         // Cleanup on task end
-        active_websockets_clone.write().await.remove(&connection_id_clone);
+        // active_websockets_clone.write().await.remove(&connection_id_clone);
         info!("🔌 Original-to-tunnel task ended for {}", connection_id_clone);
     });
 
@@ -1219,7 +1219,7 @@ where
 
                                             if let Err(e) = ws_tx.send(ws_message) {
                                                 error!("Failed to forward WebSocket data to client {}: {}", connection_id, e);
-                                                active_websockets.write().await.remove(&connection_id);
+                                                // active_websockets.write().await.remove(&connection_id);
                                             }
                                         }
                                         Err(e) => {

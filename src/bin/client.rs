@@ -556,7 +556,7 @@ async fn handle_websocket_upgrade(
                         }
                     };
 
-                    active_websockets_clone.write().await.remove(&connection_id);
+                    // active_websockets_clone.write().await.remove(&connection_id);
                     info!("🔌 Local-to-server task ended: {}", final_status);
                 })
             };
@@ -639,7 +639,7 @@ async fn handle_websocket_upgrade(
                 }
             }
 
-            // Final cleanup with detailed logging
+            // Final cleanup
             {
                 let mut websockets = active_websockets.write().await;
                 if let Some(connection) = websockets.remove(&connection_id) {
@@ -813,6 +813,7 @@ async fn handle_websocket_data(
                     // Connection method already logged the error
                     // Remove dead connection
                     active_websockets.write().await.remove(&connection_id);
+                    connection.log_error("Failed to forward data to local WebSocket");
                 }
             }
             Err(e) => {

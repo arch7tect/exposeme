@@ -455,6 +455,7 @@ async fn handle_websocket_upgrade(
                 local_tx,
                 to_server_tx.clone(),
             );
+            let connection_clone = connection.clone();
 
             connection.log_info("WebSocket connection established");
 
@@ -465,25 +466,24 @@ async fn handle_websocket_upgrade(
             }
 
             // Get a copy of the stored connection for use in tasks
-            let stored_connection = {
-                active_websockets.read().await.get(&connection_id).cloned()
-            };
-
-            let stored_connection = match stored_connection {
-                Some(conn) => conn,
-                None => {
-                    error!("Failed to retrieve stored connection for {}", connection_id);
-                    return;
-                }
-            };
+            // let stored_connection = {
+            //     active_websockets.read().await.get(&connection_id).cloned()
+            // };
+            // 
+            // let stored_connection = match stored_connection {
+            //     Some(conn) => conn,
+            //     None => {
+            //         error!("Failed to retrieve stored connection for {}", connection_id);
+            //         return;
+            //     }
+            // };
 
             let active_websockets_clone = active_websockets.clone();
             let connection_id_clone = connection_id.clone();
 
-            // Task 1: Forward FROM local service TO server
-            // Uses stored_connection.to_server_tx instead of separate channel
+            // Forward FROM local service TO server
             let local_to_server_task = {
-                let connection = stored_connection.clone();
+                let connection = connection_clone.clone();
                 let connection_id = connection_id_clone.clone();
 
                 tokio::spawn(async move {
@@ -542,7 +542,7 @@ async fn handle_websocket_upgrade(
                                 connection.log_error(&format!("Local WebSocket error: {}", e));
                                 break;
                             }
-                            _ => {} // Handle Ping/Pong as needed
+                            _ => {}
                         }
                     }
 
@@ -556,15 +556,14 @@ async fn handle_websocket_upgrade(
                         }
                     };
 
-                    // active_websockets_clone.write().await.remove(&connection_id);
+                    active_websockets_clone.write().await.remove(&connection_id);
                     info!("🔌 Local-to-server task ended: {}", final_status);
                 })
             };
 
-            // Task 2: Forward FROM server TO local service
-            // Uses stored_connection methods for proper logging and error handling
+            // Forward FROM server TO local service
             let server_to_local_task = {
-                let connection = stored_connection.clone();
+                let connection = connection_clone.clone();
 
                 tokio::spawn(async move {
                     connection.log_info("Started server-to-local forwarding task");

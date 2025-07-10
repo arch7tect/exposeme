@@ -2,53 +2,61 @@
 
 A fast, secure HTTP tunneling solution written in Rust that exposes local services to the internet through WebSocket connections.
 
-## Features
+## Introduction
 
-- **Secure HTTP tunneling** via WebSocket connections
-- **WebSocket proxying** for real-time applications
-- **HTTPS support** with multiple certificate options:
-    - **Automatic Let's Encrypt certificates** (HTTP-01 or DNS-01 challenges)
-    - **Manual certificates** (bring your own)
-    - **Self-signed certificates** (development only)
-- **Wildcard certificates** for subdomain routing (requires DNS provider)
-- **HTTP challenges** for single-domain certificates (no DNS provider needed)
-- **Multiple routing modes**: Path-based, subdomain-based, or both
-- **DNS providers**: DigitalOcean, Azure (with more coming soon)
-- **Auto-renewal** of certificates when < 30 days left
-- **Docker support** with pre-built images
-- **Token-based authentication** for secure tunnel access control
-- **Multiple concurrent tunnels** with configurable limits
-- **Auto-reconnection** for reliable connections
-- **Health check** and certificate status APIs
+ExposeME is a simple tool that lets you share your local development server with the outside world. Whether you're building a web app on your laptop or testing a local API, ExposeME creates a secure tunnel so others can access your work from anywhere on the internet.
+
+**What does it do?**
+- Turn `http://localhost:3000` into `https://myapp.yourdomain.com`
+- Share your local development work with clients, teammates, or testing tools
+- Receive webhooks from external services directly to your development machine
+- Test real-time features like WebSocket connections through a secure tunnel
+
+**How does it work?**
+You run ExposeME on a server (like a VPS) with your own domain name. Then you run a small client program on your development machine that connects to your server. When someone visits your public URL, the request gets forwarded through the secure tunnel to your local application.
+
+**Why use your own server?**
+- **Full control**: Your own domain, your own SSL certificates, no rate limits
+- **Privacy**: Your traffic doesn't go through third-party services
+- **Reliability**: No dependency on external tunnel services
+- **Cost-effective**: Use any cheap VPS instead of paid tunnel subscriptions
+- **Professional**: Use your own domain for demos and client previews
+
+**Perfect for:**
+- Sharing development work with clients and teammates
+- Testing webhooks from payment processors, GitHub, etc.
+- Demonstrating mobile app backends
+- Remote development and testing
+- Getting SSL certificates for local development
 
 ## Architecture
 
 ExposeME creates secure HTTP tunnels to expose local services:
 
-- **Server**: Receives HTTP/HTTPS requests from the internet and forwards them to clients
-- **Client**: Connects to server via secure WebSocket (WSS/WS) and forwards requests to local services
-- **Tunnel Flow**: Internet → Server → WebSocket → Client → Local Service → Response back
+- **Single HTTP/HTTPS Server**: One server handles both regular HTTP/HTTPS requests and WebSocket upgrades on the same ports (80/443)
+- **Tunnel Setup**: Client connects to server via WebSocket upgrade on `/tunnel-ws` to establish a persistent tunnel
+- **Request Forwarding**: When users visit your public URL, the server forwards their HTTP requests through the existing WebSocket tunnel to your local service
+- **Flow**: Internet User → Server (HTTP) → WebSocket Tunnel → Client → Local Service → Response back
+
+### Connection Types
+- **HTTP mode**: Client connects to `ws://your-domain.com/tunnel-ws`
+- **HTTPS mode**: Client connects to `wss://your-domain.com/tunnel-ws`
+- **Custom path**: Configurable via `tunnel_path` setting
 
 ## Authentication & Security
 
-ExposeME uses **token-based authentication** to control who can create tunnels on your server:
+ExposeME uses **token-based authentication** to control access. Configure your server with one or more tokens, and clients must provide a valid token to create tunnels.
 
-### Authentication Flow
-1. **Server Configuration**: Server is configured with one or more authentication tokens
-2. **Client Connection**: Client presents a token when connecting via WebSocket
-3. **Token Validation**: Server validates the token before allowing tunnel creation
-4. **Tunnel Authorization**: Only authenticated clients can expose services
-
-### Security Model
-- **Token Controls Access**: Anyone with a valid token can create tunnels
-- **Tunnel Isolation**: Each tunnel has a unique ID and can't interfere with others
-- **Transport Security**: WSS encrypts all tunnel communication (when SSL enabled)
-- **No Public Discovery**: Tunnel URLs are only known to those who create them
+**Security features:**
+- **Token authentication**: Only clients with valid tokens can create tunnels
+- **Tunnel isolation**: Each tunnel has a unique ID and operates independently
+- **Transport encryption**: All tunnel communication is encrypted when SSL is enabled
+- **Private URLs**: Tunnel URLs are only known to those who create them
 
 ```bash
-# Example: Generate a secure token
+# Generate a secure token
 openssl rand -base64 32
-# Result: a1b2c3d4e5f6789... (use this as your EXPOSEME_AUTH_TOKEN)
+# Use this as your EXPOSEME_AUTH_TOKEN
 ```
 
 ## Routing Modes
@@ -73,23 +81,36 @@ Supports both routing methods simultaneously
 
 ## Certificate Management
 
-ExposeME supports three certificate management approaches:
+To use HTTPS (the secure "lock" icon in browsers), your server needs an SSL certificate. ExposeME gives you three ways to get one:
 
 ### 1. Automatic Let's Encrypt (recommended)
-- **Single-domain certificates**: Uses HTTP-01 challenges (no DNS provider needed)
-- **Wildcard certificates**: Uses DNS-01 challenges (requires DNS provider)
-- **Auto-renewal**: Certificates renewed automatically when < 30 days left
-- **Free**: No cost for certificates
+Let's Encrypt provides free SSL certificates that ExposeME can get and renew automatically. Perfect for most users.
 
-### 2. Manual Certificates
-- **Bring your own**: Use existing certificates from any provider
-- **Full control**: Manage renewal and configuration yourself
-- **No auto-renewal**: You handle certificate lifecycle
+- **Simple setup**: Works with just your domain name and email
+- **Completely free**: No cost, ever
+- **Auto-renewal**: New certificates every 90 days, handled automatically
+- **Two modes**: Regular certificates (easy) or wildcard certificates (requires DNS setup)
 
-### 3. Self-signed Certificates
-- **Development only**: Not suitable for production
-- **No external dependencies**: Works without internet access
-- **Browser warnings**: Browsers will show security warnings
+### 2. Bring Your Own Certificate
+Already have an SSL certificate from another provider? Just drop the files in the right folder and ExposeME will use them.
+
+- **Full control**: Use certificates from any provider (Cloudflare, Namecheap, etc.)
+- **Your responsibility**: You handle renewals and configuration
+- **Any provider**: Works with commercial SSL providers
+
+**File naming:** Place your certificate files in the cache directory with these exact names:
+- **Regular certificate**: `your-domain-com.pem` and `your-domain-com.key`
+- **Wildcard certificate**: `wildcard-your-domain-com.pem` and `wildcard-your-domain-com.key`
+- **Example**: For `example.com` → `example-com.pem` and `example-com.key`
+
+**Cache directory:** By default `/etc/exposeme/certs`, but configurable via `cert_cache_dir` setting.
+
+### 3. Self-Signed Certificate (development only)
+ExposeME can create its own certificate for local development. Browsers will show warnings, but it works for testing.
+
+- **Development only**: Don't use this for real websites
+- **No setup required**: Works immediately, no domain or DNS needed
+- **Browser warnings**: Visitors will see "not secure" warnings
 
 ## Quick Start
 
@@ -121,9 +142,8 @@ services:
     restart: unless-stopped
 
     ports:
-      - "80:80"       # HTTP (ACME challenges + redirects)
-      - "443:443"     # HTTPS
-      - "8081:8081"   # WebSocket
+      - "80:80"       # HTTP (ACME challenges + redirects + WebSocket upgrades)
+      - "443:443"     # HTTPS (secure requests + WebSocket upgrades)
 
     volumes:
       - ./config/server.toml:/etc/exposeme/server.toml:ro
@@ -186,8 +206,7 @@ services:
 http_bind = "0.0.0.0"
 http_port = 80
 https_port = 443
-ws_bind = "0.0.0.0"
-ws_port = 8081
+tunnel_path = "/tunnel-ws"  # WebSocket upgrade path (configurable)
 domain = "your-domain.com"
 routing_mode = "both"  # "path", "subdomain", or "both"
 
@@ -238,12 +257,13 @@ docker-compose up -d
 ```toml
 # client.toml
 [client]
-server_url = "wss://your-domain.com:8081"
+server_url = "wss://your-domain.com/tunnel-ws"  # Uses WebSocket upgrade on HTTPS
 auth_token = "your_secure_auth_token"
 tunnel_id = "my-app"
-local_target = "http://localhost:8000"
+local_target = "http://host.docker.internal:3000"
 auto_reconnect = true
 reconnect_delay_secs = 5
+insecure = false  # Set to true for self-signed certificates (development only)
 ```
 
 2. **Run the client:**
@@ -342,8 +362,7 @@ OPTIONS:
         --http-bind <IP>          HTTP bind address
         --http-port <PORT>        HTTP port
         --https-port <PORT>       HTTPS port  
-        --ws-bind <IP>            WebSocket bind address
-        --ws-port <PORT>          WebSocket port
+        --tunnel-path <PATH>      WebSocket upgrade path [default: /tunnel-ws]
         --domain <DOMAIN>         Server domain name
         --enable-https            Enable HTTPS
         --disable-https           Disable HTTPS
@@ -363,10 +382,11 @@ OPTIONS:
 
 OPTIONS:
     -c, --config <FILE>           Configuration file path [default: client.toml]
-    -s, --server-url <URL>        WebSocket server URL
+    -s, --server-url <URL>        WebSocket server URL (upgrade endpoint)
     -t, --token <TOKEN>           Authentication token
     -T, --tunnel-id <ID>          Tunnel identifier
     -l, --local-target <URL>      Local service URL to forward to
+        --insecure                Skip TLS certificate verification (for self-signed certificates)
         --generate-config         Generate default configuration file
     -v, --verbose                 Enable verbose logging
     -h, --help                    Print help information
@@ -386,11 +406,12 @@ OPTIONS:
 | `[server]` | `routing_mode` | `path`, `subdomain`, or `both` | `path` |
 | `[server]` | `http_port` | HTTP port | `80` |
 | `[server]` | `https_port` | HTTPS port | `443` |
-| `[server]` | `ws_port` | WebSocket port | `8081` |
+| `[server]` | `tunnel_path` | WebSocket upgrade path | `/tunnel-ws` |
 | `[ssl]` | `enabled` | Enable HTTPS | `false` |
 | `[ssl]` | `wildcard` | Use wildcard certificates (required for subdomain routing) | `false` |
 | `[ssl]` | `provider` | Certificate source: `letsencrypt` (automatic), `manual` (your own), `selfsigned` (development) | `letsencrypt` |
 | `[ssl]` | `staging` | Use Let's Encrypt staging | `true` |
+| `[ssl]` | `cert_cache_dir` | Directory for storing certificates | `/etc/exposeme/certs` |
 | `[ssl.dns_provider]` | `provider` | DNS provider name (`digitalocean`, `azure`) | - |
 | `[auth]` | `tokens` | Authentication tokens | `["dev"]` |
 | `[limits]` | `max_tunnels` | Maximum concurrent tunnels | `50` |
@@ -400,11 +421,12 @@ OPTIONS:
 
 | Section | Option | Description | Default |
 |---------|--------|-------------|---------|
-| `[client]` | `server_url` | WebSocket server URL | `ws://localhost:8081` |
+| `[client]` | `server_url` | WebSocket server URL (upgrade endpoint) | `ws://localhost/tunnel-ws` |
 | `[client]` | `auth_token` | Authentication token | `dev` |
 | `[client]` | `tunnel_id` | Unique tunnel identifier | `test` |
 | `[client]` | `local_target` | Local service URL | `http://localhost:3300` |
 | `[client]` | `auto_reconnect` | Auto-reconnect on disconnect | `true` |
+| `[client]` | `insecure` | Skip TLS verification (for self-signed certificates) | `false` |
 | `[client]` | `websocket_cleanup_interval_secs` | Cleanup check interval | `60` |
 | `[client]` | `websocket_connection_timeout_secs` | Connection timeout | `10` |
 | `[client]` | `websocket_max_idle_secs` | Maximum idle time | `600` |
@@ -423,7 +445,6 @@ OPTIONS:
 | `EXPOSEME_AUTH_TOKEN` | Authentication token                          | `secure_token`            |
 | `EXPOSEME_REQUEST_TIMEOUT` | HTTP request timeout in seconds               | `30`                      |
 | `RUST_LOG` | Logging level (e.g., `info`, `debug`)                 | `info`                    |
-
 
 ## API Endpoints
 
@@ -445,7 +466,8 @@ Response:
   "expiry_date": "2024-08-15T10:30:00Z",
   "days_until_expiry": 45,
   "needs_renewal": false,
-  "auto_renewal": true
+  "auto_renewal": true,
+  "wildcard": true
 }
 ```
 
@@ -484,15 +506,6 @@ docker build -t exposeme-server --target server .
 docker build -t exposeme-client --target client .
 ```
 
-## Use Cases
-
-- **Development environments**: Expose local dev servers for testing
-- **Webhooks**: Receive webhooks on local development machines
-- **API testing**: Share REST APIs with external services
-- **Real-time applications**: WebSocket-based chat, gaming, collaboration tools
-- **Static sites**: Host local static sites temporarily
-- **Demo applications**: Share work-in-progress applications
-
 ## Troubleshooting
 
 ### View Logs
@@ -513,10 +526,33 @@ curl http://your-domain.com/api/certificates/status
 
 **Manual certificate placement:**
 ```bash
-# Place certificates in cert cache directory
-/etc/exposeme/certs/your-domain-com.pem
-/etc/exposeme/certs/your-domain-com.key
+# Place certificates in cert cache directory with correct names
+# For domain "example.com":
+/etc/exposeme/certs/example-com.pem
+/etc/exposeme/certs/example-com.key
+
+# For wildcard certificate:
+/etc/exposeme/certs/wildcard-example-com.pem
+/etc/exposeme/certs/wildcard-example-com.key
 ```
+
+### Self-Signed Certificates
+
+When using self-signed certificates for development, the client may fail to connect due to TLS verification errors. Use the `insecure` option to skip certificate verification:
+
+**Configuration:**
+```toml
+[client]
+server_url = "wss://your-domain.com/tunnel-ws"
+insecure = true  # Skip TLS verification for self-signed certificates
+```
+
+**Command line:**
+```bash
+./exposeme-client --insecure --server-url wss://localhost/tunnel-ws
+```
+
+**⚠️ Security Warning**: The `insecure` option should only be used for development with self-signed certificates as it disables TLS certificate verification.
 
 ## License
 

@@ -23,9 +23,9 @@ echo "🔨 Building images..."
 
 # Build base image with both targets
 docker build --target server --platform linux/amd64 --no-cache -t $DOCKER_HUB_USER/exposeme-server:$VERSION .
-#docker build --target client --platform linux/amd64 --no-cache -t $DOCKER_HUB_USER/exposeme-client:$VERSION .
+docker build --target client --platform linux/amd64 --no-cache -t $DOCKER_HUB_USER/exposeme-client:$VERSION .
 #docker build --target server --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme-server:$VERSION .
-docker build --target client --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme-client:$VERSION .
+#docker build --target client --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme-client:$VERSION .
 
 # Tag as latest
 if [ "$VERSION" != "latest" ]; then

@@ -11,10 +11,13 @@ use base64::Engine;
 use tokio::signal;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::timeout;
+use tokio_tungstenite::Connector;
+use rustls::ClientConfig as RustlsClientConfig;
+
 use tracing::{debug, error, info, warn};
-use tracing_subscriber::{EnvFilter};
 
 use exposeme::{initialize_tracing, ClientArgs, ClientConfig, Message};
+use exposeme::insecure_cert::InsecureCertVerifier;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -138,7 +141,7 @@ impl ActiveWebSocketConnection {
         last_activity.elapsed() > max_idle_duration
     }
 
-    // NEW: Get idle time (time since last activity)
+    // Get idle time (time since last activity)
     async fn idle_time(&self) -> Duration {
         let last_activity = *self.last_activity.read().await;
         last_activity.elapsed()
@@ -202,7 +205,28 @@ type ActiveWebSockets = Arc<RwLock<HashMap<String, ActiveWebSocketConnection>>>;
 
 async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Connect to WebSocket server
-    let (ws_stream, _) = connect_async(&config.client.server_url).await?;
+    let (ws_stream, _) = if config.client.insecure && config.client.server_url.starts_with("wss://") {
+        // For self-signed certificates, use insecure connection
+        warn!("⚠️  Using insecure connection (skipping TLS verification)");
+        warn!("⚠️  This should only be used for development with self-signed certificates");
+
+        // Create insecure TLS config that accepts any certificate
+        let tls_config = RustlsClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))
+            .with_no_client_auth();
+
+        let connector = Connector::Rustls(Arc::new(tls_config));
+        tokio_tungstenite::connect_async_tls_with_config(
+            &config.client.server_url,
+            None,
+            false,
+            Some(connector),
+        ).await?
+    } else {
+        // Normal secure connection
+        connect_async(&config.client.server_url).await?
+    };
     info!("Connected to WebSocket server");
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();

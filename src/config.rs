@@ -23,7 +23,7 @@ impl Default for ServerConfig {
                 provider: SslProvider::LetsEncrypt,
                 email: "admin@example.com".to_string(),
                 staging: true,
-                cert_cache_dir: "/etc/exposeme-certs".to_string(),
+                cert_cache_dir: "/etc/exposeme/certs".to_string(),
                 wildcard: false, // Set to true for subdomain support
                 dns_provider: None, // Required for wildcard certificates
             },
@@ -138,6 +138,7 @@ pub struct ClientSettings {
     pub websocket_connection_timeout_secs: u64,
     pub websocket_max_idle_secs: u64,
     pub websocket_monitoring_interval_secs: u64,
+    pub insecure: bool,
 }
 
 impl Default for ClientSettings {
@@ -153,6 +154,7 @@ impl Default for ClientSettings {
             websocket_connection_timeout_secs: 10,
             websocket_max_idle_secs: 600,
             websocket_monitoring_interval_secs: 30,
+            insecure: false,
         }
     }
 }
@@ -222,6 +224,8 @@ pub struct ClientArgs {
     pub generate_config: bool,
     #[arg(short, long)]
     pub verbose: bool,
+    #[arg(long, help = "Skip TLS certificate verification (insecure, for self-signed certificates)")]
+    pub insecure: bool, 
     #[arg(long, help = "WebSocket cleanup check interval in seconds")]
     pub websocket_cleanup_interval: Option<u64>,
     #[arg(long, help = "WebSocket connection timeout in seconds")]
@@ -463,7 +467,6 @@ impl ServerConfig {
         }
     }
 
-    /// Получить публичный URL для туннеля
     pub fn get_public_url(&self, tunnel_id: &str) -> String {
         match self.server.routing_mode {
             RoutingMode::Subdomain => {
@@ -485,7 +488,6 @@ impl ServerConfig {
                 format!("{}/{}", self.public_url_base(), tunnel_id)
             },
             RoutingMode::Both => {
-                // Возвращаем поддомен как основной
                 if self.ssl.enabled {
                     if self.server.https_port == 443 {
                         format!("https://{}.{}", tunnel_id, self.server.domain)
@@ -525,6 +527,9 @@ impl ClientConfig {
         }
         if let Some(target) = &args.local_target {
             config.client.local_target = target.clone();
+        }
+        if args.insecure {
+            config.client.insecure = true;
         }
         if let Some(interval) = args.websocket_cleanup_interval {
             config.client.websocket_cleanup_interval_secs = interval;

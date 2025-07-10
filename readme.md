@@ -412,16 +412,17 @@ OPTIONS:
 
 ### Environment Variables
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `EXPOSEME_DOMAIN` | Your domain | `example.com` |
-| `EXPOSEME_EMAIL` | Contact email for Let's Encrypt | `admin@example.com` |
-| `EXPOSEME_STAGING` | Use staging certificates | `false` |
-| `EXPOSEME_WILDCARD` | Enable wildcard certificates | `true` |
-| `EXPOSEME_ROUTING_MODE` | Routing mode | `both` |
+| Variable | Description                                   | Example                   |
+|----------|-----------------------------------------------|---------------------------|
+| `EXPOSEME_DOMAIN` | Your domain                                   | `example.com`             |
+| `EXPOSEME_EMAIL` | Contact email for Let's Encrypt               | `admin@example.com`       |
+| `EXPOSEME_STAGING` | Use staging certificates                      | `false`                   |
+| `EXPOSEME_WILDCARD` | Enable wildcard certificates                  | `true`                    |
+| `EXPOSEME_ROUTING_MODE` | Routing mode                                  | `both`                    |
 | `EXPOSEME_DNS_PROVIDER` | DNS provider (only for wildcard certificates) | `digitalocean` or `azure` |
-| `EXPOSEME_AUTH_TOKEN` | Authentication token | `secure_token` |
-| `EXPOSEME_REQUEST_TIMEOUT` | HTTP request timeout in seconds | `30` |
+| `EXPOSEME_AUTH_TOKEN` | Authentication token                          | `secure_token`            |
+| `EXPOSEME_REQUEST_TIMEOUT` | HTTP request timeout in seconds               | `30`                      |
+| `RUST_LOG` | Logging level (e.g., `info`, `debug`)                 | `info`                    |
 
 
 ## API Endpoints

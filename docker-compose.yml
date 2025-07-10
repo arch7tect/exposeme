@@ -28,14 +28,14 @@ services:
       - EXPOSEME_ROUTING_MODE=both
 
       # DNS Provider (DigitalOcean)
-      - EXPOSEME_DNS_PROVIDER=digitalocean
+      - EXPOSEME_DNS_PROVIDER=${EXPOSEME_DNS_PROVIDER}
       - EXPOSEME_DIGITALOCEAN_TOKEN=${DIGITALOCEAN_TOKEN}
 
       # Auth token
       - EXPOSEME_AUTH_TOKEN=${EXPOSEME_AUTH_TOKEN:-dev}
 
       # Logging
-      - RUST_LOG=info
+      - RUST_LOG=${RUST_LOG:-info}
       - RUST_BACKTRACE=1
 
     # Security settings

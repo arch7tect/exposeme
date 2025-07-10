@@ -1,6 +1,6 @@
 // src/bin/server.rs
 use clap::Parser;
-use exposeme::{ServerArgs, ServerConfig, SslManager, SslProvider};
+use exposeme::{initialize_tracing, ServerArgs, ServerConfig, SslManager, SslProvider};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,14 +18,7 @@ async fn main() -> Result<(), BoxError> {
     // Parse CLI arguments
     let args = ServerArgs::parse();
 
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(if args.verbose {
-            tracing::Level::DEBUG
-        } else {
-            tracing::Level::INFO
-        })
-        .init();
+    initialize_tracing(args.verbose);
 
     // Generate config if requested
     if args.generate_config {
@@ -90,6 +83,7 @@ async fn main() -> Result<(), BoxError> {
         let active_websockets_https = active_websockets.clone();
         let config_https = config.clone();
         let ssl_config_for_https = ssl_manager.read().await.get_rustls_config().unwrap();
+        let ssl_manager_https = ssl_manager.clone();
 
         Some(tokio::spawn(async move {
             if let Err(e) = start_unified_https_server(
@@ -97,6 +91,7 @@ async fn main() -> Result<(), BoxError> {
                 tunnels_https,
                 pending_requests_https,
                 active_websockets_https,
+                ssl_manager_https,
                 ssl_config_for_https,
             ).await {
                 error!("❌ HTTPS server error: {}", e);
@@ -168,7 +163,6 @@ async fn main() -> Result<(), BoxError> {
     Ok(())
 }
 
-
 async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxError> {
     let test_url = format!(
         "http://127.0.0.1:{}/.well-known/acme-challenge/readiness-test",
@@ -208,7 +202,7 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //     tunnels: TunnelMap,
 //     pending_requests: PendingRequests,
 //     active_websockets: ActiveWebSockets,
-// 
+//
 //     config: ServerConfig,
 // ) -> Result<(), BoxError>
 // where
@@ -216,10 +210,10 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 // {
 //     let ws_stream = accept_async(stream).await?;
 //     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-// 
+//
 //     // Create channel for outgoing messages
 //     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-// 
+//
 //     // Spawn task to handle outgoing messages
 //     let outgoing_task = tokio::spawn(async move {
 //         while let Some(message) = rx.recv().await {
@@ -230,9 +224,9 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //             }
 //         }
 //     });
-// 
+//
 //     let mut tunnel_id: Option<String> = None;
-// 
+//
 //     // Handle incoming messages
 //     while let Some(message) = ws_receiver.next().await {
 //         match message {
@@ -244,7 +238,7 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //                             tunnel_id: requested_tunnel_id,
 //                         } => {
 //                             info!("Auth request for tunnel '{}'", requested_tunnel_id);
-// 
+//
 //                             // Validate tunnel ID
 //                             if let Err(e) = config.validate_tunnel_id(&requested_tunnel_id) {
 //                                 let error_msg = Message::AuthError {
@@ -261,7 +255,7 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //                                 tokio::time::sleep(Duration::from_millis(500)).await;
 //                                 break;
 //                             }
-// 
+//
 //                             // Token validation using config
 //                             if !config.auth.tokens.contains(&token) {
 //                                 let error_msg = Message::AuthError {
@@ -275,7 +269,7 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //                                 tokio::time::sleep(Duration::from_millis(500)).await;
 //                                 break;
 //                             }
-// 
+//
 //                             // Check if tunnel_id is already taken
 //                             {
 //                                 let tunnels_guard = tunnels.read().await;
@@ -298,7 +292,7 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //                                     break;
 //                                 }
 //                             }
-// 
+//
 //                             // Check max tunnels limit
 //                             {
 //                                 let tunnels_guard = tunnels.read().await;
@@ -321,27 +315,27 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //                                     break;
 //                                 }
 //                             }
-// 
+//
 //                             // Register tunnel
 //                             {
 //                                 let mut tunnels_guard = tunnels.write().await;
 //                                 tunnels_guard.insert(requested_tunnel_id.clone(), tx.clone());
 //                             }
-// 
+//
 //                             tunnel_id = Some(requested_tunnel_id.clone());
-// 
+//
 //                             let success_msg = Message::AuthSuccess {
 //                                 tunnel_id: requested_tunnel_id.clone(),
 //                                 public_url: config.get_public_url(&requested_tunnel_id),
 //                             };
-// 
+//
 //                             if let Err(err) = tx.send(success_msg) {
 //                                 error!("Failed to send auth success to client: {}", err);
 //                                 break;
 //                             }
 //                             info!("Tunnel '{}' registered successfully", requested_tunnel_id);
 //                         }
-// 
+//
 //                         Message::HttpResponse {
 //                             id,
 //                             status,
@@ -353,15 +347,15 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //                                 let mut pending = pending_requests.write().await;
 //                                 pending.remove(&id)
 //                             };
-// 
+//
 //                             if let Some(sender) = response_sender {
 //                                 let _ = sender.send((status, headers, body));
 //                             }
 //                         }
-// 
+//
 //                         Message::WebSocketUpgradeResponse { connection_id, status, headers: _ } => {
 //                             info!("📡 Received WebSocket upgrade response: {} (status: {})", connection_id, status);
-// 
+//
 //                             // For now, just log the response - the upgrade is already handled
 //                             if status == 101 {
 //                                 info!("✅ WebSocket upgrade successful for {}", connection_id);
@@ -371,7 +365,7 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //                                 active_websockets.write().await.remove(&connection_id);
 //                             }
 //                         }
-// 
+//
 //                         Message::WebSocketData { connection_id, data } => {
 //                             if let Some(connection) = active_websockets.read().await.get(&connection_id) {
 //                                 debug!("📡 Received data for {} (age: {}, {} bytes)", connection_id, connection.age_info(), data.len());
@@ -383,7 +377,7 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //                                             } else {
 //                                                 WsMessage::Binary(binary_data.into())
 //                                             };
-// 
+//
 //                                             if let Err(e) = ws_tx.send(ws_message) {
 //                                                 error!("Failed to forward WebSocket data to client {}: {}", connection_id, e);
 //                                                 // active_websockets.write().await.remove(&connection_id);
@@ -398,7 +392,7 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //                                 warn!("Received data for unknown WebSocket connection: {}", connection_id);
 //                             }
 //                         }
-// 
+//
 //                         Message::WebSocketClose { connection_id, code, reason } => {
 //                             if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
 //                                 info!("📡 Close for {}: code={:?}, reason={:?}, final_status={}", connection_id, code, reason, connection.status_summary());                                if let Some(ws_tx) = &connection.ws_tx {
@@ -410,13 +404,13 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //                                     } else {
 //                                         None
 //                                     };
-// 
+//
 //                                     let _ = ws_tx.send(WsMessage::Close(close_frame));
 //                                 }
 //                                 info!("✅ Cleaned up WebSocket connection {}", connection_id);
 //                             }
 //                         }
-// 
+//
 //                         _ => {
 //                             warn!("Unexpected message type from client");
 //                         }
@@ -434,16 +428,16 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
 //             _ => {}
 //         }
 //     }
-// 
+//
 //     // Clean up tunnel on disconnect
 //     if let Some(tunnel_id) = tunnel_id {
 //         shutdown_tunnel(tunnels, active_websockets, tunnel_id).await;
 //     }
-// 
+//
 //     // Wait for outgoing task to finish
 //     outgoing_task.abort();
-// 
+//
 //     Ok(())
 // }
-// 
+//
 

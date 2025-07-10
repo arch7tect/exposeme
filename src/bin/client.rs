@@ -11,9 +11,10 @@ use base64::Engine;
 use tokio::signal;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::timeout;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
+use tracing_subscriber::{EnvFilter};
 
-use exposeme::{ClientArgs, ClientConfig, Message};
+use exposeme::{initialize_tracing, ClientArgs, ClientConfig, Message};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -32,15 +33,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse CLI arguments
     let args = ClientArgs::parse();
 
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(if args.verbose {
-            tracing::Level::DEBUG
-        } else {
-            tracing::Level::INFO
-        })
-        .init();
-
+    initialize_tracing(args.verbose);
+    
     // Generate config if requested
     if args.generate_config {
         ClientConfig::generate_default_file(&args.config)?;
@@ -115,6 +109,10 @@ impl ActiveWebSocketConnection {
     // Use connection_id for structured logging
     fn log_info(&self, message: &str) {
         info!("🔌 WebSocket {}: {}", self.connection_id, message);
+    }
+
+    fn log_debug(&self, message: &str) {
+        debug!("🔌 WebSocket {}: {}", self.connection_id, message);
     }
 
     fn log_error(&self, message: &str) {
@@ -302,7 +300,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                             headers,
                             body,
                         } => {
-                            info!("📥 Received request: {} {}", method, path);
+                            debug!("📥 Received request: {} {}", method, path);
 
                             // Spawn parallel task for each HTTP request
                             let http_client = http_client.clone();
@@ -492,7 +490,7 @@ async fn handle_websocket_upgrade(
                     while let Some(msg) = local_stream.next().await {
                         match msg {
                             Ok(WsMessage::Text(text)) => {
-                                connection.log_info(&format!("📤 Forwarding text to server: {} chars", text.len()));
+                                connection.log_debug(&format!("📤 Forwarding text to server: {} chars", text.len()));
                                 let text_string = text.to_string();
                                 let data = base64::engine::general_purpose::STANDARD.encode(text_string.as_bytes());
                                 let message = Message::WebSocketData {
@@ -690,7 +688,7 @@ async fn handle_http_request_parallel(
     headers: HashMap<String, String>,
     body: String,
 ) {
-    info!("📥 Processing HTTP request (parallel): {} {}", method, path);
+    info!("📥 Processing HTTP request: {} {}", method, path);
 
     // Forward request to local service
     let response = forward_request(
@@ -704,7 +702,7 @@ async fn handle_http_request_parallel(
 
     let response_message = match response {
         Ok((status, headers, body)) => {
-            info!("📤 Sending HTTP response (parallel): {}", status);
+            debug!("📤 Sending HTTP response: {}", status);
             Message::HttpResponse {
                 id,
                 status,
@@ -713,7 +711,7 @@ async fn handle_http_request_parallel(
             }
         }
         Err(e) => {
-            error!("❌ Failed to forward HTTP request (parallel): {}", e);
+            error!("❌ Failed to forward HTTP request: {}", e);
             Message::HttpResponse {
                 id,
                 status: 502,
@@ -807,7 +805,7 @@ async fn handle_websocket_data(
 
                 // Use connection method for proper error handling and logging
                 if connection.send_to_local(binary_data).await.is_ok() {
-                    connection.log_info(&format!("Forwarded {} bytes to local WebSocket", data_size));
+                    connection.log_debug(&format!("Forwarded {} bytes to local WebSocket", data_size));
                 } else {
                     // Connection method already logged the error
                     // Remove dead connection

@@ -37,8 +37,9 @@ pub trait DnsProvider: Send + Sync {
         sleep(Duration::from_secs(30)).await;
 
         // Verify propagation with retries
-        for attempt in 1..=20 {
-            info!("DNS propagation check {}/20", attempt);
+        const TOTAL_ATTEMPTS: i16 = 25;
+        for attempt in 1..=TOTAL_ATTEMPTS {
+            info!("DNS propagation check {}/{}", attempt, TOTAL_ATTEMPTS);
 
             match self.check_txt_record(domain, name, value).await {
                 Ok(true) => {

@@ -78,7 +78,6 @@ struct UnifiedService {
     config: ServerConfig,
     challenge_store: ChallengeStore,
     ssl_manager: Arc<RwLock<SslManager>>,
-    // Добавляем флаг для различения HTTP/HTTPS
     is_https: bool,
 }
 
@@ -282,7 +281,7 @@ pub async fn start_unified_https_server(
                 Ok(tls_stream) => {
                     let io = TokioIo::new(tls_stream);
 
-                    // HTTPS сервер с is_https = true
+                    // HTTPS server is_https = true
                     let service = UnifiedService {
                         tunnels,
                         pending_requests,

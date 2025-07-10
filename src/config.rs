@@ -67,7 +67,7 @@ impl Default for ServerSettings {
 pub enum RoutingMode {
     Path,      // /tunnel-id/path
     Subdomain, // tunnel-id.domain.com/path
-    Both,      // поддержка обоих
+    Both,      
 }
 
 impl Default for RoutingMode {
@@ -91,7 +91,7 @@ pub struct SslSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsProviderConfig {
     pub provider: String, // "digitalocean", "azure", etc.
-    pub config: serde_json::Value, // провайдер-специфичная конфигурация
+    pub config: serde_json::Value, 
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -167,7 +167,6 @@ impl Default for ClientConfig {
     }
 }
 
-// CLI аргументы остаются теми же...
 #[derive(Parser, Debug)]
 #[command(name = "exposeme-server")]
 #[command(about = "ExposeME tunneling server")]

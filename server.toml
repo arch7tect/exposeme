@@ -13,12 +13,12 @@ ws_bind = "0.0.0.0"
 ws_port = 8081
 
 # Domain name (required for HTTPS)
-domain = "exposeme2.arch7tect.org"
+domain = "localhost"
 routing_mode = "path"
 
 [ssl]
 # Enable HTTPS with automatic certificates
-enabled = true
+enabled = false
 wildcard=false
 
 # Certificate provider: "letsencrypt" or "manual"

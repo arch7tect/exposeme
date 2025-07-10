@@ -14,16 +14,52 @@ pub struct ServerConfig {
     pub limits: LimitSettings,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            server: ServerSettings::default(),
+            ssl: SslSettings {
+                enabled: false,
+                provider: SslProvider::LetsEncrypt,
+                email: "admin@example.com".to_string(),
+                staging: true,
+                cert_cache_dir: "/etc/exposeme-certs".to_string(),
+                wildcard: false, // Set to true for subdomain support
+                dns_provider: None, // Required for wildcard certificates
+            },
+            auth: AuthSettings {
+                tokens: vec!["dev".to_string()],
+            },
+            limits: LimitSettings {
+                max_tunnels: 50,
+                request_timeout_secs: 30,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerSettings {
     pub http_bind: String,
     pub http_port: u16,
     pub https_port: u16,
-    pub ws_bind: String,
-    pub ws_port: u16,
+    pub tunnel_path: String,
     pub domain: String,
     pub routing_mode: RoutingMode,
+}
+
+impl Default for ServerSettings {
+    fn default() -> Self {
+        Self {
+            http_bind: "0.0.0.0".to_string(),
+            http_port: 80,
+            https_port: 443,
+            tunnel_path: "/tunnel-ws".to_string(),  // ← This is what was missing!
+            domain: "localhost".to_string(),
+            routing_mode: RoutingMode::Path,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,38 +117,6 @@ pub struct AuthSettings {
 pub struct LimitSettings {
     pub max_tunnels: usize,
     pub request_timeout_secs: u64,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            server: ServerSettings {
-                http_bind: "0.0.0.0".to_string(),
-                http_port: 80,
-                https_port: 443,
-                ws_bind: "0.0.0.0".to_string(),
-                ws_port: 8081,
-                domain: "localhost".to_string(),
-                routing_mode: RoutingMode::Path, // Can be changed to RoutingMode::Both
-            },
-            ssl: SslSettings {
-                enabled: false,
-                provider: SslProvider::LetsEncrypt,
-                email: "admin@example.com".to_string(),
-                staging: true,
-                cert_cache_dir: "/etc/exposeme-certs".to_string(),
-                wildcard: false, // Set to true for subdomain support
-                dns_provider: None, // Required for wildcard certificates
-            },
-            auth: AuthSettings {
-                tokens: vec!["dev".to_string()],
-            },
-            limits: LimitSettings {
-                max_tunnels: 50,
-                request_timeout_secs: 30,
-            },
-        }
-    }
 }
 
 /// Client configuration
@@ -175,7 +179,7 @@ pub struct ServerArgs {
     #[arg(long)]
     pub https_port: Option<u16>,
     #[arg(long)]
-    pub ws_bind: Option<String>,
+    pub tunnel_path: Option<String>,
     #[arg(long)]
     pub ws_port: Option<u16>,
     #[arg(long)]
@@ -282,11 +286,8 @@ impl ServerConfig {
         if let Some(port) = args.https_port {
             config.server.https_port = port;
         }
-        if let Some(bind) = &args.ws_bind {
-            config.server.ws_bind = bind.clone();
-        }
-        if let Some(port) = args.ws_port {
-            config.server.ws_port = port;
+        if let Some(tunnel_path) = &args.tunnel_path {
+            config.server.tunnel_path = tunnel_path.clone();
         }
         if let Some(domain) = &args.domain {
             config.server.domain = domain.clone();
@@ -340,10 +341,8 @@ impl ServerConfig {
             }
         }
 
-        if let Ok(ws_port) = std::env::var("EXPOSEME_WS_PORT") {
-            if let Ok(port) = ws_port.parse::<u16>() {
-                config.server.ws_port = port;
-            }
+        if let Ok(tunnel_path) = std::env::var("EXPOSEME_TUNNEL_PATH") {
+            config.server.tunnel_path = tunnel_path;
         }
 
         // SSL settings
@@ -435,8 +434,17 @@ impl ServerConfig {
         format!("{}:{}", self.server.http_bind, self.server.https_port)
     }
 
-    pub fn ws_addr(&self) -> String {
-        format!("{}:{}", self.server.ws_bind, self.server.ws_port)
+    pub fn tunnel_url(&self) -> String {
+        format!("{}{}", self.public_url_base(), self.server.tunnel_path)
+    }
+
+    pub fn tunnel_ws_url(&self) -> String {
+        let base = if self.ssl.enabled {
+            format!("wss://{}", self.server.domain)
+        } else {
+            format!("ws://{}", self.server.domain)
+        };
+        format!("{}{}", base, self.server.tunnel_path)
     }
 
     pub fn public_url_base(&self) -> String {

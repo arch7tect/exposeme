@@ -1,18 +1,20 @@
 # client.toml - ExposeME Client Configuration
-# docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
+# docker run -it --rm -v ./config/client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
 
 [client]
 # Server WebSocket URL
-server_url = "wss://sip.flametree.dev.enfint.tech:8081"
+server_url = "wss://exposeme.arch7tect.org/tunnel-ws"
+#server_url = "ws://localhost/tunnel-ws"
 
 # Authentication token (must match server config)
-auth_token = "your-secure-token-here"
+auth_token = "AvoiQ6lrQ5avjoDc"
 
 # Tunnel identifier (choose unique name)
-tunnel_id = "my-dev-tunnel"
+tunnel_id = "my-tunnel"
 
 # Local service to forward requests to
-local_target = "http://host.docker.internal:8000"
+local_target = "http://host.docker.internal:3000"
+#local_target = "http://localhost:3000"
 
 # Auto-reconnect on connection loss
 auto_reconnect = true

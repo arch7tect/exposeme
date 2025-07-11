@@ -446,7 +446,7 @@ impl SslManager {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut attempts = 0;
         const MAX_ATTEMPTS: u32 = 120;
-        const RETRY_DELAY: u64 = 5;
+        const RETRY_DELAY: u64 = 10;
 
         loop {
             sleep(Duration::from_secs(RETRY_DELAY)).await;

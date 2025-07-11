@@ -9,7 +9,6 @@ services:
     ports:
       - "80:80"       # HTTP (ACME challenges + redirects)
       - "443:443"     # HTTPS
-      - "8081:8081"   # WebSocket
 
     volumes:
       # Server configuration

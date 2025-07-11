@@ -1,8 +1,10 @@
-// src/dns/providers/azure.rs
+// src/dns/providers/azure.rs - Updated with new interface
+
+use std::error::Error;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{info};
 
 use crate::dns::{DnsProvider, DnsProviderFactory, ConfigHelper};
 
@@ -97,7 +99,7 @@ impl AzureProvider {
     }
 
     /// Get Azure access token using Service Principal
-    async fn get_access_token(&mut self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    async fn get_access_token(&mut self) -> Result<String, Box<dyn Error + Send + Sync>> {
         // Check if current token is still valid
         if let (Some(token), Some(expires_at)) = (&self.access_token, self.token_expires_at) {
             if std::time::Instant::now() < expires_at {
@@ -105,7 +107,7 @@ impl AzureProvider {
             }
         }
 
-        info!("Obtaining Azure access token...");
+        info!("🔑 Obtaining Azure access token...");
 
         let token_url = format!(
             "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
@@ -140,139 +142,6 @@ impl AzureProvider {
         info!("✅ Azure access token obtained");
         Ok(token_response.access_token)
     }
-
-    /// Get the DNS zone name from a domain
-    async fn get_dns_zone(&mut self, domain: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let token = self.get_access_token().await?;
-
-        let zones_url = format!(
-            "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones?api-version=2018-05-01",
-            self.config.subscription_id,
-            self.config.resource_group
-        );
-
-        let response = self.client
-            .get(&zones_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Azure DNS zones list error: {}", error_text).into());
-        }
-
-        let zones_response: serde_json::Value = response.json().await?;
-
-        let mut best_match = None;
-        let mut best_length = 0;
-
-        if let Some(zones) = zones_response["value"].as_array() {
-            for zone in zones {
-                if let Some(zone_name) = zone["name"].as_str() {
-                    if domain.ends_with(zone_name) && zone_name.len() > best_length {
-                        best_match = Some(zone_name.to_string());
-                        best_length = zone_name.len();
-                    }
-                }
-            }
-        }
-
-        match best_match {
-            Some(zone) => {
-                info!("✅ Using Azure DNS zone: {}", zone);
-                Ok(zone)
-            }
-            None => Err(format!("No Azure DNS zone found for domain: {}", domain).into()),
-        }
-    }
-
-    /// Calculate record name relative to DNS zone
-    fn calculate_record_name(&self, domain: &str, zone: &str, record_prefix: &str) -> String {
-        if domain == zone {
-            record_prefix.to_string()
-        } else {
-            let subdomain = domain.strip_suffix(&format!(".{}", zone)).unwrap_or(domain);
-            if subdomain.is_empty() {
-                record_prefix.to_string()
-            } else {
-                format!("{}.{}", record_prefix, subdomain)
-            }
-        }
-    }
-
-    /// Clean up existing TXT records before creating new challenge record
-    async fn cleanup_existing_txt_records(&mut self, zone: &str, record_name: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("🧹 Cleaning up existing TXT records: {}.{}", record_name, zone);
-
-        let token = self.get_access_token().await?;
-
-        // List all TXT recordsets in the zone
-        let list_url = format!(
-            "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/recordsets?api-version=2018-05-01&$filter=recordType eq 'TXT'",
-            self.config.subscription_id,
-            self.config.resource_group,
-            zone
-        );
-
-        let response = self.client
-            .get(&list_url)
-            .header("Authorization", format!("Bearer {}", token))
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            warn!("⚠️  Failed to list DNS records for cleanup");
-            return Ok(()); // Don't fail the whole process for cleanup issues
-        }
-
-        let recordsets_response: RecordSetsResponse = response.json().await?;
-
-        // Find existing TXT records with matching name
-        let matching_records: Vec<&RecordSetInfo> = recordsets_response.value
-            .iter()
-            .filter(|record| {
-                record.record_type == "Microsoft.Network/dnszones/TXT" && record.name == record_name
-            })
-            .collect();
-
-        if matching_records.is_empty() {
-            info!("✅ No existing TXT records to clean up");
-            return Ok(());
-        }
-
-        info!("🗑️  Found {} existing TXT record(s) to clean up", matching_records.len());
-
-        // Delete each matching record
-        for record in matching_records {
-            info!("🗑️  Deleting old TXT record: {}", record.name);
-
-            let delete_url = format!(
-                "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/TXT/{}?api-version=2018-05-01",
-                self.config.subscription_id,
-                self.config.resource_group,
-                zone,
-                record.name
-            );
-
-            match self.client
-                .delete(&delete_url)
-                .header("Authorization", format!("Bearer {}", token))
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => {
-                    info!("✅ Deleted old TXT record: {}", record.name);
-                }
-                Ok(_) | Err(_) => {
-                    warn!("⚠️  Failed to delete old TXT record {}, continuing...", record.name);
-                }
-            }
-        }
-
-        info!("🧹 Cleanup completed");
-        Ok(())
-    }
 }
 
 impl ConfigHelper for AzureProvider {}
@@ -280,7 +149,7 @@ impl ConfigHelper for AzureProvider {}
 impl DnsProviderFactory for AzureProvider {
     fn create_with_config(
         toml_config: Option<&serde_json::Value>
-    ) -> Result<Box<dyn DnsProvider>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Box<dyn DnsProvider>, Box<dyn Error + Send + Sync>> {
 
         let subscription_id = Self::get_string_with_env(
             toml_config, "subscription_id", "EXPOSEME_AZURE_SUBSCRIPTION_ID"
@@ -323,22 +192,99 @@ impl DnsProviderFactory for AzureProvider {
 
 #[async_trait]
 impl DnsProvider for AzureProvider {
+    async fn list_domains(&mut self) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+        let token = self.get_access_token().await?;
+
+        let zones_url = format!(
+            "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones?api-version=2018-05-01",
+            self.config.subscription_id,
+            self.config.resource_group
+        );
+
+        let response = self.client
+            .get(&zones_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Azure DNS zones list error: {}", error_text).into());
+        }
+
+        let zones_response: serde_json::Value = response.json().await?;
+        if let Some(zones) = zones_response["value"].as_array() {
+            let mut zone_list = Vec::new();
+            for item in zones {
+                if let Some(s) = item.as_str() {
+                    zone_list.push(s.to_string());
+                } else {
+                    return Err(format!("Expected string in zones array, got: {:?}", item).into());
+                }
+            }
+            Ok(zone_list)
+        }
+        else {
+            Err("Azure DNS zones list error: Missing or invalid 'value' field in response".into())
+        }
+    }
+
+    async fn list_txt_records(
+        &mut self,
+        domain: &str,
+        name: &str,
+    ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+        let token = self.get_access_token().await?;
+        let zone = self.find_zone_for_domain(domain).await?;
+        let record_name = self.calculate_record_name(domain, &zone, name)?;
+
+        info!("📋 Listing TXT records: {} in zone {}", record_name, zone);
+
+        // List all TXT recordsets in the zone
+        let list_url = format!(
+            "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/recordsets?api-version=2018-05-01&$filter=recordType eq 'TXT'",
+            self.config.subscription_id,
+            self.config.resource_group,
+            zone
+        );
+
+        let response = self.client
+            .get(&list_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Azure DNS records list error: {}", error_text).into());
+        }
+
+        let recordsets_response: RecordSetsResponse = response.json().await?;
+
+        // Find existing TXT records with matching name and return their names (Azure uses names as IDs)
+        let matching_record_ids: Vec<String> = recordsets_response.value
+            .iter()
+            .filter(|record| {
+                record.record_type == "Microsoft.Network/dnszones/TXT" && record.name == record_name
+            })
+            .map(|record| record.name.clone())
+            .collect();
+
+        info!("📋 Found {} existing TXT records for {}", matching_record_ids.len(), record_name);
+        Ok(matching_record_ids)
+    }
+
     async fn create_txt_record(
         &mut self,
         domain: &str,
         name: &str,
         value: &str,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let token = self.get_access_token().await?;
-        let zone = self.get_dns_zone(domain).await?;
-        let record_name = self.calculate_record_name(domain, &zone, name);
+        let zone = self.find_zone_for_domain(domain).await?;
+        let record_name = self.calculate_record_name(domain, &zone, name)?;
 
-        // Clean up existing TXT records before creating new one
-        if let Err(e) = self.cleanup_existing_txt_records(&zone, &record_name).await {
-            warn!("⚠️  Cleanup failed (continuing anyway): {}", e);
-        }
-
-        info!("Creating TXT record: {}.{} = {}", record_name, zone, value);
+        info!("✨ Creating TXT record: {} in zone {} = {}", record_name, zone, value);
 
         let record_set = DnsRecordSet {
             properties: DnsRecordProperties {
@@ -368,29 +314,23 @@ impl DnsProvider for AzureProvider {
         }
 
         info!("✅ Created TXT record: {}", record_name);
-        Ok(format!("{}:{}", zone, record_name))
+        // Azure uses record name as ID
+        Ok(record_name)
     }
 
     async fn delete_txt_record(
         &mut self,
-        _domain: &str,
+        domain: &str,
         record_id: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let token = self.get_access_token().await?;
+        let zone = self.find_zone_for_domain(domain).await?;
 
-        let parts: Vec<&str> = record_id.split(':').collect();
-        if parts.len() != 2 {
-            return Err("Invalid Azure record ID format".into());
-        }
-
-        let zone = parts[0];
-        let record_name = parts[1];
-
-        info!("Deleting TXT record: {} from zone {}", record_name, zone);
+        info!("🗑️  Deleting TXT record {} from Azure DNS zone {}", record_id, zone);
 
         let url = format!(
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/TXT/{}?api-version=2018-05-01",
-            self.config.subscription_id, self.config.resource_group, zone, record_name
+            self.config.subscription_id, self.config.resource_group, zone, record_id
         );
 
         let response = self.client
@@ -401,13 +341,36 @@ impl DnsProvider for AzureProvider {
 
         if !response.status().is_success() {
             let error_text = response.text().await?;
-            warn!("⚠️  Failed to delete DNS record: {}", error_text);
             return Err(format!("Failed to delete record: {}", error_text).into());
         }
 
-        info!("✅ Deleted TXT record: {}", record_name);
+        info!("✅ Deleted TXT record {}", record_id);
         Ok(())
     }
+}
 
-    // wait_for_propagation and check_txt_record use default implementations from trait
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_record_name() {
+        let config = AzureConfig {
+            subscription_id: "test".to_string(),
+            resource_group: "test".to_string(),
+            client_id: "test".to_string(),
+            client_secret: "test".to_string(),
+            tenant_id: "test".to_string(),
+            timeout_seconds: None,
+        };
+        let provider = AzureProvider::new(config);
+
+        // Test base domain
+        let result = provider.calculate_record_name("example.com", "example.com", "_acme-challenge").unwrap();
+        assert_eq!(result, "_acme-challenge");
+
+        // Test subdomain
+        let result = provider.calculate_record_name("sub.example.com", "example.com", "_acme-challenge").unwrap();
+        assert_eq!(result, "_acme-challenge.sub");
+    }
 }

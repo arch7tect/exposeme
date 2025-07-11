@@ -126,6 +126,7 @@ impl SslManager {
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
 
         // Create cache directory
+        info!("Certificate cache directory: {:?}", fs::canonicalize(cache_dir)?);
         fs::create_dir_all(cache_dir)?;
 
         // Determine what domains to request
@@ -315,7 +316,7 @@ impl SslManager {
         order: &mut instant_acme::Order,
         auth: &instant_acme::Authorization,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Extract values before any borrows to avoid conflicts
+        // Extract domain information
         let domain = match &auth.identifier {
             Identifier::Dns(domain) => domain.clone(),
         };
@@ -328,7 +329,7 @@ impl SslManager {
 
         let record_name = "_acme-challenge";
 
-        info!("Setting up DNS-01 challenge for {}", domain);
+        info!("🔐 Setting up DNS-01 challenge for {}", domain);
 
         // Find DNS-01 challenge
         let challenge = auth
@@ -339,40 +340,47 @@ impl SslManager {
 
         // Calculate DNS record value
         let dns_value = order.key_authorization(challenge).dns_value();
+        info!("📝 Challenge: {}.{} = {}", record_name, record_domain, dns_value);
 
-        info!("Creating TXT record: {}.{} = {}", record_name, record_domain, dns_value);
-
-        // Step 1: Create DNS record (scoped mutable borrow)
+        // Store record_id for cleanup
         let record_id = {
             let dns_provider = self.dns_provider.as_mut()
                 .ok_or("DNS provider not configured for DNS-01 challenge")?;
-            dns_provider.create_txt_record(&record_domain, &record_name, &dns_value).await?
-        }; // mutable borrow ends here
 
-        // Step 2: Wait for DNS propagation (scoped mutable borrow)
-        {
-            let dns_provider = self.dns_provider.as_mut()
-                .ok_or("DNS provider not configured for DNS-01 challenge")?;
+            info!("🧹 Cleaning up existing TXT records...");
+            if let Err(e) = dns_provider.cleanup_txt_records(&record_domain, &record_name).await {
+                warn!("⚠️  Cleanup failed (continuing anyway): {}", e);
+            }
+
+            info!("✨ Creating challenge TXT record...");
+            let record_id = dns_provider.create_txt_record(&record_domain, &record_name, &dns_value).await?;
+
+            info!("⏳ Waiting for DNS propagation...");
             dns_provider.wait_for_propagation(&record_domain, &record_name, &dns_value).await?;
-        } // mutable borrow ends here
 
-        // Step 3: Notify Let's Encrypt
-        info!("Notifying Let's Encrypt that DNS challenge is ready...");
+            record_id
+        }; 
+
+        info!("📡 Notifying Let's Encrypt that DNS challenge is ready...");
         order.set_challenge_ready(&challenge.url).await?;
 
-        // Step 4: Wait for authorization (immutable borrow - now safe)
+        info!("⏳ Waiting for Let's Encrypt authorization...");
         let auth_result = self.wait_for_authorization(order, &domain).await;
 
-        // Step 5: Clean up DNS record (scoped mutable borrow)
-        info!("Cleaning up DNS record...");
+        info!("🗑️  Cleaning up challenge DNS record...");
         {
-            let dns_provider = self.dns_provider.as_mut()
-                .ok_or("DNS provider not configured for DNS-01 challenge")?;
-            if let Err(e) = dns_provider.delete_txt_record(&record_domain, &record_id).await {
-                warn!("Failed to clean up DNS record: {}", e);
+            // Scope the mutable borrow for cleanup
+            if let Some(dns_provider) = self.dns_provider.as_mut() {
+                if let Err(e) = dns_provider.delete_txt_record(&record_domain, &record_id).await {
+                    warn!("⚠️  Failed to clean up challenge record {}: {}", record_id, e);
+                    warn!("⚠️  You may need to manually remove the TXT record: {}.{}", record_name, record_domain);
+                } else {
+                    info!("✅ Challenge record cleaned up successfully");
+                }
             }
-        } // mutable borrow ends here
+        } 
 
+        // Return the authorization result
         auth_result
     }
     
@@ -440,7 +448,7 @@ impl SslManager {
         const MAX_ATTEMPTS: u32 = 60;
 
         loop {
-            sleep(Duration::from_secs(2)).await;
+            sleep(Duration::from_secs(5)).await;
             let order_state = order.state();
             info!("Certificate order status: {:?} for {}", order_state.status, domain);
 

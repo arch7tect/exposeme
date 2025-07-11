@@ -127,6 +127,8 @@ AZURE_RESOURCE_GROUP=your_resource_group
 AZURE_CLIENT_ID=your_client_id
 AZURE_CLIENT_SECRET=your_client_secret
 AZURE_TENANT_ID=your_tenant_id
+# OR for Hetzner
+HETZNER_TOKEN=your_hetzner_api_token
 
 EXPOSEME_AUTH_TOKEN=your_secure_auth_token
 ```
@@ -171,6 +173,10 @@ services:
       # - EXPOSEME_AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
       # - EXPOSEME_AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}
       # - EXPOSEME_AZURE_TENANT_ID=${AZURE_TENANT_ID}
+
+      # For Hetzner:
+      # - EXPOSEME_DNS_PROVIDER=hetzner
+      # - EXPOSEME_HETZNER_TOKEN=${HETZNER_TOKEN}
       
       # Authentication
       - EXPOSEME_AUTH_TOKEN=${EXPOSEME_AUTH_TOKEN}
@@ -220,7 +226,7 @@ wildcard = true  # Required for subdomain routing
 
 # DNS provider required ONLY for wildcard certificates:
 [ssl.dns_provider]
-provider = "digitalocean"  # or "azure"
+provider = "digitalocean"  # or "azure" or "hetzner"
 
 # DigitalOcean specific config (can be overridden by env vars):
 [ssl.dns_provider.config]
@@ -234,6 +240,11 @@ timeout_seconds = 30
 # client_id = "your-client-id"
 # client_secret = "your-client-secret"
 # tenant_id = "your-tenant-id"
+# timeout_seconds = 30
+
+# Hetzner specific config (uncomment if using Hetzner):
+# [ssl.dns_provider.config]
+# api_token = "your-hetzner-token-will-be-set-via-env"
 # timeout_seconds = 30
 
 [auth]
@@ -275,8 +286,8 @@ docker run -it --rm \
 ```
 
 3. **Access your service:**
-    - Subdomain: `https://my-app.your-domain.com/`
-    - Path-based: `https://your-domain.com/my-app/`
+   - Subdomain: `https://my-app.your-domain.com/`
+   - Path-based: `https://your-domain.com/my-app/`
 
 ## DNS Provider Setup
 
@@ -294,6 +305,18 @@ If you're using manual certificates or self-signed certificates, DNS providers a
    ```bash
    EXPOSEME_DNS_PROVIDER=digitalocean
    EXPOSEME_DIGITALOCEAN_TOKEN=your_do_token
+   ```
+
+### Hetzner DNS
+
+**Required for wildcard certificates only**
+
+1. **Create API token** at https://dns.hetzner.com/ (Console → API tokens)
+2. **Add your domain** to Hetzner DNS
+3. **Set environment variables:**
+   ```bash
+   EXPOSEME_DNS_PROVIDER=hetzner
+   EXPOSEME_HETZNER_TOKEN=your_hetzner_token
    ```
 
 ### Azure DNS
@@ -412,7 +435,7 @@ OPTIONS:
 | `[ssl]` | `provider` | Certificate source: `letsencrypt` (automatic), `manual` (your own), `selfsigned` (development) | `letsencrypt` |
 | `[ssl]` | `staging` | Use Let's Encrypt staging | `true` |
 | `[ssl]` | `cert_cache_dir` | Directory for storing certificates | `/etc/exposeme/certs` |
-| `[ssl.dns_provider]` | `provider` | DNS provider name (`digitalocean`, `azure`) | - |
+| `[ssl.dns_provider]` | `provider` | DNS provider name (`digitalocean`, `azure`, `hetzner`) | - |
 | `[auth]` | `tokens` | Authentication tokens | `["dev"]` |
 | `[limits]` | `max_tunnels` | Maximum concurrent tunnels | `50` |
 | `[limits]` | `request_timeout_secs` | HTTP request timeout in seconds | `30` |
@@ -441,7 +464,7 @@ OPTIONS:
 | `EXPOSEME_STAGING` | Use staging certificates                      | `false`                   |
 | `EXPOSEME_WILDCARD` | Enable wildcard certificates                  | `true`                    |
 | `EXPOSEME_ROUTING_MODE` | Routing mode                                  | `both`                    |
-| `EXPOSEME_DNS_PROVIDER` | DNS provider (only for wildcard certificates) | `digitalocean` or `azure` |
+| `EXPOSEME_DNS_PROVIDER` | DNS provider (only for wildcard certificates) | `digitalocean`, `azure`, or `hetzner` |
 | `EXPOSEME_AUTH_TOKEN` | Authentication token                          | `secure_token`            |
 | `EXPOSEME_REQUEST_TIMEOUT` | HTTP request timeout in seconds               | `30`                      |
 | `RUST_LOG` | Logging level (e.g., `info`, `debug`)                 | `info`                    |
@@ -461,13 +484,13 @@ curl http://your-domain.com/api/certificates/status
 Response:
 ```json
 {
-  "domain": "your-domain.com",
-  "exists": true,
-  "expiry_date": "2024-08-15T10:30:00Z",
-  "days_until_expiry": 45,
-  "needs_renewal": false,
-  "auto_renewal": true,
-  "wildcard": true
+   "domain": "your-domain.com",
+   "exists": true,
+   "expiry_date": "2024-08-15T10:30:00Z",
+   "days_until_expiry": 45,
+   "needs_renewal": false,
+   "auto_renewal": true,
+   "wildcard": true
 }
 ```
 

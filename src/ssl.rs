@@ -359,7 +359,7 @@ impl SslManager {
             dns_provider.wait_for_propagation(&record_domain, &record_name, &dns_value).await?;
 
             record_id
-        }; 
+        };
 
         info!("📡 Notifying Let's Encrypt that DNS challenge is ready...");
         order.set_challenge_ready(&challenge.url).await?;
@@ -378,7 +378,7 @@ impl SslManager {
                     info!("✅ Challenge record cleaned up successfully");
                 }
             }
-        } 
+        }
 
         // Return the authorization result
         auth_result
@@ -445,10 +445,11 @@ impl SslManager {
         domain: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut attempts = 0;
-        const MAX_ATTEMPTS: u32 = 60;
+        const MAX_ATTEMPTS: u32 = 120;
+        const RETRY_DELAY: u64 = 5;
 
         loop {
-            sleep(Duration::from_secs(5)).await;
+            sleep(Duration::from_secs(RETRY_DELAY)).await;
             let order_state = order.state();
             info!("Certificate order status: {:?} for {}", order_state.status, domain);
 

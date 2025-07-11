@@ -356,6 +356,7 @@ impl ServerConfig {
 
         if let Ok(staging) = std::env::var("EXPOSEME_STAGING") {
             config.ssl.staging = staging.parse().unwrap_or(false);
+            tracing::info!("Staging set from EXPOSEME_STAGING environment variable");
         }
 
         if let Ok(wildcard) = std::env::var("EXPOSEME_WILDCARD") {

@@ -50,7 +50,7 @@ Current implementation uses `body.collect().await` which loads entire request bo
 **Priority**: Medium  
 **Complexity**: Low-Medium
 
-Current support: DigitalOcean, Azure DNS  
+Current support: DigitalOcean, Azure DNS, Hetzner  
 **Planned providers**:
 - Cloudflare DNS
 - AWS Route53

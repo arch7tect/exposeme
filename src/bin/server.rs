@@ -34,6 +34,8 @@ async fn main() -> Result<(), BoxError> {
         info!("HTTPS server: {}", config.https_addr());
         info!("Domain: {}", config.server.domain);
         info!("SSL provider: {:?}", config.ssl.provider);
+        info!("Staging: {}", config.ssl.staging);
+        info!("DNS provider: {:?}", config.ssl.dns_provider);
     }
     info!("WebSocket server: {}", config.tunnel_ws_url());
     info!("Auth tokens: {} configured", config.auth.tokens.len());

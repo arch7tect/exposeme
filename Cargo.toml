@@ -1,6 +1,6 @@
 [package]
 name = "exposeme"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 authors = ["Oleg Orlov <arch7tect@gmail.com>"]
 description = "Secure HTTP tunneling service"
@@ -26,7 +26,7 @@ tokio = { version = "1.0", features = ["full"] }
 tokio-tungstenite = { version = "0.27.0", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
-# HTTP server/client - Updated for hyper 1.x
+# HTTP server/client
 hyper = { version = "1.6.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }  # Added for hyper 1.x compatibility
 http-body-util = "0.1"  # Added for body handling

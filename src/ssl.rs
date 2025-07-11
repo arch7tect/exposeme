@@ -391,7 +391,7 @@ impl SslManager {
         domain: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut attempts = 0;
-        const MAX_ATTEMPTS: u32 = 60;
+        const MAX_ATTEMPTS: u32 = 120;
         const RETRY_DELAY: u64 = 5;
 
         info!("Waiting for authorization for domain: {}", domain);

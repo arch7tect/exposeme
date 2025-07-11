@@ -143,9 +143,10 @@ pub trait DnsProvider: Send + Sync {
 
         sleep(Duration::from_secs(30)).await;
 
-        const TOTAL_ATTEMPTS: i16 = 25;
-        for attempt in 1..=TOTAL_ATTEMPTS {
-            info!("DNS propagation check {}/{}", attempt, TOTAL_ATTEMPTS);
+        const MAX_ATTEMPTS: u64 = 25;
+        const RETRY_DELAY: u64 = 15;
+        for attempt in 1..=MAX_ATTEMPTS {
+            info!("DNS propagation check {}/{}", attempt, MAX_ATTEMPTS);
 
             match self.check_txt_record(domain, name, value).await {
                 Ok(true) => {
@@ -153,12 +154,12 @@ pub trait DnsProvider: Send + Sync {
                     return Ok(());
                 }
                 Ok(false) => {
-                    if attempt < 20 {
-                        info!("⏳ DNS not yet propagated, waiting 15 seconds...");
-                        sleep(Duration::from_secs(15)).await;
+                    if attempt < MAX_ATTEMPTS {
+                        info!("⏳ DNS not yet propagated, waiting {} seconds...", RETRY_DELAY);
+                        sleep(Duration::from_secs(RETRY_DELAY)).await;
                         continue;
                     } else {
-                        warn!("⚠️  DNS propagation not confirmed after 5 minutes, proceeding anyway");
+                        warn!("⚠️  DNS propagation not confirmed after {} minutes, proceeding anyway", MAX_ATTEMPTS*RETRY_DELAY/60);
                         return Ok(());
                     }
                 }

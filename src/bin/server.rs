@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock};
 use tracing::{error, info};
-use exposeme::unified_svc::{BoxError, TunnelMap, PendingRequests, ActiveWebSockets, start_unified_http_server, start_unified_https_server};
+use exposeme::svc::{BoxError, TunnelMap, PendingRequests, ActiveWebSockets, start_http_server, start_https_server};
 
 #[tokio::main]
 async fn main() -> Result<(), BoxError> {
@@ -59,7 +59,7 @@ async fn main() -> Result<(), BoxError> {
 
     // Start HTTP server (for redirects and ACME challenges)
     let http_handle = tokio::spawn(async move {
-        if let Err(e) = start_unified_http_server(
+        if let Err(e) = start_http_server(
             config_http,
             tunnels_http,
             pending_requests_http,
@@ -86,7 +86,7 @@ async fn main() -> Result<(), BoxError> {
         let ssl_manager_https = ssl_manager.clone();
 
         Some(tokio::spawn(async move {
-            if let Err(e) = start_unified_https_server(
+            if let Err(e) = start_https_server(
                 config_https,
                 tunnels_https,
                 pending_requests_https,

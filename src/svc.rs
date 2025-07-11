@@ -215,7 +215,7 @@ async fn handle_unified_request(
     }
 }
 
-pub async fn start_unified_http_server(
+pub async fn start_http_server(
     config: ServerConfig,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,
@@ -253,7 +253,7 @@ pub async fn start_unified_http_server(
     }
 }
 
-pub async fn start_unified_https_server(
+pub async fn start_https_server(
     config: ServerConfig,
     tunnels: TunnelMap,
     pending_requests: PendingRequests,

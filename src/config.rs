@@ -169,69 +169,69 @@ impl Default for ClientConfig {
 
 #[derive(Parser, Debug)]
 #[command(name = "exposeme-server")]
-#[command(about = "ExposeME tunneling server")]
+#[command(about = "ExposeME tunneling server - expose local services through WebSocket tunnels")]
+#[command(long_about = "A secure HTTP tunneling server that forwards requests to connected clients via WebSocket connections. Supports automatic SSL certificates, multiple routing modes, and DNS providers.")]
 pub struct ServerArgs {
-    #[arg(short, long, default_value = "server.toml")]
+    #[arg(short, long, default_value = "server.toml", help = "Path to TOML configuration file")]
     pub config: PathBuf,
-    #[arg(long)]
+    #[arg(long, help = "HTTP server bind address (overrides config)")]
     pub http_bind: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "HTTP port for redirects and ACME challenges (overrides config)")]
     pub http_port: Option<u16>,
-    #[arg(long)]
+    #[arg(long, help = "HTTPS port for secure connections (overrides config)")]
     pub https_port: Option<u16>,
-    #[arg(long)]
+    #[arg(long, help = "WebSocket upgrade path for tunnel connections (overrides config)")]
     pub tunnel_path: Option<String>,
-    #[arg(long)]
-    pub ws_port: Option<u16>,
-    #[arg(long)]
+    #[arg(long, help = "Server domain name for SSL certificates (overrides config)")]
     pub domain: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Force enable HTTPS (overrides config)")]
     pub enable_https: bool,
-    #[arg(long)]
+    #[arg(long, help = "Force disable HTTPS, run HTTP only (overrides config)")]
     pub disable_https: bool,
-    #[arg(long)]
+    #[arg(long, help = "Contact email for Let's Encrypt certificates (overrides config)")]
     pub email: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Use Let's Encrypt staging environment for testing (overrides config)")]
     pub staging: bool,
-    #[arg(long)]
+    #[arg(long, help = "Generate default configuration file and exit")]
     pub generate_config: bool,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Enable verbose debug logging")]
     pub verbose: bool,
-    #[arg(long)]
+    #[arg(long, help = "Enable wildcard SSL certificates for subdomain routing (overrides config)")]
     pub wildcard: bool,
-    #[arg(long)]
+    #[arg(long, help = "Routing mode: 'path', 'subdomain', or 'both' (overrides config)")]
     pub routing_mode: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "HTTP request timeout in seconds (overrides config)")]
     pub request_timeout: Option<u64>,
 }
 
 #[derive(Parser, Debug)]
 #[command(name = "exposeme-client")]
-#[command(about = "ExposeME tunneling client")]
+#[command(about = "ExposeME tunneling client - connect local services to ExposeME server")]
+#[command(long_about = "A client that creates secure tunnels by connecting to an ExposeME server via WebSocket. Forwards HTTP and WebSocket requests from the server to your local services.")]
 pub struct ClientArgs {
-    #[arg(short, long, default_value = "client.toml")]
+    #[arg(short, long, default_value = "client.toml", help = "Path to TOML configuration file")]
     pub config: PathBuf,
-    #[arg(short, long)]
+    #[arg(short, long, help = "WebSocket server URL (e.g. wss://example.com/tunnel-ws)")]
     pub server_url: Option<String>,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Authentication token for server access")]
     pub token: Option<String>,
-    #[arg(short = 'T', long)]
+    #[arg(short = 'T', long, help = "Unique tunnel identifier (alphanumeric, hyphens allowed)")]
     pub tunnel_id: Option<String>,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Local service URL to forward requests to (e.g. http://localhost:3000)")]
     pub local_target: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Generate default configuration file and exit")]
     pub generate_config: bool,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Enable verbose debug logging")]
     pub verbose: bool,
-    #[arg(long, help = "Skip TLS certificate verification (insecure, for self-signed certificates)")]
-    pub insecure: bool, 
+    #[arg(long, help = "Skip TLS certificate verification (INSECURE: development only)")]
+    pub insecure: bool,
     #[arg(long, help = "WebSocket cleanup check interval in seconds")]
     pub websocket_cleanup_interval: Option<u64>,
     #[arg(long, help = "WebSocket connection timeout in seconds")]
     pub websocket_connection_timeout: Option<u64>,
-    #[arg(long, help = "WebSocket maximum connection idle in seconds")]
+    #[arg(long, help = "WebSocket maximum idle time before cleanup in seconds")]
     pub websocket_max_idle: Option<u64>,
-    #[arg(long, help = "WebSocket monitoring interval in seconds")]
+    #[arg(long, help = "WebSocket connection monitoring interval in seconds")]
     pub websocket_monitoring_interval: Option<u64>,
 }
 

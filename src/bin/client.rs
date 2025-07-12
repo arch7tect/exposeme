@@ -287,7 +287,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
             let current_count = cleanup_websockets.read().await.len();
             if current_count > 0 || cleaned > 0 {
                 info!(
-                    "🔌 WebSocket status: {} active connections, {} cleaned up (max_age: {}s, check_interval: {}s)",
+                    "🔌 WebSocket status: {} active connections, {} cleaned up (max_idle: {}s, check_interval: {}s)",
                     current_count,
                     cleaned,
                     max_connection_idle.as_secs(),

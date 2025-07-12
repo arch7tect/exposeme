@@ -41,7 +41,7 @@ timeout_seconds = 30
 # Tokens for client authorization
 # Will be overridden by environment variables in production
 tokens = [
-    "AvoiQ671rQ5avjoDc"
+    "AvoiQ6lrQ5avjoDc"
 ]
 
 [limits]

@@ -350,7 +350,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                             let local_target = config.client.local_target.clone();
                             let to_server_tx = to_server_tx.clone();
                             let active_websockets = active_websockets.clone();
-                            let config = config.clone();  // CLONE config for the task
+                            let config = config.clone();
 
                             tokio::spawn(async move {
                                 handle_websocket_upgrade(

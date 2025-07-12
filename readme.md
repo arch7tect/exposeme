@@ -114,6 +114,18 @@ ExposeME can create its own certificate for local development. Browsers will sho
 
 ## Quick Start
 
+### DNS Setup (Required First)
+
+Configure DNS records for your domain:
+
+**Required:**
+- `your-domain.com` → `your-server-ip` (A record)
+
+**For subdomain routing:**
+- `*.your-domain.com` → `your-server-ip` (A record)
+
+Wait for DNS propagation before proceeding (test with `nslookup your-domain.com`).
+
 ### Server Setup with Docker Compose
 
 1. **Create environment file:**
@@ -253,6 +265,12 @@ tokens = ["dev"]  # Will be overridden by environment
 [limits]
 max_tunnels = 100
 request_timeout_secs = 30
+```
+
+3. **Create certificate directory:**
+
+```bash
+mkdir -p ./certs
 ```
 
 4. **Start the server:**
@@ -531,33 +549,16 @@ docker build -t exposeme-client --target client .
 
 ## Troubleshooting
 
-### View Logs
-```bash
-# Server logs
-docker-compose logs -f exposeme-server
+**DNS issues:** Verify `nslookup your-domain.com` resolves to your server IP
 
-# Client logs
-docker logs -f client-container-name
+**Permission denied:**
+```bash
+docker exec -it exposeme-server id  # Check UID
+sudo chown -R <uid>:<gid> ./certs
+docker-compose restart
 ```
 
-### Certificate Management
-
-**Check certificate status:**
-```bash
-curl http://your-domain.com/api/certificates/status
-```
-
-**Manual certificate placement:**
-```bash
-# Place certificates in cert cache directory with correct names
-# For domain "example.com":
-/etc/exposeme/certs/example-com.pem
-/etc/exposeme/certs/example-com.key
-
-# For wildcard certificate:
-/etc/exposeme/certs/wildcard-example-com.pem
-/etc/exposeme/certs/wildcard-example-com.key
-```
+**View logs:** `docker-compose logs -f exposeme-server`
 
 ### Self-Signed Certificates
 

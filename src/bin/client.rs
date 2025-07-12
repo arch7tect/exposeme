@@ -277,7 +277,6 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
         loop {
             interval.tick().await;
 
-            // Clean up connections older than 10 minutes
             let cleaned = cleanup_expired_connections(
                 cleanup_websockets.clone(),
                 max_connection_idle

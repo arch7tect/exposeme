@@ -149,7 +149,7 @@ services:
 
     volumes:
       - ./config/server.toml:/etc/exposeme/server.toml:ro
-      - ./exposeme-certs:/etc/exposeme/certs:rw
+      - ./certs:/etc/exposeme/certs:rw
 
     environment:
       # Domain configuration

@@ -525,20 +525,64 @@ impl SslManager {
 
         let cert_path = Path::new(&cert_cache_dir).join(format!("{}.pem", cert_filename));
         let key_path = Path::new(&cert_cache_dir).join(format!("{}.key", cert_filename));
+        let cert_backup_path = Path::new(&cert_cache_dir).join(format!("{}.pem.backup", cert_filename));
+        let key_backup_path = Path::new(&cert_cache_dir).join(format!("{}.key.backup", cert_filename));
+
+        // Create backup copies of existing certificates
+        let has_backup = if cert_path.exists() && key_path.exists() {
+            match (fs::copy(&cert_path, &cert_backup_path), fs::copy(&key_path, &key_backup_path)) {
+                (Ok(_), Ok(_)) => {
+                    info!("📦 Created certificate backup for {}", domain);
+                    true
+                }
+                _ => {
+                    warn!("Failed to create certificate backup, proceeding without backup");
+                    false
+                }
+            }
+        } else {
+            false
+        };
 
         // Remove existing certificates
         if cert_path.exists() { fs::remove_file(&cert_path)?; }
         if key_path.exists() { fs::remove_file(&key_path)?; }
 
-        // Generate new certificate
-        let new_config = match ssl_provider {
-            SslProvider::LetsEncrypt => self.setup_letsencrypt().await?,
-            SslProvider::SelfSigned => self.generate_self_signed()?,
-            _ => return Err(format!("Unsupported SSL provider for renewal: {:?}", ssl_provider).into()),
+        // Try to generate new certificate
+        let renewal_result = match ssl_provider {
+            SslProvider::LetsEncrypt => self.setup_letsencrypt().await,
+            SslProvider::SelfSigned => self.generate_self_signed(),
+            _ => Err(format!("Unsupported SSL provider for renewal: {:?}", ssl_provider).into()),
         };
 
-        self.rustls_config = Some(Arc::new(new_config));
-        info!("✅ Certificate renewal completed for {}", domain);
-        Ok(())
+        match renewal_result {
+            Ok(new_config) => {
+                // Renewal successful
+                self.rustls_config = Some(Arc::new(new_config));
+                info!("✅ Certificate renewal completed for {}", domain);
+                Ok(())
+            }
+            Err(e) => {
+                // Renewal failed - restore from backup if available
+                if has_backup {
+                    match (fs::copy(&cert_backup_path, &cert_path), fs::copy(&key_backup_path, &key_path)) {
+                        (Ok(_), Ok(_)) => {
+                            info!("🔄 Restored certificate from backup after renewal failure");
+
+                            if let Ok(restored_config) = self.load_certificates(&cert_path, &key_path) {
+                                self.rustls_config = Some(Arc::new(restored_config));
+                                info!("✅ Successfully restored working certificates");
+                            }
+                        }
+                        _ => {
+                            warn!("Failed to restore certificate backup");
+                        }
+                    }
+                }
+
+                error!("❌ Certificate renewal failed for {}: {}", domain, e);
+                Err(format!("Certificate renewal failed: {}", e).into())
+            }
+        }
     }
 }

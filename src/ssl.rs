@@ -263,7 +263,13 @@ impl SslManager {
 
             // Create record and wait for propagation
             let record_id = dns_provider.create_txt_record(&record_domain, record_name, &dns_value).await?;
-            dns_provider.wait_for_propagation(&record_domain, record_name, &dns_value).await?;
+            if let Err(e) = dns_provider.wait_for_propagation(&record_domain, record_name, &dns_value).await {
+                error!("DNS propagation failed: {}", e);
+                if let Err(e) = dns_provider.delete_txt_record(&record_domain, &record_id).await {
+                    warn!("Failed to cleanup DNS record {}: {}", record_id, e);
+                }
+                return Err(e);
+            }
             record_id
         };
 

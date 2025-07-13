@@ -268,8 +268,12 @@ impl SslManager {
         };
 
         // Notify Let's Encrypt and wait for authorization
-        order.set_challenge_ready(&challenge.url).await?;
-        self.wait_for_authorization(order, &domain).await?;
+        if let Err(e) = order.set_challenge_ready(&challenge.url).await {
+            error!("Setting challenge ready failed: {}", e);
+        }
+        else if let Err(e) = self.wait_for_authorization(order, &domain).await {
+            error!("Waiting for authorization failed: {}", e);
+        }
 
         // Cleanup
         if let Some(dns_provider) = self.dns_provider.as_mut() {
@@ -295,9 +299,15 @@ impl SslManager {
         }
 
         // Notify and wait
-        order.set_challenge_ready(&challenge.url).await?;
-        let domain = match &auth.identifier { Identifier::Dns(domain) => domain };
-        self.wait_for_authorization(order, domain).await?;
+        if let Err(e) = order.set_challenge_ready(&challenge.url).await {
+            error!("Failed to set challenge ready: {}", e);
+        }
+        else {
+            let domain = match &auth.identifier { Identifier::Dns(domain) => domain };
+            if let Err(e) = self.wait_for_authorization(order, domain).await {
+                error!("Failed to wait for authorization: {}", e);
+            }
+        }
 
         // Cleanup
         {

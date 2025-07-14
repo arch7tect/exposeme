@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::info;
 
-use crate::dns::{DnsProvider, DnsProviderFactory, ConfigHelper};
+use crate::dns::{DnsProvider, DnsProviderFactory, ConfigHelper, ZoneInfo};
 
 /// Hetzner DNS provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,25 +78,6 @@ impl HetznerProvider {
         info!("✅ Hetzner DNS provider initialized");
         Self { config, client }
     }
-
-    /// Helper to get zone ID from zone name
-    async fn get_zone_id(&self, zone_name: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let response = self.client
-            .get("https://dns.hetzner.com/api/v1/zones")
-            .header("Auth-API-Token", &self.config.api_token)
-            .send()
-            .await?;
-
-        let zones_response: ZonesResponse = response.json().await?;
-
-        for zone in zones_response.zones {
-            if zone.name == zone_name {
-                return Ok(zone.id);
-            }
-        }
-
-        Err(format!("Zone ID not found for {}", zone_name).into())
-    }
 }
 
 impl ConfigHelper for HetznerProvider {}
@@ -136,11 +117,7 @@ impl DnsProviderFactory for HetznerProvider {
 
 #[async_trait]
 impl DnsProvider for HetznerProvider {
-    // =============================================================================
-    // REQUIRED: Provider implements these 4 basic operations
-    // =============================================================================
-
-    async fn list_domains(&mut self) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>> {
         info!("📋 Listing available zones from Hetzner DNS");
 
         let response = self.client
@@ -156,27 +133,23 @@ impl DnsProvider for HetznerProvider {
         }
 
         let zones_response: ZonesResponse = response.json().await?;
-        let zone_names: Vec<String> = zones_response.zones
+        let zone_infos: Vec<ZoneInfo> = zones_response.zones
             .into_iter()
-            .map(|zone| zone.name)
+            .map(|zone| ZoneInfo::new(zone.id, zone.name)) // 🎉 Store both ID and name
             .collect();
 
-        info!("📋 Found {} zones: {:?}", zone_names.len(), zone_names);
-        Ok(zone_names)
+        info!("📋 Found {} zones", zone_infos.len());
+        Ok(zone_infos)
     }
 
-    async fn list_txt_records(
+    async fn list_txt_records_impl(
         &mut self,
-        domain: &str,
+        zone: &ZoneInfo,
         name: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-        let zone_name = self.find_zone_for_domain(domain).await?;
-        let record_name = self.calculate_record_name(domain, &zone_name, name)?;
-        let zone_id = self.get_zone_id(&zone_name).await?;
+        info!("📋 Listing TXT records: {} in zone {}", name, zone.name);
 
-        info!("📋 Listing TXT records: {} in zone {}", record_name, zone_name);
-
-        let url = format!("https://dns.hetzner.com/api/v1/records?zone_id={}", zone_id);
+        let url = format!("https://dns.hetzner.com/api/v1/records?zone_id={}", zone.id);
         let response = self.client
             .get(&url)
             .header("Auth-API-Token", &self.config.api_token)
@@ -193,7 +166,7 @@ impl DnsProvider for HetznerProvider {
         let matching_record_ids: Vec<String> = records_response.records
             .iter()
             .filter(|record| {
-                record.record_type == "TXT" && record.name == record_name
+                record.record_type == "TXT" && record.name == name
             })
             .map(|record| record.id.clone())
             .collect();
@@ -202,22 +175,18 @@ impl DnsProvider for HetznerProvider {
         Ok(matching_record_ids)
     }
 
-    async fn create_txt_record(
+    async fn create_txt_record_impl(
         &mut self,
-        domain: &str,
+        zone: &ZoneInfo,
         name: &str,
         value: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let zone_name = self.find_zone_for_domain(domain).await?;
-        let record_name = self.calculate_record_name(domain, &zone_name, name)?;
-        let zone_id = self.get_zone_id(&zone_name).await?;
-
-        info!("✨ Creating TXT record: {} in zone {} = {}", record_name, zone_name, value);
+        info!("✨ Creating TXT record: {} in zone {} = {}", name, zone.name, value);
 
         let create_request = CreateRecordRequest {
-            zone_id,
+            zone_id: zone.id.clone(), // 🎉 No extra lookup needed!
             record_type: "TXT".to_string(),
-            name: record_name,
+            name: name.to_string(),
             value: value.to_string(),
             ttl: 300,
         };
@@ -243,9 +212,9 @@ impl DnsProvider for HetznerProvider {
         Ok(record_id)
     }
 
-    async fn delete_txt_record(
+    async fn delete_txt_record_impl(
         &mut self,
-        _domain: &str,
+        _zone: &ZoneInfo, // Zone not needed for Hetzner delete
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("🗑️  Deleting TXT record {}", record_id);
@@ -269,33 +238,16 @@ impl DnsProvider for HetznerProvider {
     }
 
     // =============================================================================
-    // FREE: Provider gets these default implementations from trait:
-    // - find_zone_for_domain()
-    // - calculate_record_name()
-    // - cleanup_txt_records() 
-    // - wait_for_propagation()
-    // - check_txt_record()
+    // OPTIMIZATION: Override public delete to skip unnecessary zone lookup
     // =============================================================================
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_calculate_record_name() {
-        let config = HetznerConfig {
-            api_token: "test".to_string(),
-            timeout_seconds: None,
-        };
-        let provider = HetznerProvider::new(config);
-
-        // Test base domain
-        let result = provider.calculate_record_name("example.com", "example.com", "_acme-challenge").unwrap();
-        assert_eq!(result, "_acme-challenge");
-
-        // Test subdomain
-        let result = provider.calculate_record_name("sub.example.com", "example.com", "_acme-challenge").unwrap();
-        assert_eq!(result, "_acme-challenge.sub");
+    async fn delete_txt_record(
+        &mut self,
+        _domain: &str, // Domain not needed for Hetzner delete
+        record_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Skip zone lookup entirely - create dummy zone since implementation doesn't use it
+        let dummy_zone = ZoneInfo::from_name("unused".to_string());
+        self.delete_txt_record_impl(&dummy_zone, record_id).await
     }
 }

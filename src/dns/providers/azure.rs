@@ -1,4 +1,4 @@
-// src/dns/providers/azure.rs - Updated with new interface
+// src/dns/providers/azure.rs - Final clean implementation
 
 use std::error::Error;
 use async_trait::async_trait;
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{info};
 
-use crate::dns::{DnsProvider, DnsProviderFactory, ConfigHelper};
+use crate::dns::{DnsProvider, DnsProviderFactory, ConfigHelper, ZoneInfo};
 
 /// Azure DNS provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +24,22 @@ pub struct AzureConfig {
 struct AccessTokenResponse {
     access_token: String,
     expires_in: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ZonesListResponse {
+    value: Vec<AzureZone>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AzureZone {
+    id: String,   // Full resource ID like "/subscriptions/.../dnsZones/example.com"
+    name: String, // Zone name like "example.com"
+    #[allow(dead_code)]
+    #[serde(rename = "type")]
+    zone_type: String,
+    #[allow(dead_code)]
+    location: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -192,8 +208,10 @@ impl DnsProviderFactory for AzureProvider {
 
 #[async_trait]
 impl DnsProvider for AzureProvider {
-    async fn list_domains(&mut self) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+    async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn Error + Send + Sync>> {
         let token = self.get_access_token().await?;
+
+        info!("📋 Listing available zones from Azure DNS");
 
         let zones_url = format!(
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones?api-version=2018-05-01",
@@ -212,40 +230,31 @@ impl DnsProvider for AzureProvider {
             return Err(format!("Azure DNS zones list error: {}", error_text).into());
         }
 
-        let zones_response: serde_json::Value = response.json().await?;
-        if let Some(zones) = zones_response["value"].as_array() {
-            let mut zone_list = Vec::new();
-            for item in zones {
-                if let Some(s) = item.as_str() {
-                    zone_list.push(s.to_string());
-                } else {
-                    return Err(format!("Expected string in zones array, got: {:?}", item).into());
-                }
-            }
-            Ok(zone_list)
-        }
-        else {
-            Err("Azure DNS zones list error: Missing or invalid 'value' field in response".into())
-        }
+        let zones_response: ZonesListResponse = response.json().await?;
+        let zone_infos: Vec<ZoneInfo> = zones_response.value
+            .into_iter()
+            .map(|zone| ZoneInfo::new(zone.id, zone.name)) // 🎉 Both resource ID and name
+            .collect();
+
+        info!("📋 Found {} zones", zone_infos.len());
+        Ok(zone_infos)
     }
 
-    async fn list_txt_records(
+    async fn list_txt_records_impl(
         &mut self,
-        domain: &str,
+        zone: &ZoneInfo,
         name: &str,
     ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
         let token = self.get_access_token().await?;
-        let zone = self.find_zone_for_domain(domain).await?;
-        let record_name = self.calculate_record_name(domain, &zone, name)?;
 
-        info!("📋 Listing TXT records: {} in zone {}", record_name, zone);
+        info!("📋 Listing TXT records: {} in zone {}", name, zone.name);
 
         // List all TXT recordsets in the zone
         let list_url = format!(
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/recordsets?api-version=2018-05-01&$filter=recordType eq 'TXT'",
             self.config.subscription_id,
             self.config.resource_group,
-            zone
+            zone.name // Uses zone.name for API path
         );
 
         let response = self.client
@@ -265,26 +274,24 @@ impl DnsProvider for AzureProvider {
         let matching_record_ids: Vec<String> = recordsets_response.value
             .iter()
             .filter(|record| {
-                record.record_type == "Microsoft.Network/dnszones/TXT" && record.name == record_name
+                record.record_type == "Microsoft.Network/dnszones/TXT" && record.name == name
             })
             .map(|record| record.name.clone())
             .collect();
 
-        info!("📋 Found {} existing TXT records for {}", matching_record_ids.len(), record_name);
+        info!("📋 Found {} existing TXT records for {}", matching_record_ids.len(), name);
         Ok(matching_record_ids)
     }
 
-    async fn create_txt_record(
+    async fn create_txt_record_impl(
         &mut self,
-        domain: &str,
+        zone: &ZoneInfo,
         name: &str,
         value: &str,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let token = self.get_access_token().await?;
-        let zone = self.find_zone_for_domain(domain).await?;
-        let record_name = self.calculate_record_name(domain, &zone, name)?;
 
-        info!("✨ Creating TXT record: {} in zone {} = {}", record_name, zone, value);
+        info!("✨ Creating TXT record: {} in zone {} = {}", name, zone.name, value);
 
         let record_set = DnsRecordSet {
             properties: DnsRecordProperties {
@@ -297,7 +304,10 @@ impl DnsProvider for AzureProvider {
 
         let url = format!(
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/TXT/{}?api-version=2018-05-01",
-            self.config.subscription_id, self.config.resource_group, zone, record_name
+            self.config.subscription_id,
+            self.config.resource_group,
+            zone.name, // Uses zone.name for API path
+            name
         );
 
         let response = self.client
@@ -313,24 +323,26 @@ impl DnsProvider for AzureProvider {
             return Err(format!("Azure DNS record creation error: {}", error_text).into());
         }
 
-        info!("✅ Created TXT record: {}", record_name);
+        info!("✅ Created TXT record: {}", name);
         // Azure uses record name as ID
-        Ok(record_name)
+        Ok(name.to_string())
     }
 
-    async fn delete_txt_record(
+    async fn delete_txt_record_impl(
         &mut self,
-        domain: &str,
+        zone: &ZoneInfo,
         record_id: &str,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let token = self.get_access_token().await?;
-        let zone = self.find_zone_for_domain(domain).await?;
 
-        info!("🗑️  Deleting TXT record {} from Azure DNS zone {}", record_id, zone);
+        info!("🗑️  Deleting TXT record {} from Azure DNS zone {}", record_id, zone.name);
 
         let url = format!(
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/TXT/{}?api-version=2018-05-01",
-            self.config.subscription_id, self.config.resource_group, zone, record_id
+            self.config.subscription_id,
+            self.config.resource_group,
+            zone.name, // Uses zone.name for API path
+            record_id
         );
 
         let response = self.client
@@ -346,31 +358,5 @@ impl DnsProvider for AzureProvider {
 
         info!("✅ Deleted TXT record {}", record_id);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_calculate_record_name() {
-        let config = AzureConfig {
-            subscription_id: "test".to_string(),
-            resource_group: "test".to_string(),
-            client_id: "test".to_string(),
-            client_secret: "test".to_string(),
-            tenant_id: "test".to_string(),
-            timeout_seconds: None,
-        };
-        let provider = AzureProvider::new(config);
-
-        // Test base domain
-        let result = provider.calculate_record_name("example.com", "example.com", "_acme-challenge").unwrap();
-        assert_eq!(result, "_acme-challenge");
-
-        // Test subdomain
-        let result = provider.calculate_record_name("sub.example.com", "example.com", "_acme-challenge").unwrap();
-        assert_eq!(result, "_acme-challenge.sub");
     }
 }

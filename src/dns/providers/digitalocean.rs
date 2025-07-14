@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::info;
 
-use crate::dns::{ConfigHelper, DnsProvider, DnsProviderFactory};
+use crate::dns::{ConfigHelper, DnsProvider, DnsProviderFactory, ZoneInfo};
 
 /// DigitalOcean DNS provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,7 +112,7 @@ impl DnsProviderFactory for DigitalOceanProvider {
 
 #[async_trait]
 impl DnsProvider for DigitalOceanProvider {
-    async fn list_domains(&mut self) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>> {
         info!("📋 Listing available domains from DigitalOcean");
 
         let response = self.client
@@ -128,26 +128,23 @@ impl DnsProvider for DigitalOceanProvider {
         }
 
         let domains_response: DomainsResponse = response.json().await?;
-        let domain_names: Vec<String> = domains_response.domains
+        let zone_infos: Vec<ZoneInfo> = domains_response.domains
             .into_iter()
-            .map(|domain| domain.name)
+            .map(|domain| ZoneInfo::from_name(domain.name)) // 🎉 ID = name for DigitalOcean
             .collect();
 
-        info!("📋 Found {} domains: {:?}", domain_names.len(), domain_names);
-        Ok(domain_names)
+        info!("📋 Found {} domains", zone_infos.len());
+        Ok(zone_infos)
     }
 
-    async fn list_txt_records(
+    async fn list_txt_records_impl(
         &mut self,
-        domain: &str,
+        zone: &ZoneInfo,
         name: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-        let base_domain = self.find_zone_for_domain(domain).await?;
-        let record_name = self.calculate_record_name(domain, &base_domain, name)?;
+        info!("📋 Listing TXT records: {} in domain {}", name, zone.name);
 
-        info!("📋 Listing TXT records: {} in domain {}", record_name, base_domain);
-
-        let url = format!("https://api.digitalocean.com/v2/domains/{}/records", base_domain);
+        let url = format!("https://api.digitalocean.com/v2/domains/{}/records", zone.name);
         let response = self.client
             .get(&url)
             .header("Authorization", format!("Bearer {}", self.config.api_token))
@@ -164,7 +161,7 @@ impl DnsProvider for DigitalOceanProvider {
         let matching_record_ids: Vec<String> = records_response.domain_records
             .iter()
             .filter(|record| {
-                record.record_type == "TXT" && record.name == record_name
+                record.record_type == "TXT" && record.name == name
             })
             .filter_map(|record| record.id.map(|id| id.to_string()))
             .collect();
@@ -173,25 +170,22 @@ impl DnsProvider for DigitalOceanProvider {
         Ok(matching_record_ids)
     }
 
-    async fn create_txt_record(
+    async fn create_txt_record_impl(
         &mut self,
-        domain: &str,
+        zone: &ZoneInfo,
         name: &str,
         value: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let base_domain = self.find_zone_for_domain(domain).await?;
-        let record_name = self.calculate_record_name(domain, &base_domain, name)?;
-
-        info!("✨ Creating TXT record: {} in domain {} = {}", record_name, base_domain, value);
+        info!("✨ Creating TXT record: {} in domain {} = {}", name, zone.name, value);
 
         let create_request = CreateRecordRequest {
             record_type: "TXT".to_string(),
-            name: record_name,
+            name: name.to_string(),
             data: value.to_string(),
             ttl: 300,
         };
 
-        let url = format!("https://api.digitalocean.com/v2/domains/{}/records", base_domain);
+        let url = format!("https://api.digitalocean.com/v2/domains/{}/records", zone.name);
         let response = self.client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.config.api_token))
@@ -214,17 +208,16 @@ impl DnsProvider for DigitalOceanProvider {
         Ok(record_id.to_string())
     }
 
-    async fn delete_txt_record(
+    async fn delete_txt_record_impl(
         &mut self,
-        domain: &str,
+        zone: &ZoneInfo,
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let base_domain = self.find_zone_for_domain(domain).await?;
-        info!("🗑️  Deleting TXT record {} from domain {}", record_id, base_domain);
+        info!("🗑️  Deleting TXT record {} from domain {}", record_id, zone.name);
 
         let url = format!(
             "https://api.digitalocean.com/v2/domains/{}/records/{}",
-            base_domain,
+            zone.name,
             record_id
         );
 
@@ -242,27 +235,5 @@ impl DnsProvider for DigitalOceanProvider {
 
         info!("✅ Deleted TXT record {}", record_id);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_calculate_record_name() {
-        let config = DigitalOceanConfig {
-            api_token: "test".to_string(),
-            timeout_seconds: None,
-        };
-        let provider = DigitalOceanProvider::new(config);
-
-        // Test base domain
-        let result = provider.calculate_record_name("example.com", "example.com", "_acme-challenge").unwrap();
-        assert_eq!(result, "_acme-challenge");
-
-        // Test subdomain
-        let result = provider.calculate_record_name("sub.example.com", "example.com", "_acme-challenge").unwrap();
-        assert_eq!(result, "_acme-challenge.sub");
     }
 }

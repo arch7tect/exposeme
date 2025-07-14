@@ -1,4 +1,4 @@
-// src/dns/mod.rs - Complete DNS Provider Interface
+// src/dns/mod.rs - Keep original interface, improve internals
 
 use async_trait::async_trait;
 use std::time::Duration;
@@ -7,21 +7,73 @@ use tracing::{info, warn};
 
 pub mod providers;
 
+/// Internal zone information for efficient provider operations
+#[derive(Debug, Clone)]
+pub(crate) struct ZoneInfo {
+    pub id: String,      // For providers that need IDs (Hetzner)
+    pub name: String,    // Human-readable zone name
+}
+
+impl ZoneInfo {
+    /// Create ZoneInfo where ID and name are the same (DigitalOcean, Azure)
+    pub fn from_name(name: String) -> Self {
+        Self {
+            id: name.clone(),
+            name,
+        }
+    }
+
+    /// Create ZoneInfo with different ID and name (Hetzner)
+    pub fn new(id: String, name: String) -> Self {
+        Self { id, name }
+    }
+}
+
 #[async_trait]
 pub trait DnsProvider: Send + Sync {
     // =============================================================================
-    // PROVIDER IMPLEMENTS: 4 basic operations
+    // IMPLEMENTATIONS: Providers implement these methods
     // =============================================================================
 
-    /// List available domains/zones for this DNS provider
-    async fn list_domains(&mut self) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>>;
+    /// List zones with ID/name info
+    async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>>;
 
-    /// List existing TXT record IDs for a given domain and record name
+    /// List TXT records by zone
+    async fn list_txt_records_impl(
+        &mut self,
+        zone: &ZoneInfo,
+        name: &str,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Create TXT record by zone  
+    async fn create_txt_record_impl(
+        &mut self,
+        zone: &ZoneInfo,
+        name: &str,
+        value: &str
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Delete TXT record by zone
+    async fn delete_txt_record_impl(
+        &mut self,
+        zone: &ZoneInfo,
+        record_id: &str
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    // =============================================================================
+    // PUBLIC API: Default implementations using internal methods
+    // =============================================================================
+
+    /// List existing TXT record IDs for a given domain and record name  
     async fn list_txt_records(
         &mut self,
         domain: &str,
         name: &str,
-    ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>>;
+    ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+        let zone = self.get_zone_info(domain).await?;
+        let record_name = self.calculate_record_name(domain, &zone.name, name)?;
+        self.list_txt_records_impl(&zone, &record_name).await
+    }
 
     /// Create a TXT record and return record ID
     async fn create_txt_record(
@@ -29,42 +81,44 @@ pub trait DnsProvider: Send + Sync {
         domain: &str,
         name: &str,
         value: &str
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>>;
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let zone = self.get_zone_info(domain).await?;
+        let record_name = self.calculate_record_name(domain, &zone.name, name)?;
+        self.create_txt_record_impl(&zone, &record_name, value).await
+    }
 
     /// Delete a TXT record by ID
     async fn delete_txt_record(
         &mut self,
         domain: &str,
         record_id: &str
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let zone = self.get_zone_info(domain).await?;
+        self.delete_txt_record_impl(&zone, record_id).await
+    }
 
-    // =============================================================================
-    // FREE: Provider gets these default implementations
-    // =============================================================================
-
-    /// Find the best matching domain/zone for the target domain
-    async fn find_zone_for_domain(&mut self, domain: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    /// Internal: Find zone with efficient lookup
+    async fn get_zone_info(&mut self, domain: &str) -> Result<ZoneInfo, Box<dyn std::error::Error + Send + Sync>> {
         info!("🔍 Looking up zone for domain: {}", domain);
 
-        let available_domains = self.list_domains().await?;
-        info!("📋 Found {} available domains/zones", available_domains.len());
+        let available_zones = self.list_zones_impl().await?;
+        info!("📋 Found {} available zones", available_zones.len());
 
-        // Find the longest matching domain (most specific)
+        // Find the longest matching zone (most specific)
         let mut best_match = None;
         let mut best_length = 0;
 
-        for available_domain in &available_domains {
-            info!("🔍 Checking domain/zone: {}", available_domain);
-            if domain.ends_with(available_domain) && available_domain.len() > best_length {
-                best_match = Some(available_domain.clone());
-                best_length = available_domain.len();
-                info!("✅ Found better match: {}", available_domain);
+        for zone in &available_zones {
+            if domain.ends_with(&zone.name) && zone.name.len() > best_length {
+                best_match = Some(zone.clone());
+                best_length = zone.name.len();
+                info!("✅ Found better match: {}", zone.name);
             }
         }
 
         match best_match {
             Some(zone) => {
-                info!("✅ Using zone: {}", zone);
+                info!("✅ Using zone: {} (ID: {})", zone.name, zone.id);
                 Ok(zone)
             }
             None => {
@@ -72,6 +126,10 @@ pub trait DnsProvider: Send + Sync {
             }
         }
     }
+
+    // =============================================================================
+    // FREE: Default implementations
+    // =============================================================================
 
     /// Calculate record name relative to DNS zone
     fn calculate_record_name(&self, domain: &str, zone_name: &str, record_prefix: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {

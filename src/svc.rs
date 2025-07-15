@@ -192,11 +192,11 @@ async fn handle_unified_request(
     // === HTTP/HTTPS Differentiation ===
 
     if is_https {
-        info!("🔒 Processing tunneled HTTP request via HTTPS");
+        debug!("🔒 Processing tunneled HTTP request via HTTPS");
         handle_tunnel_request(req, tunnels, pending_requests, config).await
     } else {
         if config.ssl.enabled {
-            info!("🔄 Redirecting to HTTPS");
+            debug!("🔄 Redirecting to HTTPS");
             let https_url = format!(
                 "https://{}{}",
                 config.server.domain,

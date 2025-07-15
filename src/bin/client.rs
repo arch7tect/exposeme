@@ -254,9 +254,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
     let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<Message>();
 
     // Spawn task to handle outgoing messages to server
-    // let ws_sender_clone = ws_sender.clone();
     tokio::spawn(async move {
-        // let mut ws_sender = ws_sender_clone;
         while let Some(message) = to_server_rx.recv().await {
             if let Ok(json) = message.to_json() {
                 if let Err(e) = ws_sender.send(WsMessage::Text(json.into())).await {
@@ -272,7 +270,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
     let cleanup_interval = Duration::from_secs(config.client.websocket_cleanup_interval_secs);
     let max_connection_idle = Duration::from_secs(config.client.websocket_max_idle_secs);
     let cleanup_task = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(cleanup_interval); // Check every minute
+        let mut interval = tokio::time::interval(cleanup_interval);
 
         loop {
             interval.tick().await;
@@ -486,19 +484,6 @@ async fn handle_websocket_upgrade(
                 websockets.insert(connection_id.clone(), connection);
             }
 
-            // Get a copy of the stored connection for use in tasks
-            // let stored_connection = {
-            //     active_websockets.read().await.get(&connection_id).cloned()
-            // };
-            // 
-            // let stored_connection = match stored_connection {
-            //     Some(conn) => conn,
-            //     None => {
-            //         error!("Failed to retrieve stored connection for {}", connection_id);
-            //         return;
-            //     }
-            // };
-
             let active_websockets_clone = active_websockets.clone();
             let connection_id_clone = connection_id.clone();
 
@@ -606,7 +591,7 @@ async fn handle_websocket_upgrade(
                 })
             };
 
-            // Connection monitoring task (uses created_at for timeout detection)
+            // Connection monitoring task
             let monitoring_task = {
                 let active_websockets = active_websockets.clone();
                 let connection_id = connection_id.clone();
@@ -622,7 +607,6 @@ async fn handle_websocket_upgrade(
                         let should_cleanup = {
                             let websockets = active_websockets.read().await;
                             if let Some(connection) = websockets.get(&connection_id) {
-                                // Check for timeout (5 minutes of inactivity)
                                 if connection.is_idle(max_idle).await {
                                     connection.log_warn(&format!("Connection timeout detected ({})", connection.status_summary().await));
                                     true

@@ -1,4 +1,4 @@
-// src/dns/providers/azure.rs - Final clean implementation
+// src/dns/providers/azure.rs
 
 use std::error::Error;
 use async_trait::async_trait;

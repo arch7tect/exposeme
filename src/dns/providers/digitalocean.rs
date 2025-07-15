@@ -130,7 +130,7 @@ impl DnsProvider for DigitalOceanProvider {
         let domains_response: DomainsResponse = response.json().await?;
         let zone_infos: Vec<ZoneInfo> = domains_response.domains
             .into_iter()
-            .map(|domain| ZoneInfo::from_name(domain.name)) // 🎉 ID = name for DigitalOcean
+            .map(|domain| ZoneInfo::from_name(domain.name)) // ID = name for DigitalOcean
             .collect();
 
         info!("📋 Found {} domains", zone_infos.len());

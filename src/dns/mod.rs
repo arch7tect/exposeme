@@ -97,7 +97,7 @@ pub trait DnsProvider: Send + Sync {
         self.delete_txt_record_impl(&zone, record_id).await
     }
 
-    /// Internal: Find zone with efficient lookup
+    /// Internal: Find zone for domain
     async fn get_zone_info(&mut self, domain: &str) -> Result<ZoneInfo, Box<dyn std::error::Error + Send + Sync>> {
         info!("🔍 Looking up zone for domain: {}", domain);
 

@@ -1,4 +1,4 @@
-// src/dns/providers/hetzner.rs - Complete final implementation
+// src/dns/providers/hetzner.rs
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -184,7 +184,7 @@ impl DnsProvider for HetznerProvider {
         info!("✨ Creating TXT record: {} in zone {} = {}", name, zone.name, value);
 
         let create_request = CreateRecordRequest {
-            zone_id: zone.id.clone(), // 🎉 No extra lookup needed!
+            zone_id: zone.id.clone(), // No extra lookup needed
             record_type: "TXT".to_string(),
             name: name.to_string(),
             value: value.to_string(),

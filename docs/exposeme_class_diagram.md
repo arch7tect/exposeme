@@ -1,4 +1,4 @@
-# ExposeME Architecture Diagrams
+# ExposeME Class Diagrams
 
 ## 1. Configuration Layer
 

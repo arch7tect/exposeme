@@ -32,11 +32,11 @@ classDiagram
         +bool staging
         +String cert_cache_dir
         +bool wildcard
-        +Option_DnsProviderConfig dns_provider
+        +Option<DnsProviderConfig> dns_provider
     }
 
     class AuthSettings:::config {
-        +Vec_String tokens
+        +Vec<String> tokens
     }
 
     class LimitSettings:::config {
@@ -76,12 +76,12 @@ classDiagram
 
     class DnsProviderConfig:::config {
         +String provider
-        +serde_json_Value config
+        +serde_json::Value config
     }
 
     class ServerArgs:::args {
         +PathBuf config
-        +Option_String domain
+        +Option<String> domain
         +bool enable_https
         +bool verbose
         +bool wildcard
@@ -89,8 +89,8 @@ classDiagram
 
     class ClientArgs:::args {
         +PathBuf config
-        +Option_String server_url
-        +Option_String tunnel_id
+        +Option<String> server_url
+        +Option<String> tunnel_id
         +bool verbose
         +bool insecure
     }
@@ -119,64 +119,64 @@ classDef args fill:#f3e5f5,stroke:#4a148c,stroke-width:2px;
 classDiagram
     class SslManager:::ssl {
         -ServerConfig config
-        -Option_Arc_RustlsConfig rustls_config
+        -Option<RustlsConfig> rustls_config
         -ChallengeStore challenge_store
-        -Option_Box_DnsProvider dns_provider
-        +new(config ServerConfig) SslManager
+        -Option<DnsProvider> dns_provider
+        +new(config: ServerConfig) SslManager
         +initialize() Result
-        +get_certificate_info() Result_CertificateInfo
+        +get_certificate_info() Result<CertificateInfo>
         +force_renewal() Result
-        -setup_letsencrypt() Result_RustlsConfig
-        -generate_self_signed() Result_RustlsConfig
+        -setup_letsencrypt() Result<RustlsConfig>
+        -generate_self_signed() Result<RustlsConfig>
     }
 
     class CertificateInfo:::ssl {
         +String domain
         +bool exists
-        +Option_DateTime_Utc expiry_date
-        +Option_i64 days_until_expiry
+        +Option<DateTime> expiry_date
+        +Option<i64> days_until_expiry
         +bool needs_renewal
     }
 
     class DnsProvider:::interface {
         <<interface>>
-        +list_zones_impl() Result_Vec_ZoneInfo
-        +create_txt_record_impl(zone ZoneInfo, name String, value String) Result_String
-        +delete_txt_record_impl(zone ZoneInfo, record_id String) Result
-        +cleanup_txt_records(domain String, name String) Result
-        +wait_for_propagation(domain String, name String, value String) Result
+        +list_zones_impl() Result<Vec<ZoneInfo>>
+        +create_txt_record_impl(zone: ZoneInfo, name: String, value: String) Result<String>
+        +delete_txt_record_impl(zone: ZoneInfo, record_id: String) Result
+        +cleanup_txt_records(domain: String, name: String) Result
+        +wait_for_propagation(domain: String, name: String, value: String) Result
     }
 
     class ZoneInfo:::dns {
         +String id
         +String name
-        +from_name(name String) ZoneInfo
-        +new(id String, name String) ZoneInfo
+        +from_name(name: String) ZoneInfo
+        +new(id: String, name: String) ZoneInfo
     }
 
     class DigitalOceanProvider:::dns {
         -DigitalOceanConfig config
-        -reqwest_Client client
-        +new(config DigitalOceanConfig) DigitalOceanProvider
+        -reqwest::Client client
+        +new(config: DigitalOceanConfig) DigitalOceanProvider
     }
 
     class AzureProvider:::dns {
         -AzureConfig config
-        -reqwest_Client client
-        -Option_String access_token
-        +new(config AzureConfig) AzureProvider
-        -get_access_token() Result_String
+        -reqwest::Client client
+        -Option<String> access_token
+        +new(config: AzureConfig) AzureProvider
+        -get_access_token() Result<String>
     }
 
     class HetznerProvider:::dns {
         -HetznerConfig config
-        -reqwest_Client client
-        +new(config HetznerConfig) HetznerProvider
+        -reqwest::Client client
+        +new(config: HetznerConfig) HetznerProvider
     }
 
     class ChallengeStore:::store {
-        <<abstract>>
-        Arc_RwLock_HashMap_String_String
+        <<type>>
+        Arc<RwLock<HashMap<String, String>>>
     }
 
     %% Relationships
@@ -209,8 +209,8 @@ classDiagram
         WebSocketUpgrade
         WebSocketData
         WebSocketClose
-        +to_json() Result_String
-        +from_json(json String) Result_Message
+        +to_json() Result~String~
+        +from_json(json: String) Result~Message~
     }
 
     class TunnelInfo:::protocol {
@@ -230,35 +230,35 @@ classDiagram
     class WebSocketConnection:::service {
         +String tunnel_id
         +Instant created_at
-        +Option_mpsc_UnboundedSender_WsMessage ws_tx
-        +new(tunnel_id String) WebSocketConnection
+        +Option<UnboundedSender<WsMessage>> ws_tx
+        +new(tunnel_id: String) WebSocketConnection
         +connection_age() Duration
         +status_summary() String
     }
 
     class ActiveWebSocketConnection:::service {
         +String connection_id
-        +mpsc_UnboundedSender_Vec_u8 local_tx
-        +mpsc_UnboundedSender_Message to_server_tx
+        +UnboundedSender<Vec<u8>> local_tx
+        +UnboundedSender<Message> to_server_tx
         +Instant created_at
         +update_activity()
-        +is_idle(max_idle_duration Duration) bool
-        +send_to_server(message Message) Result
+        +is_idle(max_idle_duration: Duration) bool
+        +send_to_server(message: Message) Result
     }
 
     class TunnelMap:::types {
-        <<abstract>>
-        Arc_RwLock_HashMap_String_mpsc_UnboundedSender_Message
+        <<type>>
+        Arc<RwLock<HashMap<String, UnboundedSender<Message>>>>
     }
 
     class PendingRequests:::types {
-        <<abstract>>
-        Arc_RwLock_HashMap_String_mpsc_UnboundedSender_ResponseTuple
+        <<type>>
+        Arc<RwLock<HashMap<String, ResponseSender>>>
     }
 
     class ActiveWebSockets:::types {
-        <<abstract>>
-        Arc_RwLock_HashMap_String_WebSocketConnection
+        <<type>>
+        Arc<RwLock<HashMap<String, WebSocketConnection>>>
     }
 
     %% Relationships

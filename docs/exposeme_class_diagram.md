@@ -32,11 +32,11 @@ classDiagram
         +bool staging
         +String cert_cache_dir
         +bool wildcard
-        +Option<DnsProviderConfig> dns_provider
+        +Option~DnsProviderConfig~ dns_provider
     }
 
     class AuthSettings:::config {
-        +Vec<String> tokens
+        +Vec~String~ tokens
     }
 
     class LimitSettings:::config {
@@ -81,7 +81,7 @@ classDiagram
 
     class ServerArgs:::args {
         +PathBuf config
-        +Option<String> domain
+        +Option~String~ domain
         +bool enable_https
         +bool verbose
         +bool wildcard
@@ -89,8 +89,8 @@ classDiagram
 
     class ClientArgs:::args {
         +PathBuf config
-        +Option<String> server_url
-        +Option<String> tunnel_id
+        +Option~String~ server_url
+        +Option~String~ tunnel_id
         +bool verbose
         +bool insecure
     }
@@ -119,29 +119,29 @@ classDef args fill:#f3e5f5,stroke:#4a148c,stroke-width:2px;
 classDiagram
     class SslManager:::ssl {
         -ServerConfig config
-        -Option<RustlsConfig> rustls_config
+        -Option~RustlsConfig~ rustls_config
         -ChallengeStore challenge_store
-        -Option<DnsProvider> dns_provider
+        -Option~DnsProvider~ dns_provider
         +new(config: ServerConfig) SslManager
         +initialize() Result
-        +get_certificate_info() Result<CertificateInfo>
+        +get_certificate_info() Result~CertificateInfo~
         +force_renewal() Result
-        -setup_letsencrypt() Result<RustlsConfig>
-        -generate_self_signed() Result<RustlsConfig>
+        -setup_letsencrypt() Result~RustlsConfig~
+        -generate_self_signed() Result~RustlsConfig~
     }
 
     class CertificateInfo:::ssl {
         +String domain
         +bool exists
-        +Option<DateTime> expiry_date
-        +Option<i64> days_until_expiry
+        +Option~DateTime~ expiry_date
+        +Option~i64~ days_until_expiry
         +bool needs_renewal
     }
 
     class DnsProvider:::interface {
         <<interface>>
-        +list_zones_impl() Result<Vec<ZoneInfo>>
-        +create_txt_record_impl(zone: ZoneInfo, name: String, value: String) Result<String>
+        +list_zones_impl() Result~Vec~ZoneInfo~~
+        +create_txt_record_impl(zone: ZoneInfo, name: String, value: String) Result~String~
         +delete_txt_record_impl(zone: ZoneInfo, record_id: String) Result
         +cleanup_txt_records(domain: String, name: String) Result
         +wait_for_propagation(domain: String, name: String, value: String) Result
@@ -163,9 +163,9 @@ classDiagram
     class AzureProvider:::dns {
         -AzureConfig config
         -reqwest::Client client
-        -Option<String> access_token
+        -Option~String~ access_token
         +new(config: AzureConfig) AzureProvider
-        -get_access_token() Result<String>
+        -get_access_token() Result~String~
     }
 
     class HetznerProvider:::dns {
@@ -176,7 +176,7 @@ classDiagram
 
     class ChallengeStore:::store {
         <<type>>
-        Arc<RwLock<HashMap<String, String>>>
+        Arc~RwLock~HashMap~String;String~~~
     }
 
     %% Relationships
@@ -248,20 +248,20 @@ classDiagram
 
     class TunnelMap:::types {
         <<type>>
-        Arc<RwLock<HashMap<String, UnboundedSender<Message>>>>
+        Arc~RwLock~HashMap~String;UnboundedSender~Message~~~~
     }
 
     class PendingRequests:::types {
         <<type>>
-        Arc<RwLock<HashMap<String, ResponseSender>>>
+        Arc~RwLock~HashMap~String;ResponseSender~~~
     }
 
     class ActiveWebSockets:::types {
         <<type>>
-        Arc<RwLock<HashMap<String, WebSocketConnection>>>
+        Arc~RwLock~HashMap~String;WebSocketConnection~~~
     }
 
-    %% Relationships
+%% Relationships
     UnifiedService --> TunnelMap
     UnifiedService --> PendingRequests
     UnifiedService --> ActiveWebSockets
@@ -269,11 +269,11 @@ classDiagram
     ActiveWebSocketConnection --> Message
     TunnelMap --> Message
 
-    %% Styling
-    classDef protocol fill:#f3e5f5,stroke:#4a148c,stroke-width:2px;
-    classDef service fill:#fce4ec,stroke:#880e4f,stroke-width:2px;
-    classDef types fill:#f1f8e9,stroke:#33691e,stroke-width:2px;
-    classDef enums fill:#fff8e1,stroke:#ff6f00,stroke-width:2px;
+%% Styling
+classDef protocol fill:#f3e5f5,stroke:#4a148c,stroke-width:2px;
+classDef service fill:#fce4ec,stroke:#880e4f,stroke-width:2px;
+classDef types fill:#f1f8e9,stroke:#33691e,stroke-width:2px;
+classDef enums fill:#fff8e1,stroke:#ff6f00,stroke-width:2px;
 ```
 
 ## Architecture Overview

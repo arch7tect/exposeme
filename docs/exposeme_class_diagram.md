@@ -230,7 +230,7 @@ classDiagram
     class WebSocketConnection:::service {
         +String tunnel_id
         +Instant created_at
-        +Option<UnboundedSender<WsMessage>> ws_tx
+        +Option~UnboundedSender~WsMessage~~ ws_tx
         +new(tunnel_id: String) WebSocketConnection
         +connection_age() Duration
         +status_summary() String
@@ -238,8 +238,8 @@ classDiagram
 
     class ActiveWebSocketConnection:::service {
         +String connection_id
-        +UnboundedSender<Vec<u8>> local_tx
-        +UnboundedSender<Message> to_server_tx
+        +UnboundedSender~Vec~u8~~ local_tx
+        +UnboundedSender~Message~ to_server_tx
         +Instant created_at
         +update_activity()
         +is_idle(max_idle_duration: Duration) bool

@@ -7,12 +7,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use instant_acme::{Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder, OrderStatus, RetryPolicy};
+use instant_acme::{
+    Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder,
+    OrderStatus, RetryPolicy,
+};
 use rcgen::generate_simple_self_signed;
 use rustls::ServerConfig as RustlsConfig;
-use rustls_pemfile::{read_one, Item};
+use rustls_pemfile::{Item, read_one};
 use tokio::sync::RwLock;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use x509_parser::parse_x509_certificate;
 
 use crate::config::{ServerConfig, SslProvider};
@@ -64,7 +67,10 @@ impl SslManager {
                     Some(provider)
                 }
                 Err(e) => {
-                    error!("❌ Failed to initialize DNS provider '{}': {}", dns_config.provider, e);
+                    error!(
+                        "❌ Failed to initialize DNS provider '{}': {}",
+                        dns_config.provider, e
+                    );
                     None
                 }
             }
@@ -107,7 +113,9 @@ impl SslManager {
         self.rustls_config.clone()
     }
 
-    async fn setup_letsencrypt(&mut self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    async fn setup_letsencrypt(
+        &mut self,
+    ) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         let domain = &self.config.server.domain;
         let email = &self.config.ssl.email.clone();
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
@@ -117,7 +125,10 @@ impl SslManager {
         // Determine certificate type and filename
         let (cert_domains, cert_filename) = if self.config.ssl.wildcard {
             let wildcard_domain = format!("*.{}", domain);
-            info!("Obtaining wildcard certificate for: {} and {}", wildcard_domain, domain);
+            info!(
+                "Obtaining wildcard certificate for: {} and {}",
+                wildcard_domain, domain
+            );
             let domains = vec![domain.clone(), wildcard_domain];
             let filename = format!("wildcard-{}", domain.replace('.', "-"));
             (domains, filename)
@@ -156,7 +167,11 @@ impl SslManager {
         self.load_certificates(&cert_path, &key_path)
     }
 
-    async fn obtain_certificate(&mut self, domains: &[String], email: &str) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+    async fn obtain_certificate(
+        &mut self,
+        domains: &[String],
+        email: &str,
+    ) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
         let directory_url = if self.config.ssl.staging {
             LetsEncrypt::Staging.url()
         } else {
@@ -176,7 +191,8 @@ impl SslManager {
             .create(&new_account, directory_url.to_owned(), None)
             .await?;
 
-        let identifiers: Vec<Identifier> = domains.iter().map(|d| Identifier::Dns(d.clone())).collect();
+        let identifiers: Vec<Identifier> =
+            domains.iter().map(|d| Identifier::Dns(d.clone())).collect();
 
         // Create order with correct NewOrder API
         let mut order = account
@@ -190,7 +206,7 @@ impl SslManager {
 
         // Process authorizations
         let mut authorizations = order.authorizations();
-
+        let mut auth_no = 1;
         while let Some(authz_handle) = authorizations.next().await {
             let mut authz_handle = authz_handle?;
 
@@ -203,12 +219,15 @@ impl SslManager {
                     info!("Processing authorization for: {}", domain);
 
                     if self.config.ssl.wildcard {
-                        match self.process_dns_challenge(&mut authz_handle, &domain).await {
+                        match self.process_dns_challenge(&mut authz_handle, &domain, auth_no).await {
                             Ok(info) => cleanup_tasks.push(CleanupTask::Dns(info)),
                             Err(e) => error = Some(e),
                         }
                     } else {
-                        match self.process_http_challenge(&mut authz_handle, &domain).await {
+                        match self
+                            .process_http_challenge(&mut authz_handle, &domain)
+                            .await
+                        {
                             Ok(token) => cleanup_tasks.push(CleanupTask::Http(token)),
                             Err(e) => error = Some(e),
                         }
@@ -223,22 +242,25 @@ impl SslManager {
                     break;
                 }
             }
+            auth_no += 1;
         }
 
         if error.is_none() {
             info!("✅ All authorizations processed, finalizing order");
 
             match order.poll_ready(&RetryPolicy::default()).await {
-                Ok(status) => if status != OrderStatus::Ready {
-                    error = Some(format!("Order not ready, status: {:?}", status).into());
-                },
+                Ok(status) => {
+                    if status != OrderStatus::Ready {
+                        error = Some(format!("Order not ready, status: {:?}", status).into());
+                    }
+                }
                 Err(e) => error = Some(e.into()),
             }
         }
 
         if error.is_none() {
             info!("✅ Wait for order to be ready");
-             
+
             let status = order.poll_ready(&RetryPolicy::default()).await?;
             if status != OrderStatus::Ready {
                 error = Some(format!("Order not ready, status: {:?}", status).into());
@@ -249,7 +271,7 @@ impl SslManager {
         let private_key_pem = match error {
             None => {
                 info!("✅ Order is ready. Finalizing.");
-                
+
                 match order.finalize().await {
                     Ok(private_key_pem) => private_key_pem,
                     Err(e) => {
@@ -257,10 +279,10 @@ impl SslManager {
                         String::new()
                     }
                 }
-            },
+            }
             Some(_) => String::new(),
         };
-        
+
         let cert_chain_pem = match error {
             None => match order.poll_certificate(&RetryPolicy::default()).await {
                 Ok(cert_chain_pem) => cert_chain_pem,
@@ -277,7 +299,10 @@ impl SslManager {
             match task {
                 CleanupTask::Dns(info) => {
                     if let Some(dns) = self.dns_provider.as_mut() {
-                        info!("✅ Cleanup DNS txt record with id {} for {}", info.record_id, info.domain);
+                        info!(
+                            "✅ Cleanup DNS txt record with id {} for {}",
+                            info.record_id, info.domain
+                        );
                         if let Err(e) = dns.delete_txt_record(&info.domain, &info.record_id).await {
                             warn!("Failed to delete TXT record {}: {}", info.record_id, e);
                         }
@@ -295,9 +320,12 @@ impl SslManager {
             Some(e) => {
                 error!("❌ Failed to obtain certificate {}", e);
                 Err(e)
-            },
+            }
             None => {
-                info!("🎉 Successfully obtained certificate for domains: {:?}", domains);
+                info!(
+                    "🎉 Successfully obtained certificate for domains: {:?}",
+                    domains
+                );
                 Ok((cert_chain_pem, private_key_pem))
             }
         }
@@ -307,6 +335,7 @@ impl SslManager {
         &mut self,
         authz_handle: &'a mut instant_acme::AuthorizationHandle<'a>,
         domain: &str,
+        auth_no: i32,
     ) -> Result<DnsCleanupInfo, Box<dyn std::error::Error + Send + Sync>> {
         let record_domain = if domain.starts_with("*.") {
             domain[2..].to_string()
@@ -323,21 +352,40 @@ impl SslManager {
         // Get key authorization from the order for this challenge
         let key_authorization = challenge.key_authorization();
         let dns_value = key_authorization.dns_value();
-        info!("Setting up DNS challenge: {}.{} = {}", record_name, record_domain, dns_value);
+        info!(
+            "Setting up DNS challenge: {}.{} = {}",
+            record_name, record_domain, dns_value
+        );
 
         let record_id = {
-            let dns_provider = self.dns_provider.as_mut().ok_or("DNS provider not configured")?;
+            let dns_provider = self
+                .dns_provider
+                .as_mut()
+                .ok_or("DNS provider not configured")?;
 
-            // Clean up existing records
-            if let Err(e) = dns_provider.cleanup_txt_records(&record_domain, record_name).await {
-                warn!("DNS cleanup failed: {}", e);
+            // Clean up existing records on first auth
+            if auth_no == 1 {
+                if let Err(e) = dns_provider
+                    .cleanup_txt_records(&record_domain, record_name)
+                    .await
+                {
+                    warn!("DNS cleanup failed: {}", e);
+                }
             }
 
             // Create record and wait for propagation
-            let record_id = dns_provider.create_txt_record(&record_domain, record_name, &dns_value).await?;
-            if let Err(e) = dns_provider.wait_for_propagation(&record_domain, record_name, &dns_value).await {
+            let record_id = dns_provider
+                .create_txt_record(&record_domain, record_name, &dns_value)
+                .await?;
+            if let Err(e) = dns_provider
+                .wait_for_propagation(&record_domain, record_name, &dns_value)
+                .await
+            {
                 error!("DNS propagation failed: {}", e);
-                if let Err(e) = dns_provider.delete_txt_record(&record_domain, &record_id).await {
+                if let Err(e) = dns_provider
+                    .delete_txt_record(&record_domain, &record_id)
+                    .await
+                {
                     warn!("Failed to cleanup DNS record {}: {}", record_id, e);
                 }
                 return Err(e);
@@ -351,7 +399,10 @@ impl SslManager {
         }
 
         // Cleanup later - return info for it
-        Ok(DnsCleanupInfo{domain: domain.to_owned(), record_id})
+        Ok(DnsCleanupInfo {
+            domain: domain.to_owned(),
+            record_id,
+        })
     }
 
     async fn process_http_challenge<'a>(
@@ -360,7 +411,8 @@ impl SslManager {
         _domain: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         // Get HTTP challenge
-        let mut challenge = authz_handle.challenge(ChallengeType::Http01)
+        let mut challenge = authz_handle
+            .challenge(ChallengeType::Http01)
             .ok_or("No HTTP-01 challenge found")?;
 
         let key_authorization = challenge.key_authorization();
@@ -368,7 +420,10 @@ impl SslManager {
         // Add challenge to store
         {
             let mut store = self.challenge_store.write().await;
-            store.insert(challenge.token.clone(), key_authorization.as_str().to_string());
+            store.insert(
+                challenge.token.clone(),
+                key_authorization.as_str().to_string(),
+            );
         }
 
         // Set challenge ready
@@ -380,40 +435,18 @@ impl SslManager {
         Ok(challenge.token.clone())
     }
 
-    // async fn wait_for_certificate(&self, order: &mut instant_acme::Order, domain: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    //     const MAX_ATTEMPTS: u32 = 60;
-    //     const RETRY_DELAY: u64 = 10;
-    // 
-    //     for attempt in 1..=MAX_ATTEMPTS {
-    //         sleep(Duration::from_secs(RETRY_DELAY)).await;
-    // 
-    //         match order.state().status {
-    //             OrderStatus::Valid => {
-    //                 info!("✅ Certificate issued for {}", domain);
-    //                 return Ok(());
-    //             }
-    //             OrderStatus::Invalid => {
-    //                 return Err(format!("Certificate order failed for {}", domain).into());
-    //             }
-    //             _ => {
-    //                 if attempt % 6 == 0 {
-    //                     info!("⏳ Waiting for certificate: {} (attempt {})", domain, attempt);
-    //                 }
-    //             }
-    //         }
-    //     }
-    // 
-    //     Err(format!("Certificate timeout for {}", domain).into())
-    // }
-
-    fn load_certificates(&self, cert_path: &Path, key_path: &Path) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    fn load_certificates(
+        &self,
+        cert_path: &Path,
+        key_path: &Path,
+    ) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         let cert_file = fs::read(cert_path)?;
-        let cert_chain = rustls_pemfile::certs(&mut cert_file.as_slice())
-            .collect::<Result<Vec<_>, _>>()?;
+        let cert_chain =
+            rustls_pemfile::certs(&mut cert_file.as_slice()).collect::<Result<Vec<_>, _>>()?;
 
         let key_file = fs::read(key_path)?;
-        let private_key = rustls_pemfile::private_key(&mut key_file.as_slice())?
-            .ok_or("No private key found")?;
+        let private_key =
+            rustls_pemfile::private_key(&mut key_file.as_slice())?.ok_or("No private key found")?;
 
         let config = RustlsConfig::builder()
             .with_no_client_auth()
@@ -422,7 +455,9 @@ impl SslManager {
         Ok(config)
     }
 
-    fn load_manual_certificates(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    fn load_manual_certificates(
+        &self,
+    ) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         let domain = &self.config.server.domain;
         let cert_filename = if self.config.ssl.wildcard {
             format!("wildcard-{}", domain.replace('.', "-"))
@@ -430,20 +465,25 @@ impl SslManager {
             domain.replace('.', "-")
         };
 
-        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", cert_filename));
-        let key_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", cert_filename));
+        let cert_path =
+            Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", cert_filename));
+        let key_path =
+            Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.key", cert_filename));
 
         if !cert_path.exists() || !key_path.exists() {
             return Err(format!(
                 "Manual certificates not found. Please place {}.pem and {}.key in {}",
                 cert_filename, cert_filename, self.config.ssl.cert_cache_dir
-            ).into());
+            )
+            .into());
         }
 
         self.load_certificates(&cert_path, &key_path)
     }
 
-    pub fn generate_self_signed(&self) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn generate_self_signed(
+        &self,
+    ) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
         fs::create_dir_all(cache_dir)?;
 
@@ -461,7 +501,10 @@ impl SslManager {
             return self.load_certificates(&cert_path, &key_path);
         }
 
-        warn!("Generating self-signed certificate for {} (development only)", domain);
+        warn!(
+            "Generating self-signed certificate for {} (development only)",
+            domain
+        );
 
         let subject_alt_names = if self.config.ssl.wildcard {
             vec![domain.clone(), format!("*.{}", domain)]
@@ -484,7 +527,9 @@ impl SslManager {
         Ok(config)
     }
 
-    pub fn get_certificate_info(&self) -> Result<CertificateInfo, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn get_certificate_info(
+        &self,
+    ) -> Result<CertificateInfo, Box<dyn std::error::Error + Send + Sync>> {
         let domain = &self.config.server.domain;
         let cert_filename = if self.config.ssl.wildcard {
             format!("wildcard-{}", domain.replace('.', "-"))
@@ -492,7 +537,8 @@ impl SslManager {
             domain.replace('.', "-")
         };
 
-        let cert_path = Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", cert_filename));
+        let cert_path =
+            Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", cert_filename));
 
         if !cert_path.exists() {
             return Ok(CertificateInfo {
@@ -545,12 +591,17 @@ impl SslManager {
 
         let cert_path = Path::new(&cert_cache_dir).join(format!("{}.pem", cert_filename));
         let key_path = Path::new(&cert_cache_dir).join(format!("{}.key", cert_filename));
-        let cert_backup_path = Path::new(&cert_cache_dir).join(format!("{}.pem.backup", cert_filename));
-        let key_backup_path = Path::new(&cert_cache_dir).join(format!("{}.key.backup", cert_filename));
+        let cert_backup_path =
+            Path::new(&cert_cache_dir).join(format!("{}.pem.backup", cert_filename));
+        let key_backup_path =
+            Path::new(&cert_cache_dir).join(format!("{}.key.backup", cert_filename));
 
         // Create backup copies
         let has_backup = if cert_path.exists() && key_path.exists() {
-            match (fs::copy(&cert_path, &cert_backup_path), fs::copy(&key_path, &key_backup_path)) {
+            match (
+                fs::copy(&cert_path, &cert_backup_path),
+                fs::copy(&key_path, &key_backup_path),
+            ) {
                 (Ok(_), Ok(_)) => {
                     info!("📦 Created certificate backup for {}", domain);
                     true
@@ -565,8 +616,12 @@ impl SslManager {
         };
 
         // Remove existing certificates
-        if cert_path.exists() { fs::remove_file(&cert_path)?; }
-        if key_path.exists() { fs::remove_file(&key_path)?; }
+        if cert_path.exists() {
+            fs::remove_file(&cert_path)?;
+        }
+        if key_path.exists() {
+            fs::remove_file(&key_path)?;
+        }
 
         // Try to generate new certificate
         let renewal_result = match ssl_provider {
@@ -584,10 +639,15 @@ impl SslManager {
             Err(e) => {
                 // Restore from backup if available
                 if has_backup {
-                    match (fs::copy(&cert_backup_path, &cert_path), fs::copy(&key_backup_path, &key_path)) {
+                    match (
+                        fs::copy(&cert_backup_path, &cert_path),
+                        fs::copy(&key_backup_path, &key_path),
+                    ) {
                         (Ok(_), Ok(_)) => {
                             info!("🔄 Restored certificate from backup after renewal failure");
-                            if let Ok(restored_config) = self.load_certificates(&cert_path, &key_path) {
+                            if let Ok(restored_config) =
+                                self.load_certificates(&cert_path, &key_path)
+                            {
                                 self.rustls_config = Some(Arc::new(restored_config));
                                 info!("✅ Successfully restored working certificates");
                             }

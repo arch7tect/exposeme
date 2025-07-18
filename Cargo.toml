@@ -38,7 +38,7 @@ rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2.2"
 
 # Let's Encrypt ACME
-instant-acme = "0.8"
+instant-acme = { version = "0.8", features = ["hyper-rustls"] }
 rcgen = "0.14"
 
 # Configuration

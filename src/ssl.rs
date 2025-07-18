@@ -1,4 +1,4 @@
-// src/ssl.rs - Clean and compact version
+// src/ssl.rs - Corrected for instant-acme 0.8.2 API
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use instant_acme::{
-    Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder,
-    OrderStatus,
+    Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewOrder,
+    OrderStatus, KeyAuthorization, NewAccount,
 };
 use rcgen::generate_simple_self_signed;
 use rustls::ServerConfig as RustlsConfig;
@@ -111,9 +111,6 @@ impl SslManager {
         let (cert_domains, cert_filename) = if self.config.ssl.wildcard {
             let wildcard_domain = format!("*.{}", domain);
             info!("Obtaining wildcard certificate for: {} and {}", wildcard_domain, domain);
-
-            // Request BOTH wildcard domain AND base domain
-            // Wildcard certificates do NOT automatically cover the base domain
             let domains = vec![domain.clone(), wildcard_domain];
             let filename = format!("wildcard-{}", domain.replace('.', "-"));
             (domains, filename)
@@ -161,53 +158,48 @@ impl SslManager {
 
         info!("Using ACME directory: {}", directory_url);
 
-        // Create account and order
-        let (account, _) = Account::create(
-            &NewAccount {
-                contact: &[&format!("mailto:{}", email)],
-                terms_of_service_agreed: true,
-                only_return_existing: false,
-            },
-            directory_url,
-            None,
-        ).await?;
+        // Create account using correct API
+        let account_builder = Account::builder()?;
+        let account = account_builder
+            .contact(&[&format!("mailto:{}", email)])
+            .terms_of_service_agreed(true)
+            .create(directory_url)
+            .await?;
 
         let identifiers: Vec<Identifier> = domains.iter().map(|d| Identifier::Dns(d.clone())).collect();
-        let mut order = account.new_order(&NewOrder { identifiers: &identifiers }).await?;
+
+        // Create order with correct NewOrder API
+        let new_order = NewOrder::new(&identifiers);
+        let mut order = account.new_order(&new_order).await?;
 
         info!("ACME order created for domains: {:?}", domains);
 
-        // Process authorizations
-        let authorizations = order.authorizations().await?;
-        for (i, auth) in authorizations.iter().enumerate() {
-            let auth_domain = match &auth.identifier {
+        // Process authorizations using the correct API
+        let authorizations = order.authorizations(); // Returns Authorizations<'_>, not a future
+
+        for auth_handle in authorizations {
+            // Get the authorization state
+            let auth_state = auth_handle.get().await?;
+
+            let auth_domain = match &auth_state.identifier {
                 Identifier::Dns(domain) => domain,
             };
 
-            info!("Processing authorization {}/{} for: {}", i + 1, authorizations.len(), auth_domain);
+            info!("Processing authorization for: {}", auth_domain);
 
-            if auth.status == AuthorizationStatus::Valid {
+            if auth_state.status == AuthorizationStatus::Valid {
                 info!("Authorization already valid for: {}", auth_domain);
                 continue;
             }
 
             if self.config.ssl.wildcard {
-                self.process_dns_challenge(&mut order, auth).await?;
+                self.process_dns_challenge(&mut order, &auth_handle, &auth_state).await?;
             } else {
-                self.process_http_challenge(&mut order, auth).await?;
+                self.process_http_challenge(&mut order, &auth_handle, &auth_state).await?;
             }
         }
 
-        // Verify all authorizations are valid
-        let final_auths = order.authorizations().await?;
-        for auth in &final_auths {
-            let domain = match &auth.identifier { Identifier::Dns(d) => d };
-            if auth.status != AuthorizationStatus::Valid {
-                return Err(format!("Authorization not valid for {}: {:?}", domain, auth.status).into());
-            }
-        }
-
-        info!("✅ All authorizations valid, finalizing order");
+        info!("✅ All authorizations processed, finalizing order");
 
         // Generate CSR and finalize
         let mut params = rcgen::CertificateParams::new(domains.to_vec())?;
@@ -215,21 +207,8 @@ impl SslManager {
         let key_pair = rcgen::KeyPair::generate()?;
         let csr = params.serialize_request(&key_pair)?;
 
-        // Finalize order (bypass status check - proceed if auths are valid)
-        match order.finalize(&csr.der()).await {
-            Ok(_) => info!("✅ Order finalized successfully"),
-            Err(e) => {
-                let error_str = e.to_string().to_lowercase();
-                if error_str.contains("not ready") || error_str.contains("pending") {
-                    info!("⏳ Order not ready, waiting 30 seconds and retrying...");
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    order.finalize(&csr.der()).await?;
-                    info!("✅ Order finalized on retry");
-                } else {
-                    return Err(e.into());
-                }
-            }
-        }
+        // Finalize order
+        order.finalize(csr.der()).await?;
 
         // Wait for certificate
         self.wait_for_certificate(&mut order, &domains[0]).await?;
@@ -241,16 +220,29 @@ impl SslManager {
         Ok((cert_chain_pem, private_key_pem))
     }
 
-    async fn process_dns_challenge(&mut self, order: &mut instant_acme::Order, auth: &instant_acme::Authorization) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let domain = match &auth.identifier { Identifier::Dns(domain) => domain.clone() };
-        let record_domain = if domain.starts_with("*.") { domain[2..].to_string() } else { domain.clone() };
+    async fn process_dns_challenge(
+        &mut self,
+        order: &mut instant_acme::Order,
+        auth_handle: &instant_acme::AuthorizationHandle,
+        auth_state: &instant_acme::AuthorizationState
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let domain = match &auth_state.identifier {
+            Identifier::Dns(domain) => domain.clone()
+        };
+        let record_domain = if domain.starts_with("*.") {
+            domain[2..].to_string()
+        } else {
+            domain.clone()
+        };
         let record_name = "_acme-challenge";
 
-        let challenge = auth.challenges.iter()
-            .find(|c| c.r#type == ChallengeType::Dns01)
+        // Find the DNS challenge handle from auth_state.challenges
+        let challenge_handle = auth_state.challenges.iter()
+            .find(|c| c.r#type() == ChallengeType::Dns01)
             .ok_or("No DNS-01 challenge found")?;
 
-        let dns_value = order.key_authorization(challenge).dns_value();
+        let key_authorization = order.key_authorization(challenge_handle);
+        let dns_value = key_authorization.dns_value();
         info!("Setting up DNS challenge: {}.{} = {}", record_name, record_domain, dns_value);
 
         let record_id = {
@@ -273,11 +265,10 @@ impl SslManager {
             record_id
         };
 
-        // Notify Let's Encrypt and wait for authorization
-        if let Err(e) = order.set_challenge_ready(&challenge.url).await {
+        // Set challenge ready using the challenge handle
+        if let Err(e) = challenge_handle.set_ready().await {
             error!("Setting challenge ready failed: {}", e);
-        }
-        else if let Err(e) = self.wait_for_authorization(order, &domain).await {
+        } else if let Err(e) = self.wait_for_authorization_handle(auth_handle, &domain).await {
             error!("Waiting for authorization failed: {}", e);
         }
 
@@ -291,26 +282,31 @@ impl SslManager {
         Ok(())
     }
 
-    async fn process_http_challenge(&self, order: &mut instant_acme::Order, auth: &instant_acme::Authorization) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let challenge = auth.challenges.iter()
-            .find(|c| c.r#type == ChallengeType::Http01)
+    async fn process_http_challenge(
+        &self,
+        order: &mut instant_acme::Order,
+        auth_handle: &instant_acme::AuthorizationHandle,
+        auth_state: &instant_acme::AuthorizationState
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let challenge_handle = auth_state.challenges.iter()
+            .find(|c| c.r#type() == ChallengeType::Http01)
             .ok_or("No HTTP-01 challenge found")?;
 
-        let key_auth = order.key_authorization(challenge).as_str().to_string();
+        let key_authorization = order.key_authorization(challenge_handle);
+        let key_auth = key_authorization.as_str().to_string();
 
         // Add challenge to store
         {
             let mut store = self.challenge_store.write().await;
-            store.insert(challenge.token.clone(), key_auth);
+            store.insert(challenge_handle.token().to_string(), key_auth);
         }
 
-        // Notify and wait
-        if let Err(e) = order.set_challenge_ready(&challenge.url).await {
+        // Set challenge ready
+        if let Err(e) = challenge_handle.set_ready().await {
             error!("Failed to set challenge ready: {}", e);
-        }
-        else {
-            let domain = match &auth.identifier { Identifier::Dns(domain) => domain };
-            if let Err(e) = self.wait_for_authorization(order, domain).await {
+        } else {
+            let domain = match &auth_state.identifier { Identifier::Dns(domain) => domain };
+            if let Err(e) = self.wait_for_authorization_handle(auth_handle, domain).await {
                 error!("Failed to wait for authorization: {}", e);
             }
         }
@@ -318,32 +314,33 @@ impl SslManager {
         // Cleanup
         {
             let mut store = self.challenge_store.write().await;
-            store.remove(&challenge.token);
+            store.remove(challenge_handle.token());
         }
 
         Ok(())
     }
 
-    async fn wait_for_authorization(&self, order: &mut instant_acme::Order, domain: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn wait_for_authorization_handle(
+        &self,
+        auth_handle: &instant_acme::AuthorizationHandle,
+        domain: &str
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         const MAX_ATTEMPTS: u32 = 60;
         const RETRY_DELAY: u64 = 5;
 
         for attempt in 1..=MAX_ATTEMPTS {
             tokio::time::sleep(Duration::from_secs(RETRY_DELAY)).await;
 
-            let auths = order.authorizations().await?;
-            let auth = auths.iter()
-                .find(|auth| match &auth.identifier { Identifier::Dns(d) => d == domain })
-                .ok_or_else(|| format!("Authorization not found for {}", domain))?;
+            let auth_state = auth_handle.get().await?;
 
-            match auth.status {
+            match auth_state.status {
                 AuthorizationStatus::Valid => {
                     info!("✅ Authorization completed for {}", domain);
                     return Ok(());
                 }
                 AuthorizationStatus::Invalid => {
-                    for challenge in &auth.challenges {
-                        if let Some(error) = &challenge.error {
+                    for challenge in &auth_state.challenges {
+                        if let Some(error) = challenge.error() {
                             error!("Challenge error for {}: {:?}", domain, error);
                         }
                     }
@@ -528,7 +525,7 @@ impl SslManager {
         let cert_backup_path = Path::new(&cert_cache_dir).join(format!("{}.pem.backup", cert_filename));
         let key_backup_path = Path::new(&cert_cache_dir).join(format!("{}.key.backup", cert_filename));
 
-        // Create backup copies of existing certificates
+        // Create backup copies
         let has_backup = if cert_path.exists() && key_path.exists() {
             match (fs::copy(&cert_path, &cert_backup_path), fs::copy(&key_path, &key_backup_path)) {
                 (Ok(_), Ok(_)) => {
@@ -557,18 +554,16 @@ impl SslManager {
 
         match renewal_result {
             Ok(new_config) => {
-                // Renewal successful
                 self.rustls_config = Some(Arc::new(new_config));
                 info!("✅ Certificate renewal completed for {}", domain);
                 Ok(())
             }
             Err(e) => {
-                // Renewal failed - restore from backup if available
+                // Restore from backup if available
                 if has_backup {
                     match (fs::copy(&cert_backup_path, &cert_path), fs::copy(&key_backup_path, &key_path)) {
                         (Ok(_), Ok(_)) => {
                             info!("🔄 Restored certificate from backup after renewal failure");
-
                             if let Ok(restored_config) = self.load_certificates(&cert_path, &key_path) {
                                 self.rustls_config = Some(Arc::new(restored_config));
                                 info!("✅ Successfully restored working certificates");

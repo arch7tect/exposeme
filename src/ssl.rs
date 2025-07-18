@@ -1,22 +1,17 @@
-// src/ssl.rs - Corrected for instant-acme 0.8.2 API
+// src/ssl.rs - Corrected for instant-acme 0.8.2 API based on official example
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use instant_acme::{
-    Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewOrder,
-    OrderStatus, KeyAuthorization, NewAccount,
-};
+use instant_acme::{Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder, OrderStatus, RetryPolicy};
 use rcgen::generate_simple_self_signed;
 use rustls::ServerConfig as RustlsConfig;
 use rustls_pemfile::{read_one, Item};
 use tokio::sync::RwLock;
-use tokio::time::sleep;
 use tracing::{info, warn, error};
 use x509_parser::parse_x509_certificate;
 
@@ -40,6 +35,18 @@ pub struct CertificateInfo {
     pub expiry_date: Option<DateTime<Utc>>,
     pub days_until_expiry: Option<i64>,
     pub needs_renewal: bool,
+}
+
+#[derive(Debug)]
+enum CleanupTask {
+    Dns(DnsCleanupInfo),
+    Http(String), // token
+}
+
+#[derive(Debug)]
+struct DnsCleanupInfo {
+    domain: String,
+    record_id: String,
 }
 
 impl SslManager {
@@ -159,89 +166,162 @@ impl SslManager {
         info!("Using ACME directory: {}", directory_url);
 
         // Create account using correct API
-        let account_builder = Account::builder()?;
-        let account = account_builder
-            .contact(&[&format!("mailto:{}", email)])
-            .terms_of_service_agreed(true)
-            .create(directory_url)
+        let new_account = NewAccount {
+            contact: &[&format!("mailto:{}", email)],
+            terms_of_service_agreed: true,
+            only_return_existing: false,
+        };
+
+        let (account, _account_credentials) = Account::builder()?
+            .create(&new_account, directory_url.to_owned(), None)
             .await?;
 
         let identifiers: Vec<Identifier> = domains.iter().map(|d| Identifier::Dns(d.clone())).collect();
 
         // Create order with correct NewOrder API
-        let new_order = NewOrder::new(&identifiers);
-        let mut order = account.new_order(&new_order).await?;
+        let mut order = account
+            .new_order(&NewOrder::new(identifiers.as_slice()))
+            .await?;
 
         info!("ACME order created for domains: {:?}", domains);
 
-        // Process authorizations using the correct API
-        let authorizations = order.authorizations(); // Returns Authorizations<'_>, not a future
+        let mut cleanup_tasks: Vec<CleanupTask> = Vec::new();
+        let mut error: Option<Box<dyn std::error::Error + Send + Sync>> = None;
 
-        for auth_handle in authorizations {
-            // Get the authorization state
-            let auth_state = auth_handle.get().await?;
+        // Process authorizations
+        let mut authorizations = order.authorizations();
 
-            let auth_domain = match &auth_state.identifier {
-                Identifier::Dns(domain) => domain,
-            };
+        while let Some(authz_handle) = authorizations.next().await {
+            let mut authz_handle = authz_handle?;
 
-            info!("Processing authorization for: {}", auth_domain);
+            let domain = match authz_handle.identifier().identifier.clone() {
+                Identifier::Dns(domain) => Ok(domain),
+                _ => Err("Not DNS identifier"),
+            }?;
+            match authz_handle.status {
+                AuthorizationStatus::Pending => {
+                    info!("Processing authorization for: {}", domain);
 
-            if auth_state.status == AuthorizationStatus::Valid {
-                info!("Authorization already valid for: {}", auth_domain);
-                continue;
-            }
-
-            if self.config.ssl.wildcard {
-                self.process_dns_challenge(&mut order, &auth_handle, &auth_state).await?;
-            } else {
-                self.process_http_challenge(&mut order, &auth_handle, &auth_state).await?;
+                    if self.config.ssl.wildcard {
+                        match self.process_dns_challenge(&mut authz_handle, &domain).await {
+                            Ok(info) => cleanup_tasks.push(CleanupTask::Dns(info)),
+                            Err(e) => error = Some(e),
+                        }
+                    } else {
+                        match self.process_http_challenge(&mut authz_handle, &domain).await {
+                            Ok(token) => cleanup_tasks.push(CleanupTask::Http(token)),
+                            Err(e) => error = Some(e),
+                        }
+                    }
+                }
+                AuthorizationStatus::Valid => {
+                    info!("Authorization already valid for: {}", domain);
+                    continue;
+                }
+                _ => {
+                    error = Some(format!("Authorization failed for: {}", domain).into());
+                    break;
+                }
             }
         }
 
-        info!("✅ All authorizations processed, finalizing order");
+        if error.is_none() {
+            info!("✅ All authorizations processed, finalizing order");
 
-        // Generate CSR and finalize
-        let mut params = rcgen::CertificateParams::new(domains.to_vec())?;
-        params.distinguished_name.push(rcgen::DnType::CommonName, &domains[0]);
-        let key_pair = rcgen::KeyPair::generate()?;
-        let csr = params.serialize_request(&key_pair)?;
+            match order.poll_ready(&RetryPolicy::default()).await {
+                Ok(status) => if status != OrderStatus::Ready {
+                    error = Some(format!("Order not ready, status: {:?}", status).into());
+                },
+                Err(e) => error = Some(e.into()),
+            }
+        }
 
-        // Finalize order
-        order.finalize(csr.der()).await?;
+        if error.is_none() {
+            info!("✅ Wait for order to be ready");
+             
+            let status = order.poll_ready(&RetryPolicy::default()).await?;
+            if status != OrderStatus::Ready {
+                error = Some(format!("Order not ready, status: {:?}", status).into());
+            }
+        }
 
-        // Wait for certificate
-        self.wait_for_certificate(&mut order, &domains[0]).await?;
+        // Finalize order and get certificate
+        let private_key_pem = match error {
+            None => {
+                info!("✅ Order is ready. Finalizing.");
+                
+                match order.finalize().await {
+                    Ok(private_key_pem) => private_key_pem,
+                    Err(e) => {
+                        error = Some(e.into());
+                        String::new()
+                    }
+                }
+            },
+            Some(_) => String::new(),
+        };
+        
+        let cert_chain_pem = match error {
+            None => match order.poll_certificate(&RetryPolicy::default()).await {
+                Ok(cert_chain_pem) => cert_chain_pem,
+                Err(e) => {
+                    error = Some(e.into());
+                    String::new()
+                }
+            },
+            Some(_) => String::new(),
+        };
 
-        let cert_chain_pem = order.certificate().await?.ok_or("Certificate not available")?;
-        let private_key_pem = key_pair.serialize_pem();
+        // Cleanup
+        for task in cleanup_tasks {
+            match task {
+                CleanupTask::Dns(info) => {
+                    if let Some(dns) = self.dns_provider.as_mut() {
+                        info!("✅ Cleanup DNS txt record with id {} for {}", info.record_id, info.domain);
+                        if let Err(e) = dns.delete_txt_record(&info.domain, &info.record_id).await {
+                            warn!("Failed to delete TXT record {}: {}", info.record_id, e);
+                        }
+                    }
+                }
+                CleanupTask::Http(token) => {
+                    info!("✅ Cleanup HTTPS token {}", token);
+                    let mut store = self.challenge_store.write().await;
+                    store.remove(&token);
+                }
+            }
+        }
 
-        info!("🎉 Successfully obtained certificate for domains: {:?}", domains);
-        Ok((cert_chain_pem, private_key_pem))
+        match error {
+            Some(e) => {
+                error!("❌ Failed to obtain certificate {}", e);
+                Err(e)
+            },
+            None => {
+                info!("🎉 Successfully obtained certificate for domains: {:?}", domains);
+                Ok((cert_chain_pem, private_key_pem))
+            }
+        }
     }
 
-    async fn process_dns_challenge(
+    async fn process_dns_challenge<'a>(
         &mut self,
-        order: &mut instant_acme::Order,
-        auth_handle: &instant_acme::AuthorizationHandle,
-        auth_state: &instant_acme::AuthorizationState
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let domain = match &auth_state.identifier {
-            Identifier::Dns(domain) => domain.clone()
-        };
+        authz_handle: &'a mut instant_acme::AuthorizationHandle<'a>,
+        domain: &str,
+    ) -> Result<DnsCleanupInfo, Box<dyn std::error::Error + Send + Sync>> {
         let record_domain = if domain.starts_with("*.") {
             domain[2..].to_string()
         } else {
-            domain.clone()
+            domain.to_string()
         };
         let record_name = "_acme-challenge";
 
-        // Find the DNS challenge handle from auth_state.challenges
-        let challenge_handle = auth_state.challenges.iter()
-            .find(|c| c.r#type() == ChallengeType::Dns01)
+        // Get DNS challenge
+        let mut challenge = authz_handle
+            .challenge(ChallengeType::Dns01)
             .ok_or("No DNS-01 challenge found")?;
 
-        let key_authorization = order.key_authorization(challenge_handle);
+        // Get key authorization from the order for this challenge
+        let key_authorization = challenge.key_authorization();
         let dns_value = key_authorization.dns_value();
         info!("Setting up DNS challenge: {}.{} = {}", record_name, record_domain, dns_value);
 
@@ -265,123 +345,66 @@ impl SslManager {
             record_id
         };
 
-        // Set challenge ready using the challenge handle
-        if let Err(e) = challenge_handle.set_ready().await {
+        // Set challenge ready
+        if let Err(e) = challenge.set_ready().await {
             error!("Setting challenge ready failed: {}", e);
-        } else if let Err(e) = self.wait_for_authorization_handle(auth_handle, &domain).await {
-            error!("Waiting for authorization failed: {}", e);
         }
 
-        // Cleanup
-        if let Some(dns_provider) = self.dns_provider.as_mut() {
-            if let Err(e) = dns_provider.delete_txt_record(&record_domain, &record_id).await {
-                warn!("Failed to cleanup DNS record {}: {}", record_id, e);
-            }
-        }
-
-        Ok(())
+        // Cleanup later - return info for it
+        Ok(DnsCleanupInfo{domain: domain.to_owned(), record_id})
     }
 
-    async fn process_http_challenge(
+    async fn process_http_challenge<'a>(
         &self,
-        order: &mut instant_acme::Order,
-        auth_handle: &instant_acme::AuthorizationHandle,
-        auth_state: &instant_acme::AuthorizationState
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let challenge_handle = auth_state.challenges.iter()
-            .find(|c| c.r#type() == ChallengeType::Http01)
+        authz_handle: &'a mut instant_acme::AuthorizationHandle<'a>,
+        _domain: &str,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // Get HTTP challenge
+        let mut challenge = authz_handle.challenge(ChallengeType::Http01)
             .ok_or("No HTTP-01 challenge found")?;
 
-        let key_authorization = order.key_authorization(challenge_handle);
-        let key_auth = key_authorization.as_str().to_string();
+        let key_authorization = challenge.key_authorization();
 
         // Add challenge to store
         {
             let mut store = self.challenge_store.write().await;
-            store.insert(challenge_handle.token().to_string(), key_auth);
+            store.insert(challenge.token.clone(), key_authorization.as_str().to_string());
         }
 
         // Set challenge ready
-        if let Err(e) = challenge_handle.set_ready().await {
+        if let Err(e) = challenge.set_ready().await {
             error!("Failed to set challenge ready: {}", e);
-        } else {
-            let domain = match &auth_state.identifier { Identifier::Dns(domain) => domain };
-            if let Err(e) = self.wait_for_authorization_handle(auth_handle, domain).await {
-                error!("Failed to wait for authorization: {}", e);
-            }
         }
 
-        // Cleanup
-        {
-            let mut store = self.challenge_store.write().await;
-            store.remove(challenge_handle.token());
-        }
-
-        Ok(())
+        // Cleanup later - return info for it
+        Ok(challenge.token.clone())
     }
 
-    async fn wait_for_authorization_handle(
-        &self,
-        auth_handle: &instant_acme::AuthorizationHandle,
-        domain: &str
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        const MAX_ATTEMPTS: u32 = 60;
-        const RETRY_DELAY: u64 = 5;
-
-        for attempt in 1..=MAX_ATTEMPTS {
-            tokio::time::sleep(Duration::from_secs(RETRY_DELAY)).await;
-
-            let auth_state = auth_handle.get().await?;
-
-            match auth_state.status {
-                AuthorizationStatus::Valid => {
-                    info!("✅ Authorization completed for {}", domain);
-                    return Ok(());
-                }
-                AuthorizationStatus::Invalid => {
-                    for challenge in &auth_state.challenges {
-                        if let Some(error) = challenge.error() {
-                            error!("Challenge error for {}: {:?}", domain, error);
-                        }
-                    }
-                    return Err(format!("Authorization failed for {}", domain).into());
-                }
-                _ => {
-                    if attempt % 12 == 0 {
-                        info!("⏳ Waiting for authorization: {} (attempt {})", domain, attempt);
-                    }
-                }
-            }
-        }
-
-        Err(format!("Authorization timeout for {}", domain).into())
-    }
-
-    async fn wait_for_certificate(&self, order: &mut instant_acme::Order, domain: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        const MAX_ATTEMPTS: u32 = 60;
-        const RETRY_DELAY: u64 = 10;
-
-        for attempt in 1..=MAX_ATTEMPTS {
-            sleep(Duration::from_secs(RETRY_DELAY)).await;
-
-            match order.state().status {
-                OrderStatus::Valid => {
-                    info!("✅ Certificate issued for {}", domain);
-                    return Ok(());
-                }
-                OrderStatus::Invalid => {
-                    return Err(format!("Certificate order failed for {}", domain).into());
-                }
-                _ => {
-                    if attempt % 6 == 0 {
-                        info!("⏳ Waiting for certificate: {} (attempt {})", domain, attempt);
-                    }
-                }
-            }
-        }
-
-        Err(format!("Certificate timeout for {}", domain).into())
-    }
+    // async fn wait_for_certificate(&self, order: &mut instant_acme::Order, domain: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    //     const MAX_ATTEMPTS: u32 = 60;
+    //     const RETRY_DELAY: u64 = 10;
+    // 
+    //     for attempt in 1..=MAX_ATTEMPTS {
+    //         sleep(Duration::from_secs(RETRY_DELAY)).await;
+    // 
+    //         match order.state().status {
+    //             OrderStatus::Valid => {
+    //                 info!("✅ Certificate issued for {}", domain);
+    //                 return Ok(());
+    //             }
+    //             OrderStatus::Invalid => {
+    //                 return Err(format!("Certificate order failed for {}", domain).into());
+    //             }
+    //             _ => {
+    //                 if attempt % 6 == 0 {
+    //                     info!("⏳ Waiting for certificate: {} (attempt {})", domain, attempt);
+    //                 }
+    //             }
+    //         }
+    //     }
+    // 
+    //     Err(format!("Certificate timeout for {}", domain).into())
+    // }
 
     fn load_certificates(&self, cert_path: &Path, key_path: &Path) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
         let cert_file = fs::read(cert_path)?;

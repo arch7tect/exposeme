@@ -91,7 +91,7 @@ impl SslManager {
         self.challenge_store.clone()
     }
 
-    pub async fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn initialize(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !self.config.ssl.enabled {
             info!("SSL disabled, running HTTP only");
             return Ok(());
@@ -116,7 +116,7 @@ impl SslManager {
 
     async fn setup_letsencrypt(
         &mut self,
-    ) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<RustlsConfig, Box<dyn Error + Send + Sync>> {
         let domain = &self.config.server.domain;
         let email = &self.config.ssl.email.clone();
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
@@ -317,7 +317,7 @@ impl SslManager {
         authz_handle: &'a mut instant_acme::AuthorizationHandle<'a>,
         domain: &str,
         auth_no: i32,
-    ) -> Result<DnsCleanupInfo, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<DnsCleanupInfo, Box<dyn Error + Send + Sync>> {
         let record_domain = if domain.starts_with("*.") {
             domain[2..].to_string()
         } else {
@@ -390,7 +390,7 @@ impl SslManager {
         &self,
         authz_handle: &'a mut instant_acme::AuthorizationHandle<'a>,
         _domain: &str,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<String, Box<dyn Error + Send + Sync>> {
         // Get HTTP challenge
         let mut challenge = authz_handle
             .challenge(ChallengeType::Http01)
@@ -420,7 +420,7 @@ impl SslManager {
         &self,
         cert_path: &Path,
         key_path: &Path,
-    ) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<RustlsConfig, Box<dyn Error + Send + Sync>> {
         let cert_file = fs::read(cert_path)?;
         let cert_chain =
             rustls_pemfile::certs(&mut cert_file.as_slice()).collect::<Result<Vec<_>, _>>()?;
@@ -438,7 +438,7 @@ impl SslManager {
 
     fn load_manual_certificates(
         &self,
-    ) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<RustlsConfig, Box<dyn Error + Send + Sync>> {
         let domain = &self.config.server.domain;
         let cert_filename = if self.config.ssl.wildcard {
             format!("wildcard-{}", domain.replace('.', "-"))
@@ -464,7 +464,7 @@ impl SslManager {
 
     pub fn generate_self_signed(
         &self,
-    ) -> Result<RustlsConfig, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<RustlsConfig, Box<dyn Error + Send + Sync>> {
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
         fs::create_dir_all(cache_dir)?;
 
@@ -510,7 +510,7 @@ impl SslManager {
 
     pub fn get_certificate_info(
         &self,
-    ) -> Result<CertificateInfo, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<CertificateInfo, Box<dyn Error + Send + Sync>> {
         let domain = &self.config.server.domain;
         let cert_filename = if self.config.ssl.wildcard {
             format!("wildcard-{}", domain.replace('.', "-"))
@@ -556,7 +556,7 @@ impl SslManager {
         }
     }
 
-    pub async fn force_renewal(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn force_renewal(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let domain = self.config.server.domain.clone();
         let wildcard = self.config.ssl.wildcard;
         let cert_cache_dir = self.config.ssl.cert_cache_dir.clone();

@@ -258,42 +258,6 @@ impl SslManager {
             }
         }
 
-        if error.is_none() {
-            info!("✅ Wait for order to be ready");
-
-            let status = order.poll_ready(&RetryPolicy::default()).await?;
-            if status != OrderStatus::Ready {
-                error = Some(format!("Order not ready, status: {:?}", status).into());
-            }
-        }
-
-        // Finalize order and get certificate
-        let private_key_pem = match error {
-            None => {
-                info!("✅ Order is ready. Finalizing.");
-
-                match order.finalize().await {
-                    Ok(private_key_pem) => private_key_pem,
-                    Err(e) => {
-                        error = Some(e.into());
-                        String::new()
-                    }
-                }
-            }
-            Some(_) => String::new(),
-        };
-
-        let cert_chain_pem = match error {
-            None => match order.poll_certificate(&RetryPolicy::default()).await {
-                Ok(cert_chain_pem) => cert_chain_pem,
-                Err(e) => {
-                    error = Some(e.into());
-                    String::new()
-                }
-            },
-            Some(_) => String::new(),
-        };
-
         // Cleanup
         for task in cleanup_tasks {
             match task {
@@ -315,20 +279,16 @@ impl SslManager {
                 }
             }
         }
-
-        match error {
-            Some(e) => {
-                error!("❌ Failed to obtain certificate {}", e);
-                Err(e)
-            }
-            None => {
-                info!(
-                    "🎉 Successfully obtained certificate for domains: {:?}",
-                    domains
-                );
-                Ok((cert_chain_pem, private_key_pem))
-            }
+        
+        if let Some(e) = error {
+            error!("❌ Error obtaining certificate: {}", e);
+            return Err(e);
         }
+
+        info!("✅ Order is ready. Finalizing.");
+        let private_key_pem = order.finalize().await?; 
+        let cert_chain_pem = order.poll_certificate(&RetryPolicy::default()).await?;
+        Ok((cert_chain_pem, private_key_pem))
     }
 
     async fn process_dns_challenge<'a>(
@@ -381,7 +341,7 @@ impl SslManager {
                 .wait_for_propagation(&record_domain, record_name, &dns_value)
                 .await
             {
-                error!("DNS propagation failed: {}", e);
+                error!("❌ DNS propagation failed: {}", e);
                 if let Err(e) = dns_provider
                     .delete_txt_record(&record_domain, &record_id)
                     .await
@@ -395,7 +355,7 @@ impl SslManager {
 
         // Set challenge ready
         if let Err(e) = challenge.set_ready().await {
-            error!("Setting challenge ready failed: {}", e);
+            error!("❌ Setting challenge ready failed: {}", e);
         }
 
         // Cleanup later - return info for it
@@ -428,7 +388,7 @@ impl SslManager {
 
         // Set challenge ready
         if let Err(e) = challenge.set_ready().await {
-            error!("Failed to set challenge ready: {}", e);
+            error!("❌ Failed to set challenge ready: {}", e);
         }
 
         // Cleanup later - return info for it

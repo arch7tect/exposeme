@@ -1,5 +1,6 @@
 // src/ssl.rs - Corrected for instant-acme 0.8.2 API based on official example
 use std::collections::HashMap;
+use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
@@ -9,7 +10,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use instant_acme::{
     Account, AuthorizationStatus, ChallengeType, Identifier, LetsEncrypt, NewAccount, NewOrder,
-    OrderStatus, RetryPolicy,
+    Order, OrderStatus, RetryPolicy,
 };
 use rcgen::generate_simple_self_signed;
 use rustls::ServerConfig as RustlsConfig;
@@ -171,7 +172,7 @@ impl SslManager {
         &mut self,
         domains: &[String],
         email: &str,
-    ) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(String, String), Box<dyn Error + Send + Sync>> {
         let directory_url = if self.config.ssl.staging {
             LetsEncrypt::Staging.url()
         } else {
@@ -202,34 +203,76 @@ impl SslManager {
         info!("ACME order created for domains: {:?}", domains);
 
         let mut cleanup_tasks: Vec<CleanupTask> = Vec::new();
-        let mut error: Option<Box<dyn std::error::Error + Send + Sync>> = None;
 
+        let mut error = self
+            .prepare_acme_order(&mut order, &mut cleanup_tasks)
+            .await
+            .err();
+        if error.is_none() {
+            info!("✅ All authorizations processed, poll order ready");
+
+            error = match order.poll_ready(&RetryPolicy::default()).await {
+                Ok(status) => {
+                    if status != OrderStatus::Ready {
+                        Some(format!("Order not ready, status: {:?}", status).into())
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => Some(e.into()),
+            }
+        };
+
+        self.cleanup_acme_challenge_records(cleanup_tasks).await;
+
+        if let Some(e) = error {
+            error!("❌ Error obtaining certificate: {}", e);
+            return Err(e);
+        }
+
+        info!("✅ Order is ready. Finalizing.");
+        let private_key_pem = order.finalize().await?;
+        let cert_chain_pem = order.poll_certificate(&RetryPolicy::default()).await?;
+        Ok((cert_chain_pem, private_key_pem))
+    }
+
+    async fn prepare_acme_order(
+        &mut self,
+        order: &mut Order,
+        cleanup_tasks: &mut Vec<CleanupTask>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         // Process authorizations
         let mut authorizations = order.authorizations();
         let mut auth_no = 1;
         while let Some(authz_handle) = authorizations.next().await {
-            let mut authz_handle = authz_handle?;
+            let mut authz_handle = match authz_handle {
+                Ok(authz_handle) => authz_handle,
+                Err(e) => return Err(e.into()),
+            };
 
             let domain = match authz_handle.identifier().identifier.clone() {
-                Identifier::Dns(domain) => Ok(domain),
-                _ => Err("Not DNS identifier"),
-            }?;
+                Identifier::Dns(domain) => domain,
+                _ => return Err("Not DNS identifier".into()),
+            };
             match authz_handle.status {
                 AuthorizationStatus::Pending => {
                     info!("Processing authorization for: {}", domain);
 
                     if self.config.ssl.wildcard {
-                        match self.process_dns_challenge(&mut authz_handle, &domain, auth_no).await {
+                        match self
+                            .prepare_dns_challenge(&mut authz_handle, &domain, auth_no)
+                            .await
+                        {
                             Ok(info) => cleanup_tasks.push(CleanupTask::Dns(info)),
-                            Err(e) => error = Some(e),
+                            Err(e) => return Err(e),
                         }
                     } else {
                         match self
-                            .process_http_challenge(&mut authz_handle, &domain)
+                            .prepare_http_challenge(&mut authz_handle, &domain)
                             .await
                         {
                             Ok(token) => cleanup_tasks.push(CleanupTask::Http(token)),
-                            Err(e) => error = Some(e),
+                            Err(e) => return Err(e),
                         }
                     }
                 }
@@ -238,27 +281,15 @@ impl SslManager {
                     continue;
                 }
                 _ => {
-                    error = Some(format!("Authorization failed for: {}", domain).into());
-                    break;
+                    return Err(format!("Authorization failed for: {}", domain).into());
                 }
             }
             auth_no += 1;
         }
+        Ok(())
+    }
 
-        if error.is_none() {
-            info!("✅ All authorizations processed, finalizing order");
-
-            match order.poll_ready(&RetryPolicy::default()).await {
-                Ok(status) => {
-                    if status != OrderStatus::Ready {
-                        error = Some(format!("Order not ready, status: {:?}", status).into());
-                    }
-                }
-                Err(e) => error = Some(e.into()),
-            }
-        }
-
-        // Cleanup
+    async fn cleanup_acme_challenge_records(&mut self, cleanup_tasks: Vec<CleanupTask>) {
         for task in cleanup_tasks {
             match task {
                 CleanupTask::Dns(info) => {
@@ -279,19 +310,9 @@ impl SslManager {
                 }
             }
         }
-        
-        if let Some(e) = error {
-            error!("❌ Error obtaining certificate: {}", e);
-            return Err(e);
-        }
-
-        info!("✅ Order is ready. Finalizing.");
-        let private_key_pem = order.finalize().await?; 
-        let cert_chain_pem = order.poll_certificate(&RetryPolicy::default()).await?;
-        Ok((cert_chain_pem, private_key_pem))
     }
 
-    async fn process_dns_challenge<'a>(
+    async fn prepare_dns_challenge<'a>(
         &mut self,
         authz_handle: &'a mut instant_acme::AuthorizationHandle<'a>,
         domain: &str,
@@ -365,7 +386,7 @@ impl SslManager {
         })
     }
 
-    async fn process_http_challenge<'a>(
+    async fn prepare_http_challenge<'a>(
         &self,
         authz_handle: &'a mut instant_acme::AuthorizationHandle<'a>,
         _domain: &str,

@@ -38,7 +38,7 @@ services:
       - RUST_BACKTRACE=1
 
       # Other
-      - EXPOSEME_REQUEST_TIMEOUT = ${EXPOSEME_REQUEST_TIMEOUT:-120}
+      - EXPOSEME_REQUEST_TIMEOUT=${EXPOSEME_REQUEST_TIMEOUT:-120}
 
     # Security settings
     security_opt:

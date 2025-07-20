@@ -279,8 +279,9 @@ pub fn create_dns_provider(
         "digitalocean" => providers::DigitalOceanProvider::create_with_config(toml_config),
         "azure" => providers::AzureProvider::create_with_config(toml_config),
         "hetzner" => providers::HetznerProvider::create_with_config(toml_config),
+        "cloudflare" => providers::CloudflareProvider::create_with_config(toml_config),
         _ => Err(format!(
-            "Unsupported DNS provider: '{}'. Supported: digitalocean, azure, hetzner",
+            "Unsupported DNS provider: '{}'. Supported: digitalocean, azure, hetzner, cloudflare",
             provider_name
         ).into()),
     }

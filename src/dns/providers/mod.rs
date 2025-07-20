@@ -3,8 +3,8 @@
 mod digitalocean;
 mod azure;
 mod hetzner;
+mod cloudflare;
 // Future providers (uncomment when implemented):
-// pub mod cloudflare;
 // pub mod route53;
 // pub mod namecheap;
 
@@ -12,7 +12,7 @@ mod hetzner;
 pub use digitalocean::DigitalOceanProvider;
 pub use azure::AzureProvider;
 pub use hetzner::HetznerProvider;
+pub use cloudflare::CloudflareProvider;
 
 // Uncomment when implementing additional providers:
-// pub use cloudflare::CloudflareProvider;
 // pub use route53::Route53Provider;

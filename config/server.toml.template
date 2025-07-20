@@ -1,4 +1,4 @@
-# config/server.toml - Updated for wildcard certificates
+# config/server.toml - ExposeME Server Configuration
 
 [server]
 # Bind to all interfaces in container

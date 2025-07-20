@@ -14,12 +14,12 @@ services:
       # Server configuration
       - ./config/server.toml:/etc/exposeme/server.toml:ro
       # SSL certificates storage
-      - ./exposeme-certs:/etc/exposeme/certs:rw
+      - ./certs:/etc/exposeme/certs:rw
 
     environment:
       # Domain configuration
-      - EXPOSEME_DOMAIN=exposeme.arch7tect.org
-      - EXPOSEME_EMAIL=arch7tect@gmail.com
+      - EXPOSEME_DOMAIN=${EXPOSEME_DOMAIN:-exposeme.arch7tect.org}
+      - EXPOSEME_EMAIL=${EXPOSEME_EMAIL:-arch7tect@gmail.com}
 
       # SSL configuration
       - EXPOSEME_STAGING=false

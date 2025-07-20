@@ -380,14 +380,12 @@ impl ServerConfig {
 
         // DNS Provider configuration - only set provider name from environment
         if let Ok(dns_provider) = std::env::var("EXPOSEME_DNS_PROVIDER") {
-            if config.ssl.dns_provider.is_none() {
-                config.ssl.dns_provider = Some(DnsProviderConfig {
-                    provider: dns_provider.clone(),
-                    config: serde_json::Value::Null, // Empty config - providers will use env vars
-                });
-                tracing::info!("DNS provider set to '{}' from EXPOSEME_DNS_PROVIDER", dns_provider);
-                tracing::info!("DNS provider will be configured from its specific environment variables");
-            }
+            config.ssl.dns_provider = Some(DnsProviderConfig {
+                provider: dns_provider.clone(),
+                config: serde_json::Value::Null, // Empty config - providers will use env vars
+            });
+            tracing::info!("DNS provider set to '{}' from EXPOSEME_DNS_PROVIDER", dns_provider);
+            tracing::info!("DNS provider will be configured from its specific environment variables");
         }
 
         // Authentication tokens from environment

@@ -62,7 +62,3 @@ services:
     # Add environment file support
     env_file:
       - .env
-
-networks:
-  default:
-    name: exposeme-network

@@ -46,4 +46,4 @@ tokens = [
 
 [limits]
 max_tunnels = 100
-request_timeout_secs = 30
+request_timeout_secs = 120

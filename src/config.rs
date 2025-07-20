@@ -32,7 +32,7 @@ impl Default for ServerConfig {
             },
             limits: LimitSettings {
                 max_tunnels: 50,
-                request_timeout_secs: 30,
+                request_timeout_secs: 120,
             },
         }
     }

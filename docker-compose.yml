@@ -4,7 +4,7 @@ services:
   exposeme-server:
     image: arch7tect/exposeme-server:latest
     container_name: exposeme-server
-    restart: unless-stopped
+#    restart: unless-stopped
 
     ports:
       - "80:80"       # HTTP (ACME challenges + redirects)

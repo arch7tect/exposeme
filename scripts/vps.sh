@@ -14,5 +14,5 @@ EXPOSEME_EMAIL=arch7tect@gmail.com
 EXPOSEME_DNS_PROVIDER=cloudflare
 EXPOSEME_CLOUDFLARE_TOKEN=secret-dns-provider-token
 EXPOSEME_AUTH_TOKEN=secret-exposeme-token
-RUST_LOG=debug
+RUST_LOG=info
 EOF

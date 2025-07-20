@@ -167,7 +167,7 @@ async fn main() -> Result<(), BoxError> {
 
 async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxError> {
     let test_url = format!(
-        "http://127.0.0.1:{}/.well-known/acme-challenge/readiness-test",
+        "http://127.0.0.1:{}/api/health",
         config.server.http_port
     );
 

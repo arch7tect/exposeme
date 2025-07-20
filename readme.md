@@ -81,7 +81,7 @@ Supports both routing methods simultaneously
 
 ## Certificate Management
 
-To use HTTPS (the secure "lock" icon in browsers), your server needs an SSL certificate. ExposeME gives you three ways to get one:
+To use HTTPS, your server needs an SSL certificate. ExposeME gives you three ways to get one:
 
 ### 1. Automatic Let's Encrypt (recommended)
 Let's Encrypt provides free SSL certificates that ExposeME can get and renew automatically. Perfect for most users.
@@ -114,7 +114,7 @@ ExposeME can create its own certificate for local development. Browsers will sho
 
 ## Quick Start
 
-### DNS Setup (Required First)
+### DNS Setup
 
 Configure DNS records for your domain:
 
@@ -126,157 +126,40 @@ Configure DNS records for your domain:
 
 Wait for DNS propagation before proceeding (test with `nslookup your-domain.com`).
 
-### Server Setup with Docker Compose
+### Quick VPS Setup
 
-1. **Create environment file:**
-
-```bash
-# .env
-DIGITALOCEAN_TOKEN=your_digitalocean_api_token
-# OR for Azure
-AZURE_SUBSCRIPTION_ID=your_azure_subscription_id
-AZURE_RESOURCE_GROUP=your_resource_group
-AZURE_CLIENT_ID=your_client_id
-AZURE_CLIENT_SECRET=your_client_secret
-AZURE_TENANT_ID=your_tenant_id
-# OR for Hetzner
-HETZNER_TOKEN=your_hetzner_api_token
-
-EXPOSEME_AUTH_TOKEN=your_secure_auth_token
-```
-
-2. **Create Docker Compose configuration:**
-
-```yaml
-# docker-compose.yml
-services:
-  exposeme-server:
-    image: arch7tect/exposeme-server:latest
-    container_name: exposeme-server
-    restart: unless-stopped
-
-    ports:
-      - "80:80"       # HTTP (ACME challenges + redirects + WebSocket upgrades)
-      - "443:443"     # HTTPS (secure requests + WebSocket upgrades)
-
-    volumes:
-      - ./config/server.toml:/etc/exposeme/server.toml:ro
-      - ./certs:/etc/exposeme/certs:rw
-
-    environment:
-      # Domain configuration
-      - EXPOSEME_DOMAIN=your-domain.com
-      - EXPOSEME_EMAIL=admin@your-domain.com
-      
-      # SSL configuration
-      - EXPOSEME_STAGING=false
-      - EXPOSEME_WILDCARD=true
-      - EXPOSEME_ROUTING_MODE=both
-      
-      # DNS Provider - Required ONLY for wildcard certificates (subdomain routing):
-      # For DigitalOcean:
-      - EXPOSEME_DNS_PROVIDER=digitalocean
-      - EXPOSEME_DIGITALOCEAN_TOKEN=${DIGITALOCEAN_TOKEN}
-      
-      # For Azure:
-      # - EXPOSEME_DNS_PROVIDER=azure
-      # - EXPOSEME_AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID}
-      # - EXPOSEME_AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP}
-      # - EXPOSEME_AZURE_CLIENT_ID=${AZURE_CLIENT_ID}
-      # - EXPOSEME_AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}
-      # - EXPOSEME_AZURE_TENANT_ID=${AZURE_TENANT_ID}
-
-      # For Hetzner:
-      # - EXPOSEME_DNS_PROVIDER=hetzner
-      # - EXPOSEME_HETZNER_TOKEN=${HETZNER_TOKEN}
-      
-      # Authentication
-      - EXPOSEME_AUTH_TOKEN=${EXPOSEME_AUTH_TOKEN}
-      
-      # Logging
-      - RUST_LOG=info
-
-    env_file:
-      - .env
-
-    security_opt:
-      - no-new-privileges:true
-
-    deploy:
-      resources:
-        limits:
-          memory: 1G
-          cpus: '1.0'
-
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-```
-
-3. **Create server configuration:**
-
-```toml
-# config/server.toml
-[server]
-http_bind = "0.0.0.0"
-http_port = 80
-https_port = 443
-tunnel_path = "/tunnel-ws"  # WebSocket upgrade path (configurable)
-domain = "your-domain.com"
-routing_mode = "both"  # "path", "subdomain", or "both"
-
-[ssl]
-enabled = true
-provider = "letsencrypt"
-email = "admin@your-domain.com"
-staging = false
-cert_cache_dir = "/etc/exposeme/certs"
-wildcard = true  # Required for subdomain routing
-
-# DNS provider required ONLY for wildcard certificates:
-[ssl.dns_provider]
-provider = "digitalocean"  # or "azure" or "hetzner"
-
-# DigitalOcean specific config (can be overridden by env vars):
-[ssl.dns_provider.config]
-api_token = "your-do-token-will-be-set-via-env"
-timeout_seconds = 30
-
-# Azure specific config (uncomment if using Azure):
-# [ssl.dns_provider.config]
-# subscription_id = "your-subscription-id"
-# resource_group = "your-resource-group"
-# client_id = "your-client-id"
-# client_secret = "your-client-secret"
-# tenant_id = "your-tenant-id"
-# timeout_seconds = 30
-
-# Hetzner specific config (uncomment if using Hetzner):
-# [ssl.dns_provider.config]
-# api_token = "your-hetzner-token-will-be-set-via-env"
-# timeout_seconds = 30
-
-[auth]
-tokens = ["dev"]  # Will be overridden by environment
-
-[limits]
-max_tunnels = 100
-request_timeout_secs = 30
-```
-
-3. **Create certificate directory:**
+For rapid deployment on a fresh Ubuntu VPS, create and run this setup script:
 
 ```bash
-mkdir -p ./certs
+#!/bin/bash
+# vps.sh - Quick VPS setup script
+sudo apt update
+sudo apt install apt-transport-https ca-certificates curl software-properties-common git
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable"
+apt-cache policy docker-ce
+sudo apt install docker-ce
+git clone https://github.com/arch7tect/exposeme.git
+cd exposeme
+mkdir -p certs && chmod 777 certs
+cp config/server.toml.template config/server.toml
+cat > .env <<EOF
+EXPOSEME_DOMAIN=<your-domain.com>
+EXPOSEME_EMAIL=<admin@your-domain.com>
+EXPOSEME_DNS_PROVIDER=cloudflare
+EXPOSEME_CLOUDFLARE_TOKEN=<your-cloudflare-token-here>
+EXPOSEME_AUTH_TOKEN=<your-secure-auth-token-here>
+RUST_LOG=info
+EOF
 ```
+**⚠️ Important:** Replace the placeholders <...> in `.env` with your actual values!
 
-4. **Start the server:**
+
+### Start the server
 
 ```bash
-docker-compose up -d
+docker compose up -d
+docker compose logs -f
 ```
 
 ### Client Setup
@@ -286,7 +169,7 @@ docker-compose up -d
 ```toml
 # client.toml
 [client]
-server_url = "wss://your-domain.com/tunnel-ws"  # Uses WebSocket upgrade on HTTPS
+server_url = "wss://example.com/tunnel-ws"  # Uses WebSocket upgrade on HTTPS
 auth_token = "your_secure_auth_token"
 tunnel_id = "my-app"
 local_target = "http://host.docker.internal:3000"
@@ -304,8 +187,8 @@ docker run -it --rm \
 ```
 
 3. **Access your service:**
-   - Subdomain: `https://my-app.your-domain.com/`
-   - Path-based: `https://your-domain.com/my-app/`
+   - Subdomain: `https://my-app.example.com/`
+   - Path-based: `https://example.com/my-app/`
 
 ## DNS Provider Setup
 
@@ -323,6 +206,21 @@ If you're using manual certificates or self-signed certificates, DNS providers a
    ```bash
    EXPOSEME_DNS_PROVIDER=digitalocean
    EXPOSEME_DIGITALOCEAN_TOKEN=your_do_token
+   ```
+
+### Cloudflare
+
+**Required for wildcard certificates only**
+
+1. **Create API token** at https://dash.cloudflare.com/profile/api-tokens with:
+   - **Zone:Zone:Read** permissions
+   - **Zone:DNS:Edit** permissions
+   - **Include: All zones** (or specific zones you want to manage)
+2. **Add your domain** to Cloudflare
+3. **Set environment variables:**
+   ```bash
+   EXPOSEME_DNS_PROVIDER=cloudflare
+   EXPOSEME_CLOUDFLARE_TOKEN=your_cf_token
    ```
 
 ### Hetzner DNS
@@ -453,7 +351,7 @@ OPTIONS:
 | `[ssl]` | `provider` | Certificate source: `letsencrypt` (automatic), `manual` (your own), `selfsigned` (development) | `letsencrypt` |
 | `[ssl]` | `staging` | Use Let's Encrypt staging | `true` |
 | `[ssl]` | `cert_cache_dir` | Directory for storing certificates | `/etc/exposeme/certs` |
-| `[ssl.dns_provider]` | `provider` | DNS provider name (`digitalocean`, `azure`, `hetzner`) | - |
+| `[ssl.dns_provider]` | `provider` | DNS provider name (`digitalocean`, `cloudflare`, `azure`, `hetzner`) | - |
 | `[auth]` | `tokens` | Authentication tokens | `["dev"]` |
 | `[limits]` | `max_tunnels` | Maximum concurrent tunnels | `50` |
 | `[limits]` | `request_timeout_secs` | HTTP request timeout in seconds | `30` |
@@ -482,7 +380,7 @@ OPTIONS:
 | `EXPOSEME_STAGING` | Use staging certificates                      | `false`                   |
 | `EXPOSEME_WILDCARD` | Enable wildcard certificates                  | `true`                    |
 | `EXPOSEME_ROUTING_MODE` | Routing mode                                  | `both`                    |
-| `EXPOSEME_DNS_PROVIDER` | DNS provider (only for wildcard certificates) | `digitalocean`, `azure`, or `hetzner` |
+| `EXPOSEME_DNS_PROVIDER` | DNS provider (only for wildcard certificates) | `digitalocean`, `cloudflare`, `azure`, or `hetzner` |
 | `EXPOSEME_AUTH_TOKEN` | Authentication token                          | `secure_token`            |
 | `EXPOSEME_REQUEST_TIMEOUT` | HTTP request timeout in seconds               | `30`                      |
 | `RUST_LOG` | Logging level (e.g., `info`, `debug`)                 | `info`                    |
@@ -518,25 +416,15 @@ Response:
 - Rust 1.88+
 - Docker (optional)
 
-### Build and Run
+### Build
 
 ```bash
 # Clone repository
-git clone https://github.com/your-repo/exposeme
+git clone https://github.com/arch7tect/exposeme.git
 cd exposeme
 
 # Build
 cargo build --release
-
-# Generate configurations
-./target/release/exposeme-server --generate-config
-./target/release/exposeme-client --generate-config
-
-# Run server
-./target/release/exposeme-server --config server.toml
-
-# Run client (in another terminal)
-./target/release/exposeme-client --config client.toml
 ```
 
 ### Docker Build
@@ -555,10 +443,10 @@ docker build -t exposeme-client --target client .
 ```bash
 docker exec -it exposeme-server id  # Check UID
 sudo chown -R <uid>:<gid> ./certs
-docker-compose restart
+docker compose restart
 ```
 
-**View logs:** `docker-compose logs -f exposeme-server`
+**View logs:** `docker compose logs -f exposeme-server`
 
 ### Self-Signed Certificates
 

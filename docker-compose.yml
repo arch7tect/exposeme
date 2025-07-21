@@ -27,7 +27,7 @@ services:
       - EXPOSEME_ROUTING_MODE=both
 
       # DNS Provider (DigitalOcean)
-      - EXPOSEME_DNS_PROVIDER=${EXPOSEME_DNS_PROVIDER}
+      - EXPOSEME_DNS_PROVIDER=${EXPOSEME_DNS_PROVIDER:-digitalocean}
       - EXPOSEME_DIGITALOCEAN_TOKEN=${DIGITALOCEAN_TOKEN}
 
       # Auth token
@@ -48,19 +48,19 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G          # Increased memory for SSL operations
-          cpus: '1.0'         # Increased CPU for SSL operations
+          memory: 1G
+          cpus: '1.0'
         reservations:
-          memory: 256M        # Increased base memory
+          memory: 256M
           cpus: '0.2'
 
-    # Health check - improved to handle SSL startup time
+    # Health check
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/api/health"]
       interval: 30s
       timeout: 10s
-      retries: 5              # Increased retries
-      start_period: 120s      # Increased startup time for SSL
+      retries: 5
+      start_period: 120s
 
     # Add environment file support
     env_file:

@@ -133,7 +133,7 @@ fn is_websocket_upgrade(req: &Request<Incoming>) -> bool {
 
 fn boxed_body(
     text: impl Into<bytes::Bytes>,
-) -> BoxBody<bytes::Bytes, Box<dyn std::error::Error + Send + Sync>> {
+) -> BoxBody<bytes::Bytes, BoxError> {
     Full::new(text.into())
         .map_err(|e: Infallible| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
         .boxed()

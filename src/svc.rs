@@ -3,9 +3,10 @@ use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
-use base64::Engine;
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use tokio::sync::{mpsc, RwLock};
@@ -23,12 +24,187 @@ use serde_json::json;
 use tracing::{debug, error, info, warn};
 use sha1::{Digest, Sha1};
 use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
+use base64::Engine;
 
 pub type TunnelMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>>;
-pub type PendingRequests = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<(u16, HashMap<String, String>, String)>>>>;
+pub type ActiveRequests = Arc<RwLock<HashMap<String, ActiveRequest>>>;
 pub type ActiveWebSockets = Arc<RwLock<HashMap<String, WebSocketConnection>>>;
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type ResponseBody = BoxBody<bytes::Bytes, BoxError>;
+
+const CHANNEL_BUFFER_SIZE: usize = 32; // Backpressure control
+const SMALL_BODY_THRESHOLD: usize = 256 * 1024; // 256KB
+
+#[derive(Debug)]
+pub struct ActiveRequest {
+    id: String,
+    tunnel_id: String,
+    created_at: std::time::Instant,
+    response_tx: mpsc::Sender<ResponseEvent>, // Bounded channel
+    client_disconnected: Arc<AtomicBool>,
+}
+
+#[derive(Debug)]
+pub enum ResponseEvent {
+    Start {
+        status: u16,
+        headers: HashMap<String, String>,
+        initial_data: Vec<u8>,
+    },
+    Data(Bytes),
+    End,
+    Error(String),
+}
+
+async fn create_streaming_body(
+    response_rx: mpsc::Receiver<ResponseEvent>,
+    request_id: String,
+    active_requests: ActiveRequests,
+) -> ResponseBody {
+    // Create a custom streaming body
+    let stream_body = StreamingResponseBody::new(response_rx, request_id, active_requests);
+    stream_body.boxed()
+}
+
+async fn create_streaming_body_with_initial(
+    initial_data: Vec<u8>,
+    response_rx: mpsc::Receiver<ResponseEvent>,
+    request_id: String,
+    active_requests: ActiveRequests,
+) -> ResponseBody {
+    // Create a custom streaming body with initial data
+    let stream_body = StreamingResponseBody::new_with_initial(initial_data, response_rx, request_id, active_requests);
+    stream_body.boxed()
+}
+
+// Custom streaming body implementation
+struct StreamingResponseBody {
+    initial_data: Option<Bytes>,
+    response_rx: Option<mpsc::Receiver<ResponseEvent>>,
+    request_id: String,
+    active_requests: ActiveRequests,
+    is_complete: bool,
+}
+
+impl StreamingResponseBody {
+    fn new(
+        response_rx: mpsc::Receiver<ResponseEvent>,
+        request_id: String,
+        active_requests: ActiveRequests,
+    ) -> Self {
+        Self {
+            initial_data: None,
+            response_rx: Some(response_rx),
+            request_id,
+            active_requests,
+            is_complete: false,
+        }
+    }
+
+    fn new_with_initial(
+        initial_data: Vec<u8>,
+        response_rx: mpsc::Receiver<ResponseEvent>,
+        request_id: String,
+        active_requests: ActiveRequests,
+    ) -> Self {
+        Self {
+            initial_data: Some(initial_data.into()),
+            response_rx: Some(response_rx),
+            request_id,
+            active_requests,
+            is_complete: false,
+        }
+    }
+}
+
+impl hyper::body::Body for StreamingResponseBody {
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        // Return initial data first if available
+        if let Some(initial) = self.initial_data.take() {
+            return Poll::Ready(Some(Ok(hyper::body::Frame::data(initial))));
+        }
+
+        // If already complete, return None
+        if self.is_complete {
+            return Poll::Ready(None);
+        }
+
+        // Poll the receiver for more data
+        if let Some(receiver) = &mut self.response_rx {
+            match receiver.poll_recv(cx) {
+                Poll::Ready(Some(event)) => {
+                    match event {
+                        ResponseEvent::Data(chunk) => {
+                            Poll::Ready(Some(Ok(hyper::body::Frame::data(chunk))))
+                        }
+                        ResponseEvent::End => {
+                            self.is_complete = true;
+                            self.response_rx = None;
+
+                            // Cleanup
+                            let request_id = self.request_id.clone();
+                            let active_requests = self.active_requests.clone();
+                            tokio::spawn(async move {
+                                active_requests.write().await.remove(&request_id);
+                            });
+
+                            Poll::Ready(None)
+                        }
+                        ResponseEvent::Error(e) => {
+                            self.is_complete = true;
+                            self.response_rx = None;
+
+                            // Cleanup
+                            let request_id = self.request_id.clone();
+                            let active_requests = self.active_requests.clone();
+                            tokio::spawn(async move {
+                                active_requests.write().await.remove(&request_id);
+                            });
+
+                            Poll::Ready(Some(Err(e.into())))
+                        }
+                        _ => {
+                            // Continue polling for the next event
+                            cx.waker().wake_by_ref();
+                            Poll::Pending
+                        }
+                    }
+                }
+                Poll::Ready(None) => {
+                    // Channel closed
+                    self.is_complete = true;
+                    self.response_rx = None;
+
+                    // Cleanup
+                    let request_id = self.request_id.clone();
+                    let active_requests = self.active_requests.clone();
+                    tokio::spawn(async move {
+                        active_requests.write().await.remove(&request_id);
+                    });
+
+                    Poll::Ready(None)
+                }
+                Poll::Pending => Poll::Pending,
+            }
+        } else {
+            Poll::Ready(None)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BodySize {
+    Empty,
+    Small(usize),      // <= 256KB
+    Large(usize),      // > 256KB  
+    Unknown,           // No Content-Length
+}
 
 #[derive(Debug)]
 pub struct WebSocketConnection {
@@ -70,10 +246,32 @@ impl WebSocketConnection {
     }
 }
 
+fn analyze_request_body(req: &Request<Incoming>) -> BodySize {
+    // SSE always streams
+    if req.headers()
+        .get("accept")
+        .and_then(|h| h.to_str().ok())
+        .map(|accept| accept.contains("text/event-stream"))
+        .unwrap_or(false) {
+        return BodySize::Unknown;
+    }
+
+    // Check Content-Length
+    match req.headers()
+        .get("content-length")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<usize>().ok()) {
+        Some(0) => BodySize::Empty,
+        Some(len) if len <= SMALL_BODY_THRESHOLD => BodySize::Small(len),
+        Some(len) => BodySize::Large(len),
+        None => BodySize::Unknown,
+    }
+}
+
 #[derive(Clone)]
 struct UnifiedService {
     tunnels: TunnelMap,
-    pending_requests: PendingRequests,
+    active_requests: ActiveRequests,
     active_websockets: ActiveWebSockets,
     config: ServerConfig,
     challenge_store: ChallengeStore,
@@ -92,7 +290,7 @@ impl Service<Request<Incoming>> for UnifiedService {
 
     fn call(&mut self, req: Request<Incoming>) -> Self::Future {
         let tunnels = self.tunnels.clone();
-        let pending_requests = self.pending_requests.clone();
+        let active_requests = self.active_requests.clone();
         let active_websockets = self.active_websockets.clone();
         let config = self.config.clone();
         let challenge_store = self.challenge_store.clone();
@@ -103,7 +301,7 @@ impl Service<Request<Incoming>> for UnifiedService {
             handle_unified_request(
                 req,
                 tunnels,
-                pending_requests,
+                active_requests,
                 active_websockets,
                 config,
                 challenge_store,
@@ -142,7 +340,7 @@ fn boxed_body(
 async fn handle_unified_request(
     req: Request<Incoming>,
     tunnels: TunnelMap,
-    pending_requests: PendingRequests,
+    active_requests: ActiveRequests,
     active_websockets: ActiveWebSockets,
     config: ServerConfig,
     challenge_store: ChallengeStore,
@@ -179,7 +377,7 @@ async fn handle_unified_request(
         return if path == config.server.tunnel_path {
             info!("🔌 Tunnel management WebSocket via {}", if is_https { "HTTPS" } else { "HTTP" });
             handle_tunnel_management_websocket(
-                req, tunnels, pending_requests, active_websockets, config
+                req, tunnels, active_requests, active_websockets, config
             ).await
         } else {
             info!("🔌 Tunneled WebSocket via {}", if is_https { "HTTPS" } else { "HTTP" });
@@ -193,7 +391,7 @@ async fn handle_unified_request(
 
     if is_https {
         debug!("🔒 Processing tunneled HTTP request via HTTPS");
-        handle_tunnel_request(req, tunnels, pending_requests, config).await
+        handle_tunnel_request(req, tunnels, active_requests, config).await
     } else {
         if config.ssl.enabled {
             debug!("🔄 Redirecting to HTTPS");
@@ -210,7 +408,7 @@ async fn handle_unified_request(
                 .unwrap())
         } else {
             info!("🌐 Processing tunneled HTTP request via HTTP (SSL disabled)");
-            handle_tunnel_request(req, tunnels, pending_requests, config).await
+            handle_tunnel_request(req, tunnels, active_requests, config).await
         }
     }
 }
@@ -218,7 +416,7 @@ async fn handle_unified_request(
 pub async fn start_http_server(
     config: ServerConfig,
     tunnels: TunnelMap,
-    pending_requests: PendingRequests,
+    active_requests: ActiveRequests,
     active_websockets: ActiveWebSockets,
     challenge_store: ChallengeStore,
     ssl_manager: Arc<RwLock<SslManager>>,
@@ -234,12 +432,12 @@ pub async fn start_http_server(
 
         let service = UnifiedService {
             tunnels: tunnels.clone(),
-            pending_requests: pending_requests.clone(),
+            active_requests: active_requests.clone(),
             active_websockets: active_websockets.clone(),
             config: config.clone(),
             challenge_store: challenge_store.clone(),
             ssl_manager: ssl_manager.clone(),
-            is_https: false, 
+            is_https: false,
         };
 
         tokio::spawn(async move {
@@ -256,7 +454,7 @@ pub async fn start_http_server(
 pub async fn start_https_server(
     config: ServerConfig,
     tunnels: TunnelMap,
-    pending_requests: PendingRequests,
+    active_requests: ActiveRequests,
     active_websockets: ActiveWebSockets,
     ssl_manager: Arc<RwLock<SslManager>>,
     tls_config: Arc<RustlsConfig>,
@@ -271,7 +469,7 @@ pub async fn start_https_server(
         let (stream, _) = listener.accept().await?;
         let tls_acceptor = tls_acceptor.clone();
         let tunnels = tunnels.clone();
-        let pending_requests = pending_requests.clone();
+        let active_requests = active_requests.clone();
         let active_websockets = active_websockets.clone();
         let config = config.clone();
         let ssl_manager = ssl_manager.clone();
@@ -284,7 +482,7 @@ pub async fn start_https_server(
                     // HTTPS server is_https = true
                     let service = UnifiedService {
                         tunnels,
-                        pending_requests,
+                        active_requests,
                         active_websockets,
                         config:config.clone(),
                         challenge_store: Arc::new(RwLock::new(HashMap::new())),
@@ -305,6 +503,581 @@ pub async fn start_https_server(
             }
         });
     }
+}
+
+async fn handle_tunnel_request(
+    req: Request<Incoming>,
+    tunnels: TunnelMap,
+    active_requests: ActiveRequests,
+    config: ServerConfig,
+) -> Result<Response<ResponseBody>, BoxError> {
+    let (tunnel_id, forwarded_path) = extract_tunnel_id_from_request(&req, &config)?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+
+    // Get tunnel sender
+    let tunnel_sender = {
+        let tunnels_guard = tunnels.read().await;
+        tunnels_guard.get(&tunnel_id).cloned()
+    };
+
+    let tunnel_sender = match tunnel_sender {
+        Some(sender) => sender,
+        None => {
+            warn!("Tunnel '{}' not found", tunnel_id);
+            return Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .body(boxed_body("Tunnel not available"))
+                .unwrap());
+        }
+    };
+
+    // Analyze request
+    let body_size = analyze_request_body(&req);
+    let method = req.method().clone();
+    let headers = extract_headers(&req);
+
+    // Create response channel with backpressure
+    let (response_tx, response_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
+    let client_disconnected = Arc::new(AtomicBool::new(false));
+
+    // Register request
+    active_requests.write().await.insert(
+        request_id.clone(),
+        ActiveRequest {
+            id: request_id.clone(),
+            tunnel_id: tunnel_id.clone(),
+            created_at: std::time::Instant::now(),
+            response_tx,
+            client_disconnected: client_disconnected.clone(),
+        },
+    );
+
+    // Process request body based on size
+    match body_size {
+        BodySize::Empty => {
+            // Send request with no body
+            tunnel_sender.send(Message::HttpRequestStart {
+                id: request_id.clone(),
+                method: method.to_string(),
+                path: forwarded_path,
+                headers,
+                initial_data: vec![],
+            })?;
+
+            // Send immediate end marker
+            tunnel_sender.send(Message::DataChunk {
+                id: request_id.clone(),
+                data: vec![],
+                is_final: true,
+            })?;
+        }
+
+        BodySize::Small(_) => {
+            // Collect small body efficiently
+            let body_bytes = req.into_body().collect().await?.to_bytes();
+
+            tunnel_sender.send(Message::HttpRequestStart {
+                id: request_id.clone(),
+                method: method.to_string(),
+                path: forwarded_path,
+                headers,
+                initial_data: body_bytes.to_vec(),
+            })?;
+
+            tunnel_sender.send(Message::DataChunk {
+                id: request_id.clone(),
+                data: vec![],
+                is_final: true,
+            })?;
+        }
+
+        BodySize::Large(_) | BodySize::Unknown => {
+            // Stream from the start
+            tunnel_sender.send(Message::HttpRequestStart {
+                id: request_id.clone(),
+                method: method.to_string(),
+                path: forwarded_path,
+                headers,
+                initial_data: vec![],
+            })?;
+
+            // Stream body chunks
+            tokio::spawn(stream_request_body(
+                req.into_body(),
+                request_id.clone(),
+                tunnel_sender,
+                client_disconnected.clone(),
+            ));
+        }
+    }
+
+    // Build streaming response
+    build_streaming_response(request_id, response_rx, active_requests, client_disconnected).await
+}
+
+async fn stream_request_body(
+    body: Incoming,
+    request_id: String,
+    tunnel_sender: mpsc::UnboundedSender<Message>,
+    client_disconnected: Arc<AtomicBool>,
+) -> Result<(), BoxError> {
+    let mut body_stream = body.into_data_stream();
+
+    while let Some(result) = body_stream.next().await {
+        if client_disconnected.load(Ordering::Relaxed) {
+            break; // Client gone, stop processing
+        }
+
+        match result {
+            Ok(chunk) => {
+                if !chunk.is_empty() {
+                    tunnel_sender.send(Message::DataChunk {
+                        id: request_id.clone(),
+                        data: chunk.to_vec(),
+                        is_final: false,
+                    })?;
+                }
+            }
+            Err(e) => {
+                error!("Body stream error: {}", e);
+                break;
+            }
+        }
+    }
+
+    // Send final chunk
+    tunnel_sender.send(Message::DataChunk {
+        id: request_id,
+        data: vec![],
+        is_final: true,
+    })?;
+
+    Ok(())
+}
+
+async fn build_streaming_response(
+    request_id: String,
+    mut response_rx: mpsc::Receiver<ResponseEvent>,
+    active_requests: ActiveRequests,
+    client_disconnected: Arc<AtomicBool>,
+) -> Result<Response<ResponseBody>, BoxError> {
+    // Wait for response start
+    match response_rx.recv().await {
+        Some(ResponseEvent::Start { status, headers, initial_data }) => {
+            // Build response
+            let mut builder = Response::builder().status(status);
+            for (key, value) in headers {
+                builder = builder.header(key, value);
+            }
+
+            // Create response body
+            if initial_data.is_empty() {
+                // Create streaming body from channel
+                let body = create_streaming_body(response_rx, request_id.clone(), active_requests.clone()).await;
+                Ok(builder.body(body)?)
+            } else {
+                // Check if there's more data coming
+                let has_more_data = !response_rx.is_closed();
+
+                if has_more_data {
+                    // Combine initial data with streaming data
+                    let body = create_streaming_body_with_initial(
+                        initial_data,
+                        response_rx,
+                        request_id.clone(),
+                        active_requests.clone()
+                    ).await;
+                    Ok(builder.body(body)?)
+                } else {
+                    // Just return the initial data
+                    active_requests.write().await.remove(&request_id);
+                    Ok(builder.body(boxed_body(initial_data))?)
+                }
+            }
+        }
+
+        Some(ResponseEvent::Error(e)) => {
+            active_requests.write().await.remove(&request_id);
+            Ok(Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(boxed_body(e))?)
+        }
+
+        None => {
+            active_requests.write().await.remove(&request_id);
+            Ok(Response::builder()
+                .status(StatusCode::GATEWAY_TIMEOUT)
+                .body(boxed_body("No response from tunnel"))?)
+        }
+    }
+}
+
+fn extract_headers(req: &Request<Incoming>) -> HashMap<String, String> {
+    let mut headers = HashMap::new();
+    for (name, value) in req.headers() {
+        headers.insert(name.to_string(), value.to_str().unwrap_or("").to_string());
+    }
+    headers
+}
+
+async fn handle_tunnel_management_websocket(
+    req: Request<Incoming>,
+    tunnels: TunnelMap,
+    active_requests: ActiveRequests,
+    active_websockets: ActiveWebSockets,
+    config: ServerConfig,
+) -> Result<Response<ResponseBody>, BoxError> {
+    // This is the HTTP upgrade handler for tunnel management
+    // It's called when exposeme-client connects to /tunnel-ws
+
+    info!("🔌 Tunnel management WebSocket upgrade request");
+
+    // Extract WebSocket key for response
+    let ws_key = req.headers()
+        .get("sec-websocket-key")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+
+    if ws_key.is_empty() {
+        return Ok(Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(boxed_body("Missing Sec-WebSocket-Key"))
+            .unwrap());
+    }
+
+    let accept_key = calculate_websocket_accept_key(ws_key);
+
+    // Create HTTP 101 response
+    let response = Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Accept", accept_key)
+        .body(boxed_body(""))
+        .unwrap();
+
+    // Spawn task to handle the upgraded connection
+    tokio::spawn(async move {
+        match hyper::upgrade::on(req).await {
+            Ok(upgraded) => {
+                info!("✅ Tunnel management WebSocket upgrade successful");
+                if let Err(e) = handle_tunnel_management_connection(
+                    upgraded,
+                    tunnels,
+                    active_requests,
+                    active_websockets,
+                    config,
+                ).await {
+                    error!("❌ Tunnel management connection error: {}", e);
+                }
+            }
+            Err(e) => {
+                error!("❌ Tunnel management WebSocket upgrade failed: {}", e);
+            }
+        }
+    });
+
+    Ok(response)
+}
+
+async fn handle_tunnel_management_connection(
+    upgraded: Upgraded,
+    tunnels: TunnelMap,
+    active_requests: ActiveRequests,
+    active_websockets: ActiveWebSockets,
+    config: ServerConfig,
+) -> Result<(), BoxError> {
+    // Convert upgraded connection to WebSocket
+    let ws_stream = WebSocketStream::from_raw_socket(
+        TokioIo::new(upgraded),
+        Role::Server,
+        Some(WebSocketConfig::default()),
+    ).await;
+
+    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
+
+    // Create channel for outgoing messages
+    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+
+    // Spawn task to handle outgoing messages
+    let outgoing_task = tokio::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            if let Ok(json) = message.to_json() {
+                if let Err(e) = ws_sender.send(WsMessage::Text(json.into())).await {
+                    error!("Failed to send WS message to client: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+    let mut tunnel_id: Option<String> = None;
+
+    while let Some(message) = ws_receiver.next().await {
+        match message {
+            Ok(WsMessage::Text(text)) => {
+                if let Ok(msg) = Message::from_json(&text.to_string()) {
+                    match msg {
+                        Message::Auth { token, tunnel_id: requested_tunnel_id } => {
+                            info!("Auth request for tunnel '{}'", requested_tunnel_id);
+
+                            // Validate tunnel ID
+                            if let Err(e) = config.validate_tunnel_id(&requested_tunnel_id) {
+                                let error_msg = Message::AuthError {
+                                    error: "invalid_tunnel_id".to_string(),
+                                    message: format!("Invalid tunnel ID: {}", e),
+                                };
+                                if let Err(err) = tx.send(error_msg) {
+                                    error!("Failed to send tunnel ID validation error: {}", err);
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            // Token validation
+                            if !config.auth.tokens.contains(&token) {
+                                let error_msg = Message::AuthError {
+                                    error: "invalid_token".to_string(),
+                                    message: "Invalid authentication token".to_string(),
+                                };
+                                if let Err(err) = tx.send(error_msg) {
+                                    error!("Failed to send auth error: {}", err);
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            // Check if tunnel_id is already taken
+                            {
+                                let tunnels_guard = tunnels.read().await;
+                                if tunnels_guard.contains_key(&requested_tunnel_id) {
+                                    let error_msg = Message::AuthError {
+                                        error: "tunnel_id_taken".to_string(),
+                                        message: format!("Tunnel ID '{}' is already in use", requested_tunnel_id),
+                                    };
+                                    if let Err(err) = tx.send(error_msg) {
+                                        error!("Failed to send tunnel_taken error: {}", err);
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            }
+
+                            // Register tunnel
+                            {
+                                let mut tunnels_guard = tunnels.write().await;
+                                tunnels_guard.insert(requested_tunnel_id.clone(), tx.clone());
+                            }
+
+                            tunnel_id = Some(requested_tunnel_id.clone());
+
+                            let success_msg = Message::AuthSuccess {
+                                tunnel_id: requested_tunnel_id.clone(),
+                                public_url: config.get_public_url(&requested_tunnel_id),
+                            };
+
+                            if let Err(err) = tx.send(success_msg) {
+                                error!("Failed to send auth success: {}", err);
+                                break;
+                            }
+                            info!("Tunnel '{}' registered successfully", requested_tunnel_id);
+                        }
+
+                        // New streaming message handlers
+                        Message::HttpResponseStart { id, status, headers, initial_data } => {
+                            if let Some(request) = active_requests.read().await.get(&id) {
+                                let event = ResponseEvent::Start { status, headers, initial_data };
+                                if request.response_tx.send(event).await.is_err() {
+                                    // Client disconnected
+                                    request.client_disconnected.store(true, Ordering::Relaxed);
+                                }
+                            }
+                        }
+
+                        Message::DataChunk { id, data, is_final } => {
+                            if let Some(request) = active_requests.read().await.get(&id) {
+                                if !data.is_empty() {
+                                    if request.response_tx.send(ResponseEvent::Data(data.into())).await.is_err() {
+                                        request.client_disconnected.store(true, Ordering::Relaxed);
+                                    }
+                                }
+
+                                if is_final {
+                                    let _ = request.response_tx.send(ResponseEvent::End).await;
+                                    active_requests.write().await.remove(&id);
+                                }
+                            }
+                        }
+
+                        // Legacy message handlers (for backward compatibility)
+                        Message::HttpResponse { id, status, headers, body } => {
+                            // Handle legacy HTTP response
+                            if let Some(request) = active_requests.read().await.get(&id) {
+                                // Decode body
+                                let body_bytes = match base64::engine::general_purpose::STANDARD.decode(&body) {
+                                    Ok(bytes) => bytes,
+                                    Err(e) => {
+                                        error!("Failed to decode legacy response body: {}", e);
+                                        vec![]
+                                    }
+                                };
+
+                                let event = ResponseEvent::Start {
+                                    status,
+                                    headers,
+                                    initial_data: body_bytes
+                                };
+
+                                if request.response_tx.send(event).await.is_ok() {
+                                    let _ = request.response_tx.send(ResponseEvent::End).await;
+                                }
+
+                                active_requests.write().await.remove(&id);
+                            }
+                        }
+
+                        Message::WebSocketUpgradeResponse { connection_id, status, headers: _ } => {
+                            info!("📡 WebSocket upgrade response: {} (status: {})", connection_id, status);
+                            // Nothing to do here as we've already upgraded incoming connection.
+                        }
+
+                        Message::WebSocketData { connection_id, data } => {
+                            // Handle WebSocket data from tunnel client
+                            if let Some(connection) = active_websockets.read().await.get(&connection_id) {
+                                debug!("📡 Received data for {} (age: {}, {} bytes)", connection_id, connection.age_info(), data.len());
+                                if let Some(ws_tx) = &connection.ws_tx {
+                                    match base64::engine::general_purpose::STANDARD.decode(&data) {
+                                        Ok(binary_data) => {
+                                            let ws_message = if let Ok(text) = String::from_utf8(binary_data.clone()) {
+                                                WsMessage::Text(text.into())
+                                            } else {
+                                                WsMessage::Binary(binary_data.into())
+                                            };
+
+                                            if let Err(e) = ws_tx.send(ws_message) {
+                                                error!("Failed to forward WebSocket data to client {}: {}", connection_id, e);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to decode WebSocket data for {}: {}", connection_id, e);
+                                        }
+                                    }
+                                }
+                            } else {
+                                warn!("Received data for unknown WebSocket connection: {}", connection_id);
+                            }
+                        }
+
+                        Message::WebSocketClose { connection_id, code, reason } => {
+                            // Handle WebSocket close from tunnel client
+                            if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
+                                info!("📡 Close for {}: code={:?}, reason={:?}, final_status={}", connection_id, code, reason, connection.status_summary());
+                                if let Some(ws_tx) = &connection.ws_tx {
+                                    let close_frame = if let Some(code) = code {
+                                        Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                                            code: code.into(),
+                                            reason: reason.unwrap_or_default().into(),
+                                        })
+                                    } else {
+                                        None
+                                    };
+
+                                    if let Err(e) = ws_tx.send(WsMessage::Close(close_frame)) {
+                                        error!("Failed to send close frame for {}: {:?}", connection_id, e);
+                                    };
+                                }
+                                info!("✅ Cleaned up WebSocket connection {}", connection_id);
+                            }
+                        }
+
+                        _ => {
+                            warn!("Unexpected message type from tunnel client");
+                        }
+                    }
+                }
+            }
+            Ok(WsMessage::Close(_)) => {
+                info!("Tunnel management WebSocket closed");
+                break;
+            }
+            Err(e) => {
+                error!("Tunnel management WebSocket error: {}", e);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    // Clean up tunnel on disconnect
+    if let Some(tunnel_id) = tunnel_id {
+        shutdown_tunnel(tunnels, active_requests, active_websockets, tunnel_id).await;
+    }
+
+    outgoing_task.abort();
+    Ok(())
+}
+
+async fn shutdown_tunnel(
+    tunnels: TunnelMap,
+    active_requests: ActiveRequests,
+    active_websockets: ActiveWebSockets,
+    tunnel_id: String
+) {
+    {
+        let mut tunnels_guard = tunnels.write().await;
+        tunnels_guard.remove(&tunnel_id);
+        info!("ExposeME client disconnected. Tunnel '{}' removed", tunnel_id);
+    }
+
+    // Clean up active requests for this tunnel
+    let requests_to_cleanup = {
+        let requests = active_requests.read().await;
+        requests.iter()
+            .filter(|(_, req)| req.tunnel_id == tunnel_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>()
+    };
+
+    for request_id in requests_to_cleanup {
+        if let Some(request) = active_requests.write().await.remove(&request_id) {
+            request.client_disconnected.store(true, Ordering::Relaxed);
+            let _ = request.response_tx.send(ResponseEvent::Error("Tunnel disconnected".to_string())).await;
+        }
+    }
+
+    let websocket_connections_to_cleanup = {
+        let websockets = active_websockets.read().await;
+        websockets.iter()
+            .filter(|(_, conn)| conn.tunnel_id == tunnel_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>()
+    };
+    if !websocket_connections_to_cleanup.is_empty() {
+        info!("🧹 Cleaning up {} WebSocket connections", websocket_connections_to_cleanup.len());
+        for connection_id in websocket_connections_to_cleanup {
+            if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
+                info!("🗑️  Cleaned up WebSocket connection: {}", connection_id);
+                // Close the browser WebSocket connection gracefully
+                if let Some(ws_tx) = &connection.ws_tx {
+                    let close_msg = WsMessage::Close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                        code: 1001u16.into(), // Going away
+                        reason: "ExposeME client disconnected".into(),
+                    }));
+                    if let Err(e) = ws_tx.send(close_msg) {
+                        warn!("Failed to close browser WebSocket {}: {}", connection_id, e);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn calculate_websocket_accept_key(ws_key: &str) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(ws_key.as_bytes());
+    hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"); // WebSocket magic string
+    let hash = hasher.finalize();
+    base64::engine::general_purpose::STANDARD.encode(&hash)
 }
 
 async fn handle_acme_challenge(
@@ -441,306 +1214,6 @@ async fn handle_certificate_api(
     }
 }
 
-fn calculate_websocket_accept_key(ws_key: &str) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(ws_key.as_bytes());
-    hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"); // WebSocket magic string
-    let hash = hasher.finalize();
-    base64::engine::general_purpose::STANDARD.encode(&hash)
-}
-
-async fn handle_tunnel_management_websocket(
-    req: Request<Incoming>,
-    tunnels: TunnelMap,
-    pending_requests: PendingRequests,
-    active_websockets: ActiveWebSockets,
-    config: ServerConfig,
-) -> Result<Response<ResponseBody>, BoxError> {
-    // This is the HTTP upgrade handler for tunnel management
-    // It's called when exposeme-client connects to /tunnel-ws
-
-    info!("🔌 Tunnel management WebSocket upgrade request");
-
-    // Extract WebSocket key for response
-    let ws_key = req.headers()
-        .get("sec-websocket-key")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
-
-    if ws_key.is_empty() {
-        return Ok(Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(boxed_body("Missing Sec-WebSocket-Key"))
-            .unwrap());
-    }
-
-    let accept_key = calculate_websocket_accept_key(ws_key);
-
-    // Create HTTP 101 response
-    let response = Response::builder()
-        .status(StatusCode::SWITCHING_PROTOCOLS)
-        .header("Connection", "Upgrade")
-        .header("Upgrade", "websocket")
-        .header("Sec-WebSocket-Accept", accept_key)
-        .body(boxed_body(""))
-        .unwrap();
-
-    // Spawn task to handle the upgraded connection
-    tokio::spawn(async move {
-        // tokio::time::sleep(Duration::from_millis(100)).await;
-        match hyper::upgrade::on(req).await {
-            Ok(upgraded) => {
-                info!("✅ Tunnel management WebSocket upgrade successful");
-                if let Err(e) = handle_tunnel_management_connection(
-                    upgraded,
-                    tunnels,
-                    pending_requests,
-                    active_websockets,
-                    config,
-                ).await {
-                    error!("❌ Tunnel management connection error: {}", e);
-                }
-            }
-            Err(e) => {
-                error!("❌ Tunnel management WebSocket upgrade failed: {}", e);
-            }
-        }
-    });
-
-    Ok(response)
-}
-
-async fn handle_tunnel_management_connection(
-    upgraded: Upgraded,
-    tunnels: TunnelMap,
-    pending_requests: PendingRequests,
-    active_websockets: ActiveWebSockets,
-    config: ServerConfig,
-) -> Result<(), BoxError> {
-    // Convert upgraded connection to WebSocket
-    let ws_stream = WebSocketStream::from_raw_socket(
-        TokioIo::new(upgraded),
-        Role::Server,
-        Some(WebSocketConfig::default()),
-    ).await;
-
-    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-
-    // Create channel for outgoing messages
-    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-
-    // Spawn task to handle outgoing messages
-    let outgoing_task = tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
-            if let Ok(json) = message.to_json() {
-                if let Err(e) = ws_sender.send(WsMessage::Text(json.into())).await {
-                    error!("Failed to send WS message to client: {}", e);
-                    break;
-                }
-            }
-        }
-    });
-
-    let mut tunnel_id: Option<String> = None;
-
-    while let Some(message) = ws_receiver.next().await {
-        match message {
-            Ok(WsMessage::Text(text)) => {
-                if let Ok(msg) = Message::from_json(&text.to_string()) {
-                    match msg {
-                        Message::Auth { token, tunnel_id: requested_tunnel_id } => {
-                            info!("Auth request for tunnel '{}'", requested_tunnel_id);
-
-                            // Validate tunnel ID
-                            if let Err(e) = config.validate_tunnel_id(&requested_tunnel_id) {
-                                let error_msg = Message::AuthError {
-                                    error: "invalid_tunnel_id".to_string(),
-                                    message: format!("Invalid tunnel ID: {}", e),
-                                };
-                                if let Err(err) = tx.send(error_msg) {
-                                    error!("Failed to send tunnel ID validation error: {}", err);
-                                    break;
-                                }
-                                continue;
-                            }
-
-                            // Token validation
-                            if !config.auth.tokens.contains(&token) {
-                                let error_msg = Message::AuthError {
-                                    error: "invalid_token".to_string(),
-                                    message: "Invalid authentication token".to_string(),
-                                };
-                                if let Err(err) = tx.send(error_msg) {
-                                    error!("Failed to send auth error: {}", err);
-                                    break;
-                                }
-                                continue;
-                            }
-
-                            // Check if tunnel_id is already taken
-                            {
-                                let tunnels_guard = tunnels.read().await;
-                                if tunnels_guard.contains_key(&requested_tunnel_id) {
-                                    let error_msg = Message::AuthError {
-                                        error: "tunnel_id_taken".to_string(),
-                                        message: format!("Tunnel ID '{}' is already in use", requested_tunnel_id),
-                                    };
-                                    if let Err(err) = tx.send(error_msg) {
-                                        error!("Failed to send tunnel_taken error: {}", err);
-                                        break;
-                                    }
-                                    continue;
-                                }
-                            }
-
-                            // Register tunnel
-                            {
-                                let mut tunnels_guard = tunnels.write().await;
-                                tunnels_guard.insert(requested_tunnel_id.clone(), tx.clone());
-                            }
-
-                            tunnel_id = Some(requested_tunnel_id.clone());
-
-                            let success_msg = Message::AuthSuccess {
-                                tunnel_id: requested_tunnel_id.clone(),
-                                public_url: config.get_public_url(&requested_tunnel_id),
-                            };
-
-                            if let Err(err) = tx.send(success_msg) {
-                                error!("Failed to send auth success: {}", err);
-                                break;
-                            }
-                            info!("Tunnel '{}' registered successfully", requested_tunnel_id);
-                        }
-
-                        Message::HttpResponse { id, status, headers, body } => {
-                            // Handle HTTP response from tunnel client
-                            let response_sender = {
-                                let mut pending = pending_requests.write().await;
-                                pending.remove(&id)
-                            };
-
-                            if let Some(sender) = response_sender {
-                                if let Err(e) = sender.send((status, headers, body)) {
-                                    error!("Failed to send HTTP response: {}", e);
-                                }
-                            }
-                        }
-
-                        Message::WebSocketUpgradeResponse { connection_id, status, headers: _ } => {
-                            info!("📡 WebSocket upgrade response: {} (status: {})", connection_id, status);
-                            // Nothing to do here as we've already upgraded incoming connection.
-                        }
-
-                        Message::WebSocketData { connection_id, data } => {
-                            // Handle WebSocket data from tunnel client
-                            if let Some(connection) = active_websockets.read().await.get(&connection_id) {
-                                debug!("📡 Received data for {} (age: {}, {} bytes)", connection_id, connection.age_info(), data.len());
-                                if let Some(ws_tx) = &connection.ws_tx {
-                                    match base64::engine::general_purpose::STANDARD.decode(&data) {
-                                        Ok(binary_data) => {
-                                            let ws_message = if let Ok(text) = String::from_utf8(binary_data.clone()) {
-                                                WsMessage::Text(text.into())
-                                            } else {
-                                                WsMessage::Binary(binary_data.into())
-                                            };
-
-                                            if let Err(e) = ws_tx.send(ws_message) {
-                                                error!("Failed to forward WebSocket data to client {}: {}", connection_id, e);
-                                                // active_websockets.write().await.remove(&connection_id);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("Failed to decode WebSocket data for {}: {}", connection_id, e);
-                                        }
-                                    }
-                                }
-                            } else {
-                                warn!("Received data for unknown WebSocket connection: {}", connection_id);
-                            }
-                        }
-
-                        Message::WebSocketClose { connection_id, code, reason } => {
-                            // Handle WebSocket close from tunnel client
-                            if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
-                                info!("📡 Close for {}: code={:?}, reason={:?}, final_status={}", connection_id, code, reason, connection.status_summary());                                if let Some(ws_tx) = &connection.ws_tx {
-                                    let close_frame = if let Some(code) = code {
-                                        Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                                            code: code.into(),
-                                            reason: reason.unwrap_or_default().into(),
-                                        })
-                                    } else {
-                                        None
-                                    };
-
-                                    if let Err(e) = ws_tx.send(WsMessage::Close(close_frame)) {
-                                        error!("Failed to send close frame for {}: {:?}", connection_id, e);
-                                    };
-                                }
-                                info!("✅ Cleaned up WebSocket connection {}", connection_id);
-                            }
-                        }
-
-                        _ => {
-                            warn!("Unexpected message type from tunnel client");
-                        }
-                    }
-                }
-            }
-            Ok(WsMessage::Close(_)) => {
-                info!("Tunnel management WebSocket closed");
-                break;
-            }
-            Err(e) => {
-                error!("Tunnel management WebSocket error: {}", e);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    // Clean up tunnel on disconnect
-    if let Some(tunnel_id) = tunnel_id {
-        shutdown_tunnel(tunnels, active_websockets, tunnel_id).await;
-    }
-
-    outgoing_task.abort();
-    Ok(())
-}
-
-async fn shutdown_tunnel(tunnels: TunnelMap, active_websockets: ActiveWebSockets, tunnel_id: String) {
-    {
-        let mut tunnels_guard = tunnels.write().await;
-        tunnels_guard.remove(&tunnel_id);
-        info!("ExposeME client disconnected. Tunnel '{}' removed", tunnel_id);
-    }
-    let websocket_connections_to_cleanup = {
-        let websockets = active_websockets.read().await;
-        websockets.iter()
-            .filter(|(_, conn)| conn.tunnel_id == tunnel_id)
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>()
-    };
-    if !websocket_connections_to_cleanup.is_empty() {
-        info!("🧹 Cleaning up {} WebSocket connections", websocket_connections_to_cleanup.len());
-        for connection_id in websocket_connections_to_cleanup {
-            if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
-                info!("🗑️  Cleaned up WebSocket connection: {}", connection_id);
-                // Close the browser WebSocket connection gracefully
-                if let Some(ws_tx) = &connection.ws_tx {
-                    let close_msg = WsMessage::Close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                        code: 1001u16.into(), // Going away
-                        reason: "ExposeME client disconnected".into(),
-                    }));
-                    if let Err(e) = ws_tx.send(close_msg) {
-                        warn!("Failed to close browser WebSocket {}: {}", connection_id, e);
-                    }
-                }
-            }
-        }
-    }
-}
-
 async fn handle_websocket_upgrade_request(
     req: Request<Incoming>,
     tunnels: TunnelMap,
@@ -838,8 +1311,6 @@ async fn handle_websocket_upgrade_request(
     let connection_id_clone = connection_id.clone();
 
     tokio::spawn(async move {
-        // Wait a moment for the response to be sent
-        // tokio::time::sleep(Duration::from_millis(300)).await;
         // Get the upgraded connection
         match hyper::upgrade::on(req).await {
             Ok(upgraded) => {
@@ -966,8 +1437,6 @@ async fn handle_websocket_proxy_connection(
             }
         }
 
-        // Cleanup on task end
-        // active_websockets_clone.write().await.remove(&connection_id_clone);
         info!("🔌 Original-to-tunnel task ended for {}", connection_id_clone);
     });
 
@@ -1026,153 +1495,6 @@ async fn send_to_tunnel(
     }
 
     Ok(())
-}
-
-async fn handle_tunnel_request(
-    req: Request<Incoming>,
-    tunnels: TunnelMap,
-    pending_requests: PendingRequests,
-    config: ServerConfig,
-) -> Result<Response<ResponseBody>, BoxError> {
-    let method = req.method().clone();
-
-    // Extract tunnel ID and forwarded path based on routing mode
-    let (tunnel_id, forwarded_path) = match extract_tunnel_id_from_request(&req, &config) {
-        Ok(result) => result,
-        Err(e) => {
-            warn!("Failed to extract tunnel ID: {}", e);
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(boxed_body(format!("Invalid request: {}", e)))
-                .unwrap());
-        }
-    };
-
-    info!(
-        "Request for tunnel '{}' ({}): {} {}",
-        tunnel_id,
-        match config.server.routing_mode {
-            RoutingMode::Path => "path",
-            RoutingMode::Subdomain => "subdomain",
-            RoutingMode::Both => "both",
-        },
-        method,
-        forwarded_path
-    );
-
-    // Check if tunnel exists
-    let tunnel_sender = {
-        let tunnels_guard = tunnels.read().await;
-        tunnels_guard.get(&tunnel_id).cloned()
-    };
-
-    let tunnel_sender = match tunnel_sender {
-        Some(sender) => sender,
-        None => {
-            warn!("Tunnel '{}' not found", tunnel_id);
-            return Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .body(boxed_body("Tunnel not available"))
-                .unwrap());
-        }
-    };
-
-    // Generate request ID
-    let request_id = uuid::Uuid::new_v4().to_string();
-
-    // Extract headers before consuming request body
-    let headers_ref = req.headers();
-
-    // Extract headers
-    let mut headers = HashMap::new();
-    for (name, value) in headers_ref {
-        headers.insert(name.to_string(), value.to_str().unwrap_or("").to_string());
-    }
-
-    // Extract body
-    let body_bytes = req.into_body().collect().await?.to_bytes();
-    let body_b64 = base64::engine::general_purpose::STANDARD.encode(&body_bytes);
-
-    // Create HTTP request message
-    let http_request = Message::HttpRequest {
-        id: request_id.clone(),
-        method: method.to_string(),
-        path: forwarded_path,
-        headers,
-        body: body_b64,
-    };
-
-    // Create response channel
-    let (response_tx, mut response_rx) = mpsc::unbounded_channel();
-
-    // Store pending request
-    {
-        let mut pending = pending_requests.write().await;
-        pending.insert(request_id.clone(), response_tx);
-    }
-
-    // Send request to client
-    if let Err(e) = tunnel_sender.send(http_request) {
-        error!("Failed to send request to tunnel '{}': {}", tunnel_id, e);
-        return Ok(Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(boxed_body("Tunnel communication error"))
-            .unwrap());
-    }
-
-    // Wait for response (with timeout from config)
-    let response = tokio::time::timeout(
-        Duration::from_secs(config.limits.request_timeout_secs),
-        response_rx.recv(),
-    )
-        .await;
-
-    // Clean up pending request
-    {
-        let mut pending = pending_requests.write().await;
-        pending.remove(&request_id);
-    }
-
-    match response {
-        Ok(Some((status, headers, body))) => {
-            let mut response_builder = Response::builder().status(status);
-
-            // Add headers
-            for (name, value) in headers {
-                response_builder = response_builder.header(name, value);
-            }
-
-            // Decode body
-            let body_bytes = match base64::engine::general_purpose::STANDARD.decode(&body) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    error!("Failed to decode base64 body from client: {}", e);
-                    return Ok(Response::builder()
-                        .status(StatusCode::BAD_GATEWAY)
-                        .body(boxed_body(
-                            "Tunnel communication error: invalid data format",
-                        ))
-                        .unwrap());
-                }
-            };
-
-            Ok(response_builder.body(boxed_body(body_bytes)).unwrap())
-        }
-        Ok(None) => {
-            warn!("No response received for request {}", request_id);
-            Ok(Response::builder()
-                .status(StatusCode::GATEWAY_TIMEOUT)
-                .body(boxed_body("No response from tunnel"))
-                .unwrap())
-        }
-        Err(_) => {
-            warn!("Timeout waiting for response to request {}", request_id);
-            Ok(Response::builder()
-                .status(StatusCode::GATEWAY_TIMEOUT)
-                .body(boxed_body("Tunnel response timeout"))
-                .unwrap())
-        }
-    }
 }
 
 fn extract_tunnel_id_from_request(

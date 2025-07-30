@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock};
 use tracing::{error, info};
-use exposeme::svc::{BoxError, TunnelMap, PendingRequests, ActiveWebSockets, start_http_server, start_https_server};
+use exposeme::svc::{BoxError, TunnelMap, ActiveRequests, ActiveWebSockets, start_http_server, start_https_server};
 
 #[tokio::main]
 async fn main() -> Result<(), BoxError> {
@@ -46,14 +46,14 @@ async fn main() -> Result<(), BoxError> {
 
     info!("Starting ExposeME Server...");
 
-    // Shared state
+    // Shared state - Updated to use ActiveRequests instead of PendingRequests
     let tunnels: TunnelMap = Arc::new(RwLock::new(HashMap::new()));
-    let pending_requests: PendingRequests = Arc::new(RwLock::new(HashMap::new()));
+    let active_requests: ActiveRequests = Arc::new(RwLock::new(HashMap::new()));
     let active_websockets: ActiveWebSockets = Arc::new(RwLock::new(HashMap::new()));
 
     // Clone for servers
     let tunnels_http = tunnels.clone();
-    let pending_requests_http = pending_requests.clone();
+    let active_requests_http = active_requests.clone();
     let active_websockets_http = active_websockets.clone();
     let config_http = config.clone();
     let challenge_store_http = challenge_store.clone();
@@ -64,7 +64,7 @@ async fn main() -> Result<(), BoxError> {
         if let Err(e) = start_http_server(
             config_http,
             tunnels_http,
-            pending_requests_http,
+            active_requests_http,
             active_websockets_http,
             challenge_store_http,
             ssl_manager_http,
@@ -81,7 +81,7 @@ async fn main() -> Result<(), BoxError> {
     // Start HTTPS server (if SSL enabled)
     let https_handle = if config.ssl.enabled {
         let tunnels_https = tunnels.clone();
-        let pending_requests_https = pending_requests.clone();
+        let active_requests_https = active_requests.clone();
         let active_websockets_https = active_websockets.clone();
         let config_https = config.clone();
         let ssl_config_for_https = ssl_manager.read().await.get_rustls_config().unwrap();
@@ -91,7 +91,7 @@ async fn main() -> Result<(), BoxError> {
             if let Err(e) = start_https_server(
                 config_https,
                 tunnels_https,
-                pending_requests_https,
+                active_requests_https,
                 active_websockets_https,
                 ssl_manager_https,
                 ssl_config_for_https,

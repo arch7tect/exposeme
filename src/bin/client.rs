@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use bytes::Bytes;
 
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
@@ -18,6 +19,15 @@ use tracing::{debug, error, info, warn};
 
 use exposeme::{initialize_tracing, ClientArgs, ClientConfig, Message};
 use exposeme::insecure_cert::InsecureCertVerifier;
+
+pub type OutgoingRequests = Arc<RwLock<HashMap<String, OutgoingRequest>>>;
+
+#[derive(Debug)]
+pub struct OutgoingRequest {
+    id: String,
+    created_at: std::time::Instant,
+    body_tx: Option<mpsc::Sender<Result<Bytes, std::io::Error>>>,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = ClientArgs::parse();
 
     initialize_tracing(args.verbose);
-    
+
     // Generate config if requested
     if args.generate_config {
         ClientConfig::generate_default_file(&args.config)?;
@@ -247,8 +257,9 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
     // Create HTTP client for forwarding requests
     let http_client = HttpClient::new();
 
-    // Store active WebSocket connections
+    // Store active WebSocket connections and outgoing HTTP requests
     let active_websockets: ActiveWebSockets = Arc::new(RwLock::new(HashMap::new()));
+    let outgoing_requests: OutgoingRequests = Arc::new(RwLock::new(HashMap::new()));
 
     // Create channel for sending messages back to server
     let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<Message>();
@@ -314,6 +325,36 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                             return Err(format!("Auth error: {}", message).into());
                         }
 
+                        // New streaming protocol handlers
+                        Message::HttpRequestStart { id, method, path, headers, initial_data } => {
+                            debug!("📥 Received streaming request start: {} {}", method, path);
+
+                            // Spawn parallel task for each HTTP request
+                            let http_client = http_client.clone();
+                            let local_target = config.client.local_target.clone();
+                            let to_server_tx = to_server_tx.clone();
+                            let outgoing_requests = outgoing_requests.clone();
+
+                            tokio::spawn(async move {
+                                handle_http_request_streaming(
+                                    &http_client,
+                                    &local_target,
+                                    &to_server_tx,
+                                    &outgoing_requests,
+                                    id,
+                                    method,
+                                    path,
+                                    headers,
+                                    initial_data,
+                                ).await;
+                            });
+                        }
+
+                        Message::DataChunk { id, data, is_final } => {
+                            handle_data_chunk(&outgoing_requests, id, data, is_final).await;
+                        }
+
+                        // Legacy protocol handlers (for backward compatibility)
                         Message::HttpRequest {
                             id,
                             method,
@@ -321,7 +362,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                             headers,
                             body,
                         } => {
-                            debug!("📥 Received request: {} {}", method, path);
+                            debug!("📥 Received legacy request: {} {}", method, path);
 
                             // Spawn parallel task for each HTTP request
                             let http_client = http_client.clone();
@@ -329,7 +370,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                             let to_server_tx = to_server_tx.clone();
 
                             tokio::spawn(async move {
-                                handle_http_request_parallel(
+                                handle_http_request_legacy(
                                     &http_client,
                                     &local_target,
                                     &to_server_tx,
@@ -341,6 +382,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                                 ).await;
                             });
                         }
+
                         Message::WebSocketUpgrade { connection_id, method, path, headers } => {
                             info!("🔌 Received WebSocket upgrade: {} {}", method, path);
 
@@ -409,6 +451,320 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
     info!("Client connection ended");
     Ok(())
+}
+
+// Handle streaming HTTP requests
+async fn handle_http_request_streaming(
+    http_client: &HttpClient,
+    local_target: &str,
+    to_server_tx: &mpsc::UnboundedSender<Message>,
+    outgoing_requests: &OutgoingRequests,
+    id: String,
+    method: String,
+    path: String,
+    headers: HashMap<String, String>,
+    initial_data: Vec<u8>,
+) {
+    info!("📥 Processing streaming HTTP request: {} {}", method, path);
+
+    // Create streaming body channel
+    let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+
+    // Send initial data if present
+    if !initial_data.is_empty() {
+        let _ = body_tx.send(Ok(initial_data.into())).await;
+    }
+
+    // Register request for incoming chunks
+    outgoing_requests.write().await.insert(id.clone(), OutgoingRequest {
+        id: id.clone(),
+        created_at: std::time::Instant::now(),
+        body_tx: Some(body_tx.clone()),
+    });
+
+    // Create request
+    let url = format!("{}{}", local_target, path);
+    let mut request = create_request_builder(http_client, &method, &url, &headers);
+
+    if ["POST", "PUT", "PATCH"].contains(&method.as_str()) {
+        let body_stream = tokio_stream::wrappers::ReceiverStream::new(body_rx);
+        request = request.body(reqwest::Body::wrap_stream(body_stream));
+    } else {
+        drop(body_tx); // Close body for GET requests
+    }
+
+    // Send request and stream response
+    match request.send().await {
+        Ok(response) => {
+            stream_response_to_server(to_server_tx, id, response).await;
+        }
+        Err(e) => {
+            send_error_response(to_server_tx, id, e.to_string()).await;
+        }
+    }
+}
+
+async fn handle_data_chunk(
+    outgoing_requests: &OutgoingRequests,
+    id: String,
+    data: Vec<u8>,
+    is_final: bool,
+) {
+    let body_tx = {
+        let requests = outgoing_requests.read().await;
+        requests.get(&id).and_then(|r| r.body_tx.clone())
+    };
+
+    if let Some(tx) = body_tx {
+        if !data.is_empty() {
+            let _ = tx.send(Ok(data.into())).await;
+        }
+
+        if is_final {
+            drop(tx); // Close the stream
+            outgoing_requests.write().await.remove(&id);
+        }
+    }
+}
+
+async fn stream_response_to_server(
+    to_server_tx: &mpsc::UnboundedSender<Message>,
+    id: String,
+    response: reqwest::Response,
+) {
+    let status = response.status().as_u16();
+    let headers = extract_response_headers(&response);
+
+    // Check if we should stream this response
+    let should_stream = is_streaming_response(&response);
+
+    if !should_stream && response.content_length().unwrap_or(0) < 256 * 1024 {
+        // Small response - collect and send in one message
+        match response.bytes().await {
+            Ok(bytes) => {
+                to_server_tx.send(Message::HttpResponseStart {
+                    id: id.clone(),
+                    status,
+                    headers,
+                    initial_data: bytes.to_vec(),
+                }).ok();
+
+                to_server_tx.send(Message::DataChunk {
+                    id,
+                    data: vec![],
+                    is_final: true,
+                }).ok();
+            }
+            Err(e) => {
+                send_error_response(to_server_tx, id, e.to_string()).await;
+            }
+        }
+    } else {
+        // Stream the response
+        to_server_tx.send(Message::HttpResponseStart {
+            id: id.clone(),
+            status,
+            headers,
+            initial_data: vec![],
+        }).ok();
+
+        let mut stream = response.bytes_stream();
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(chunk) => {
+                    if to_server_tx.send(Message::DataChunk {
+                        id: id.clone(),
+                        data: chunk.to_vec(),
+                        is_final: false,
+                    }).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!("Response stream error: {}", e);
+                    break;
+                }
+            }
+        }
+
+        // Send final chunk
+        to_server_tx.send(Message::DataChunk {
+            id,
+            data: vec![],
+            is_final: true,
+        }).ok();
+    }
+}
+
+fn is_streaming_response(response: &reqwest::Response) -> bool {
+    // Check for streaming indicators
+    if let Some(content_type) = response.headers().get("content-type") {
+        if let Ok(ct) = content_type.to_str() {
+            if ct.contains("text/event-stream") || ct.contains("application/octet-stream") {
+                return true;
+            }
+        }
+    }
+
+    // Check for chunked encoding
+    if let Some(encoding) = response.headers().get("transfer-encoding") {
+        if let Ok(te) = encoding.to_str() {
+            if te.contains("chunked") {
+                return true;
+            }
+        }
+    }
+
+    // Large or unknown size
+    response.content_length().map(|len| len > 512 * 1024).unwrap_or(true)
+}
+
+// Legacy HTTP request handling (for backward compatibility)
+async fn handle_http_request_legacy(
+    http_client: &HttpClient,
+    local_target: &str,
+    to_server_tx: &mpsc::UnboundedSender<Message>,
+    id: String,
+    method: String,
+    path: String,
+    headers: HashMap<String, String>,
+    body: String,
+) {
+    info!("📥 Processing legacy HTTP request: {} {}", method, path);
+
+    // Forward request to local service
+    let response = forward_request(
+        http_client,
+        local_target,
+        &method,
+        &path,
+        headers,
+        &body,
+    ).await;
+
+    let response_message = match response {
+        Ok((status, headers, body)) => {
+            debug!("📤 Sending legacy HTTP response: {}", status);
+            Message::HttpResponse {
+                id,
+                status,
+                headers,
+                body,
+            }
+        }
+        Err(e) => {
+            error!("❌ Failed to forward legacy HTTP request: {}", e);
+            Message::HttpResponse {
+                id,
+                status: 502,
+                headers: HashMap::new(),
+                body: base64::engine::general_purpose::STANDARD
+                    .encode("Bad Gateway"),
+            }
+        }
+    };
+
+    // Send response back through channel
+    if let Err(e) = to_server_tx.send(response_message) {
+        error!("Failed to send legacy HTTP response through channel: {}", e);
+    }
+}
+
+async fn forward_request(
+    client: &HttpClient,
+    base_url: &str,
+    method: &str,
+    path: &str,
+    headers: HashMap<String, String>,
+    body: &str,
+) -> Result<(u16, HashMap<String, String>, String), Box<dyn std::error::Error>> {
+    // Construct full URL
+    let url = format!("{}{}", base_url, path);
+
+    // Decode body from base64
+    let body_bytes = match base64::engine::general_purpose::STANDARD.decode(body) {
+        Ok(bytes) => bytes,
+        Err(err) => return Err(err.into()),
+    };
+
+    // Create request
+    let mut request_builder = create_request_builder(client, method, &url, &headers);
+
+    // Add body for methods that support it
+    if ["POST", "PUT", "PATCH"].contains(&method) {
+        request_builder = request_builder.body(body_bytes);
+    }
+
+    // Send request
+    let response = request_builder.send().await?;
+
+    // Extract response details
+    let status = response.status().as_u16();
+    let response_headers = extract_response_headers(&response);
+
+    // Get response body
+    let response_body = response.bytes().await?;
+    let response_body_b64 = base64::engine::general_purpose::STANDARD.encode(&response_body);
+
+    Ok((status, response_headers, response_body_b64))
+}
+
+fn create_request_builder(
+    client: &HttpClient,
+    method: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+) -> reqwest::RequestBuilder {
+    let mut request_builder = match method {
+        "GET" => client.get(url),
+        "POST" => client.post(url),
+        "PUT" => client.put(url),
+        "DELETE" => client.delete(url),
+        "PATCH" => client.patch(url),
+        "HEAD" => client.head(url),
+        _ => client.get(url), // Default to GET for unsupported methods
+    };
+
+    // Add headers
+    for (name, value) in headers {
+        // Skip headers that reqwest handles automatically
+        if !["host", "content-length", "connection", "user-agent"]
+            .contains(&name.to_lowercase().as_str())
+        {
+            request_builder = request_builder.header(name, value);
+        }
+    }
+
+    request_builder
+}
+
+fn extract_response_headers(response: &reqwest::Response) -> HashMap<String, String> {
+    let mut response_headers = HashMap::new();
+    for (name, value) in response.headers() {
+        response_headers.insert(name.to_string(), value.to_str().unwrap_or("").to_string());
+    }
+    response_headers
+}
+
+async fn send_error_response(
+    to_server_tx: &mpsc::UnboundedSender<Message>,
+    id: String,
+    error: String,
+) {
+    let error_response = Message::HttpResponseStart {
+        id: id.clone(),
+        status: 502,
+        headers: HashMap::new(),
+        initial_data: error.into_bytes(),
+    };
+
+    to_server_tx.send(error_response).ok();
+
+    to_server_tx.send(Message::DataChunk {
+        id,
+        data: vec![],
+        is_final: true,
+    }).ok();
 }
 
 // Handle WebSocket upgrade requests
@@ -682,119 +1038,6 @@ async fn send_websocket_error_response(
     if let Err(e) = to_server_tx.send(error_response) {
         error!("Failed to send WebSocket error response: {}", e);
     }
-}
-
-// Parallel HTTP request handling
-async fn handle_http_request_parallel(
-    http_client: &HttpClient,
-    local_target: &str,
-    to_server_tx: &mpsc::UnboundedSender<Message>,
-    id: String,
-    method: String,
-    path: String,
-    headers: HashMap<String, String>,
-    body: String,
-) {
-    info!("📥 Processing HTTP request: {} {}", method, path);
-
-    // Forward request to local service
-    let response = forward_request(
-        http_client,
-        local_target,
-        &method,
-        &path,
-        headers,
-        &body,
-    ).await;
-
-    let response_message = match response {
-        Ok((status, headers, body)) => {
-            debug!("📤 Sending HTTP response: {}", status);
-            Message::HttpResponse {
-                id,
-                status,
-                headers,
-                body,
-            }
-        }
-        Err(e) => {
-            error!("❌ Failed to forward HTTP request: {}", e);
-            Message::HttpResponse {
-                id,
-                status: 502,
-                headers: HashMap::new(),
-                body: base64::engine::general_purpose::STANDARD
-                    .encode("Bad Gateway"),
-            }
-        }
-    };
-
-    // Send response back through channel
-    if let Err(e) = to_server_tx.send(response_message) {
-        error!("Failed to send HTTP response through channel: {}", e);
-    }
-}
-
-async fn forward_request(
-    client: &HttpClient,
-    base_url: &str,
-    method: &str,
-    path: &str,
-    headers: HashMap<String, String>,
-    body: &str,
-) -> Result<(u16, HashMap<String, String>, String), Box<dyn std::error::Error>> {
-    // Construct full URL
-    let url = format!("{}{}", base_url, path);
-
-    // Decode body from base64
-    let body_bytes = match base64::engine::general_purpose::STANDARD.decode(body) {
-        Ok(bytes) => bytes,
-        Err(err) => return Err(err.into()),
-    };
-
-    // Create request
-    let mut request_builder = match method {
-        "GET" => client.get(&url),
-        "POST" => client.post(&url),
-        "PUT" => client.put(&url),
-        "DELETE" => client.delete(&url),
-        "PATCH" => client.patch(&url),
-        "HEAD" => client.head(&url),
-        _ => return Err(format!("Unsupported HTTP method: {}", method).into()),
-    };
-
-    // Add headers
-    for (name, value) in headers {
-        // Skip headers that reqwest handles automatically
-        if !["host", "content-length", "connection", "user-agent"]
-            .contains(&name.to_lowercase().as_str())
-        {
-            request_builder = request_builder.header(&name, &value);
-        }
-    }
-
-    // Add body for methods that support it
-    if ["POST", "PUT", "PATCH"].contains(&method) {
-        request_builder = request_builder.body(body_bytes);
-    }
-
-    // Send request
-    let response = request_builder.send().await?;
-
-    // Extract response details
-    let status = response.status().as_u16();
-
-    // Extract response headers
-    let mut response_headers = HashMap::new();
-    for (name, value) in response.headers() {
-        response_headers.insert(name.to_string(), value.to_str().unwrap_or("").to_string());
-    }
-
-    // Get response body
-    let response_body = response.bytes().await?;
-    let response_body_b64 = base64::engine::general_purpose::STANDARD.encode(&response_body);
-
-    Ok((status, response_headers, response_body_b64))
 }
 
 // Handle WebSocket data from server (forward to local service)

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Message {
+    // === AUTHENTICATION ===
     /// Client authentication request
     #[serde(rename = "auth")]
     Auth {
@@ -27,24 +28,41 @@ pub enum Message {
         message: String,
     },
 
-    /// HTTP request forwarding (server -> client)
-    #[serde(rename = "http_request")]
-    HttpRequest {
+    // === HTTP STREAMING ===
+
+    /// HTTP request start (server -> client)
+    #[serde(rename = "http_request_start")]
+    HttpRequestStart {
         id: String,
         method: String,
         path: String,
         headers: HashMap<String, String>,
-        body: String, // Base64 encoded for binary safety
+        #[serde(with = "serde_bytes")]
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        initial_data: Vec<u8>, // Optional first chunk
     },
 
-    /// HTTP response forwarding (client -> server)
-    #[serde(rename = "http_response")]
-    HttpResponse {
+    /// HTTP response start (client -> server)  
+    #[serde(rename = "http_response_start")]
+    HttpResponseStart {
         id: String,
         status: u16,
         headers: HashMap<String, String>,
-        body: String, // Base64 encoded for binary safety
+        #[serde(with = "serde_bytes")]
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        initial_data: Vec<u8>, // Optional first chunk
     },
+
+    /// Data chunk (bidirectional)
+    #[serde(rename = "data_chunk")]
+    DataChunk {
+        id: String,
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>, // Binary data
+        is_final: bool,
+    },
+
+    // === WEBSOCKET (unchanged) ===
 
     /// WebSocket upgrade request (server -> client)
     #[serde(rename = "websocket_upgrade")]
@@ -67,7 +85,7 @@ pub enum Message {
     #[serde(rename = "websocket_data")]
     WebSocketData {
         connection_id: String,
-        data: String, // Base64 encoded binary data
+        data: String, // Keep base64 for WebSocket compat
     },
 
     /// WebSocket connection close (bidirectional)
@@ -78,10 +96,33 @@ pub enum Message {
         reason: Option<String>,
     },
 
+    // === ERROR ===
+
     /// Error message
     #[serde(rename = "error")]
     Error {
         message: String,
+    },
+
+    // === LEGACY COMPATIBILITY (will be removed) ===
+
+    /// HTTP request forwarding (server -> client) - DEPRECATED
+    #[serde(rename = "http_request")]
+    HttpRequest {
+        id: String,
+        method: String,
+        path: String,
+        headers: HashMap<String, String>,
+        body: String, // Base64 encoded for binary safety
+    },
+
+    /// HTTP response forwarding (client -> server) - DEPRECATED
+    #[serde(rename = "http_response")]
+    HttpResponse {
+        id: String,
+        status: u16,
+        headers: HashMap<String, String>,
+        body: String, // Base64 encoded for binary safety
     },
 }
 
@@ -129,6 +170,56 @@ mod tests {
     }
 
     #[test]
+    fn test_streaming_request_serialization() {
+        let streaming_msg = Message::HttpRequestStart {
+            id: "req-123".to_string(),
+            method: "POST".to_string(),
+            path: "/api/data".to_string(),
+            headers: {
+                let mut headers = HashMap::new();
+                headers.insert("content-type".to_string(), "application/json".to_string());
+                headers
+            },
+            initial_data: b"Hello".to_vec(),
+        };
+
+        let json = streaming_msg.to_json().unwrap();
+        let parsed = Message::from_json(&json).unwrap();
+
+        match parsed {
+            Message::HttpRequestStart { id, method, path, headers, initial_data } => {
+                assert_eq!(id, "req-123");
+                assert_eq!(method, "POST");
+                assert_eq!(path, "/api/data");
+                assert_eq!(headers.get("content-type").unwrap(), "application/json");
+                assert_eq!(initial_data, b"Hello".to_vec());
+            }
+            _ => panic!("Unexpected message type"),
+        }
+    }
+
+    #[test]
+    fn test_data_chunk_serialization() {
+        let chunk_msg = Message::DataChunk {
+            id: "req-123".to_string(),
+            data: b"chunk data".to_vec(),
+            is_final: false,
+        };
+
+        let json = chunk_msg.to_json().unwrap();
+        let parsed = Message::from_json(&json).unwrap();
+
+        match parsed {
+            Message::DataChunk { id, data, is_final } => {
+                assert_eq!(id, "req-123");
+                assert_eq!(data, b"chunk data".to_vec());
+                assert_eq!(is_final, false);
+            }
+            _ => panic!("Unexpected message type"),
+        }
+    }
+
+    #[test]
     fn test_websocket_upgrade_serialization() {
         let upgrade_msg = Message::WebSocketUpgrade {
             connection_id: "ws-123".to_string(),
@@ -151,25 +242,6 @@ mod tests {
                 assert_eq!(method, "GET");
                 assert_eq!(path, "/websocket");
                 assert_eq!(headers.get("upgrade").unwrap(), "websocket");
-            }
-            _ => panic!("Unexpected message type"),
-        }
-    }
-
-    #[test]
-    fn test_websocket_data_serialization() {
-        let data_msg = Message::WebSocketData {
-            connection_id: "ws-123".to_string(),
-            data: "SGVsbG8gV29ybGQ=".to_string(), // "Hello World" in base64
-        };
-
-        let json = data_msg.to_json().unwrap();
-        let parsed = Message::from_json(&json).unwrap();
-
-        match parsed {
-            Message::WebSocketData { connection_id, data } => {
-                assert_eq!(connection_id, "ws-123");
-                assert_eq!(data, "SGVsbG8gV29ybGQ=");
             }
             _ => panic!("Unexpected message type"),
         }

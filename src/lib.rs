@@ -5,7 +5,6 @@ mod ssl;
 mod dns;
 pub mod svc;
 pub mod insecure_cert;
-// pub mod async_defer;
 
 use tracing_subscriber::EnvFilter;
 pub use protocol::*;
@@ -24,4 +23,3 @@ pub fn initialize_tracing(verbose: bool) {
         .with_env_filter(filter)
         .init();
 }
-

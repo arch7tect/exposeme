@@ -30,7 +30,7 @@ pub type TunnelMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>
 pub type ActiveRequests = Arc<RwLock<HashMap<String, ActiveRequest>>>;
 pub type ActiveWebSockets = Arc<RwLock<HashMap<String, WebSocketConnection>>>;
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
-type ResponseBody = BoxBody<bytes::Bytes, BoxError>;
+type ResponseBody = BoxBody<Bytes, BoxError>;
 
 const CHANNEL_BUFFER_SIZE: usize = 32; // Backpressure control
 const SMALL_BODY_THRESHOLD: usize = 256 * 1024; // 256KB
@@ -328,8 +328,8 @@ fn is_websocket_upgrade(req: &Request<Incoming>) -> bool {
 }
 
 fn boxed_body(
-    text: impl Into<bytes::Bytes>,
-) -> BoxBody<bytes::Bytes, BoxError> {
+    text: impl Into<Bytes>,
+) -> BoxBody<Bytes, BoxError> {
     Full::new(text.into())
         .map_err(|e: Infallible| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
         .boxed()

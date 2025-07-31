@@ -2,7 +2,7 @@
 
 services:
   exposeme-server:
-    image: arch7tect/exposeme-server:latest
+    image: arch7tect/exposeme-server:1.0
     container_name: exposeme-server
 #    restart: unless-stopped
 

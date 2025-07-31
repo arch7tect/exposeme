@@ -6,7 +6,7 @@ set -e
 
 # Configuration
 DOCKER_HUB_USER=${DOCKER_HUB_USER:-"arch7tect"}
-VERSION=${1:-"latest"}
+VERSION=${1:-"1.0"}
 
 echo "🚀 Building and publishing ExposeME Docker images"
 echo "👤 Docker Hub user: $DOCKER_HUB_USER"
@@ -28,10 +28,10 @@ docker build --target server --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme
 docker build --target client --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme-client:$VERSION .
 
 # Tag as latest
-if [ "$VERSION" != "latest" ]; then
-    docker tag $DOCKER_HUB_USER/exposeme-server:$VERSION $DOCKER_HUB_USER/exposeme-server:latest
-    docker tag $DOCKER_HUB_USER/exposeme-client:$VERSION $DOCKER_HUB_USER/exposeme-client:latest
-fi
+#if [ "$VERSION" != "latest" ]; then
+#    docker tag $DOCKER_HUB_USER/exposeme-server:$VERSION $DOCKER_HUB_USER/exposeme-server:latest
+#    docker tag $DOCKER_HUB_USER/exposeme-client:$VERSION $DOCKER_HUB_USER/exposeme-client:latest
+#fi
 
 # 2. Publish images
 echo "📤 Publishing images to Docker Hub..."
@@ -39,10 +39,10 @@ echo "📤 Publishing images to Docker Hub..."
 docker push $DOCKER_HUB_USER/exposeme-server:$VERSION
 docker push $DOCKER_HUB_USER/exposeme-client:$VERSION
 
-if [ "$VERSION" != "latest" ]; then
-    docker push $DOCKER_HUB_USER/exposeme-server:latest
-    docker push $DOCKER_HUB_USER/exposeme-client:latest
-fi
+#if [ "$VERSION" != "latest" ]; then
+#    docker push $DOCKER_HUB_USER/exposeme-server:latest
+#    docker push $DOCKER_HUB_USER/exposeme-client:latest
+#fi
 
 # 3. Check image sizes
 echo "📊 Image sizes:"

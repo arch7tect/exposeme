@@ -62,7 +62,7 @@ pub enum Message {
         is_final: bool,
     },
 
-    // === WEBSOCKET (unchanged) ===
+    // === WEBSOCKET ===
 
     /// WebSocket upgrade request (server -> client)
     #[serde(rename = "websocket_upgrade")]
@@ -102,27 +102,6 @@ pub enum Message {
     #[serde(rename = "error")]
     Error {
         message: String,
-    },
-
-    // === LEGACY COMPATIBILITY (will be removed) ===
-
-    /// HTTP request forwarding (server -> client) - DEPRECATED
-    #[serde(rename = "http_request")]
-    HttpRequest {
-        id: String,
-        method: String,
-        path: String,
-        headers: HashMap<String, String>,
-        body: String, // Base64 encoded for binary safety
-    },
-
-    /// HTTP response forwarding (client -> server) - DEPRECATED
-    #[serde(rename = "http_response")]
-    HttpResponse {
-        id: String,
-        status: u16,
-        headers: HashMap<String, String>,
-        body: String, // Base64 encoded for binary safety
     },
 }
 

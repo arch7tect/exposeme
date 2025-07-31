@@ -24,8 +24,6 @@ pub type OutgoingRequests = Arc<RwLock<HashMap<String, OutgoingRequest>>>;
 
 #[derive(Debug)]
 pub struct OutgoingRequest {
-    id: String,
-    created_at: std::time::Instant,
     body_tx: Option<mpsc::Sender<Result<Bytes, std::io::Error>>>,
 }
 
@@ -325,7 +323,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                             return Err(format!("Auth error: {}", message).into());
                         }
 
-                        // New streaming protocol handlers
+                        // Streaming protocol handlers
                         Message::HttpRequestStart { id, method, path, headers, initial_data } => {
                             debug!("📥 Received streaming request start: {} {}", method, path);
 
@@ -352,35 +350,6 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
                         Message::DataChunk { id, data, is_final } => {
                             handle_data_chunk(&outgoing_requests, id, data, is_final).await;
-                        }
-
-                        // Legacy protocol handlers (for backward compatibility)
-                        Message::HttpRequest {
-                            id,
-                            method,
-                            path,
-                            headers,
-                            body,
-                        } => {
-                            debug!("📥 Received legacy request: {} {}", method, path);
-
-                            // Spawn parallel task for each HTTP request
-                            let http_client = http_client.clone();
-                            let local_target = config.client.local_target.clone();
-                            let to_server_tx = to_server_tx.clone();
-
-                            tokio::spawn(async move {
-                                handle_http_request_legacy(
-                                    &http_client,
-                                    &local_target,
-                                    &to_server_tx,
-                                    id,
-                                    method,
-                                    path,
-                                    headers,
-                                    body,
-                                ).await;
-                            });
                         }
 
                         Message::WebSocketUpgrade { connection_id, method, path, headers } => {
@@ -477,8 +446,6 @@ async fn handle_http_request_streaming(
 
     // Register request for incoming chunks
     outgoing_requests.write().await.insert(id.clone(), OutgoingRequest {
-        id: id.clone(),
-        created_at: std::time::Instant::now(),
         body_tx: Some(body_tx.clone()),
     });
 
@@ -617,96 +584,6 @@ fn is_streaming_response(response: &reqwest::Response) -> bool {
 
     // Large or unknown size
     response.content_length().map(|len| len > 512 * 1024).unwrap_or(true)
-}
-
-// Legacy HTTP request handling (for backward compatibility)
-async fn handle_http_request_legacy(
-    http_client: &HttpClient,
-    local_target: &str,
-    to_server_tx: &mpsc::UnboundedSender<Message>,
-    id: String,
-    method: String,
-    path: String,
-    headers: HashMap<String, String>,
-    body: String,
-) {
-    info!("📥 Processing legacy HTTP request: {} {}", method, path);
-
-    // Forward request to local service
-    let response = forward_request(
-        http_client,
-        local_target,
-        &method,
-        &path,
-        headers,
-        &body,
-    ).await;
-
-    let response_message = match response {
-        Ok((status, headers, body)) => {
-            debug!("📤 Sending legacy HTTP response: {}", status);
-            Message::HttpResponse {
-                id,
-                status,
-                headers,
-                body,
-            }
-        }
-        Err(e) => {
-            error!("❌ Failed to forward legacy HTTP request: {}", e);
-            Message::HttpResponse {
-                id,
-                status: 502,
-                headers: HashMap::new(),
-                body: base64::engine::general_purpose::STANDARD
-                    .encode("Bad Gateway"),
-            }
-        }
-    };
-
-    // Send response back through channel
-    if let Err(e) = to_server_tx.send(response_message) {
-        error!("Failed to send legacy HTTP response through channel: {}", e);
-    }
-}
-
-async fn forward_request(
-    client: &HttpClient,
-    base_url: &str,
-    method: &str,
-    path: &str,
-    headers: HashMap<String, String>,
-    body: &str,
-) -> Result<(u16, HashMap<String, String>, String), Box<dyn std::error::Error>> {
-    // Construct full URL
-    let url = format!("{}{}", base_url, path);
-
-    // Decode body from base64
-    let body_bytes = match base64::engine::general_purpose::STANDARD.decode(body) {
-        Ok(bytes) => bytes,
-        Err(err) => return Err(err.into()),
-    };
-
-    // Create request
-    let mut request_builder = create_request_builder(client, method, &url, &headers);
-
-    // Add body for methods that support it
-    if ["POST", "PUT", "PATCH"].contains(&method) {
-        request_builder = request_builder.body(body_bytes);
-    }
-
-    // Send request
-    let response = request_builder.send().await?;
-
-    // Extract response details
-    let status = response.status().as_u16();
-    let response_headers = extract_response_headers(&response);
-
-    // Get response body
-    let response_body = response.bytes().await?;
-    let response_body_b64 = base64::engine::general_purpose::STANDARD.encode(&response_body);
-
-    Ok((status, response_headers, response_body_b64))
 }
 
 fn create_request_builder(

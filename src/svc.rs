@@ -37,9 +37,7 @@ const SMALL_BODY_THRESHOLD: usize = 256 * 1024; // 256KB
 
 #[derive(Debug)]
 pub struct ActiveRequest {
-    id: String,
     tunnel_id: String,
-    created_at: std::time::Instant,
     response_tx: mpsc::Sender<ResponseEvent>, // Bounded channel
     client_disconnected: Arc<AtomicBool>,
 }
@@ -201,9 +199,9 @@ impl hyper::body::Body for StreamingResponseBody {
 #[derive(Debug, Clone, Copy)]
 enum BodySize {
     Empty,
-    Small(usize),      // <= 256KB
-    Large(usize),      // > 256KB  
-    Unknown,           // No Content-Length
+    Small,       // <= 256KB
+    Large,       // > 256KB  
+    Unknown,     // No Content-Length
 }
 
 #[derive(Debug)]
@@ -262,8 +260,8 @@ fn analyze_request_body(req: &Request<Incoming>) -> BodySize {
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.parse::<usize>().ok()) {
         Some(0) => BodySize::Empty,
-        Some(len) if len <= SMALL_BODY_THRESHOLD => BodySize::Small(len),
-        Some(len) => BodySize::Large(len),
+        Some(len) if len <= SMALL_BODY_THRESHOLD => BodySize::Small,
+        Some(_) => BodySize::Large,
         None => BodySize::Unknown,
     }
 }
@@ -544,9 +542,7 @@ async fn handle_tunnel_request(
     active_requests.write().await.insert(
         request_id.clone(),
         ActiveRequest {
-            id: request_id.clone(),
             tunnel_id: tunnel_id.clone(),
-            created_at: std::time::Instant::now(),
             response_tx,
             client_disconnected: client_disconnected.clone(),
         },
@@ -572,7 +568,7 @@ async fn handle_tunnel_request(
             })?;
         }
 
-        BodySize::Small(_) => {
+        BodySize::Small => {
             // Collect small body efficiently
             let body_bytes = req.into_body().collect().await?.to_bytes();
 
@@ -591,7 +587,7 @@ async fn handle_tunnel_request(
             })?;
         }
 
-        BodySize::Large(_) | BodySize::Unknown => {
+        BodySize::Large | BodySize::Unknown => {
             // Stream from the start
             tunnel_sender.send(Message::HttpRequestStart {
                 id: request_id.clone(),
@@ -612,7 +608,7 @@ async fn handle_tunnel_request(
     }
 
     // Build streaming response
-    build_streaming_response(request_id, response_rx, active_requests, client_disconnected).await
+    build_streaming_response(request_id, response_rx, active_requests).await
 }
 
 async fn stream_request_body(
@@ -659,7 +655,6 @@ async fn build_streaming_response(
     request_id: String,
     mut response_rx: mpsc::Receiver<ResponseEvent>,
     active_requests: ActiveRequests,
-    client_disconnected: Arc<AtomicBool>,
 ) -> Result<Response<ResponseBody>, BoxError> {
     // Wait for response start
     match response_rx.recv().await {
@@ -701,6 +696,16 @@ async fn build_streaming_response(
             Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(boxed_body(e))?)
+        }
+
+        Some(ResponseEvent::Data(_)) | Some(ResponseEvent::End) => {
+            // These events should not be received when waiting for response start
+            // This indicates a protocol error or race condition
+            warn!("Received unexpected Data/End event when waiting for response start for request {}", request_id);
+            active_requests.write().await.remove(&request_id);
+            Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(boxed_body("Protocol error: unexpected response event"))?)
         }
 
         None => {
@@ -883,7 +888,7 @@ async fn handle_tunnel_management_connection(
                             info!("Tunnel '{}' registered successfully", requested_tunnel_id);
                         }
 
-                        // New streaming message handlers
+                        // Streaming message handlers
                         Message::HttpResponseStart { id, status, headers, initial_data } => {
                             if let Some(request) = active_requests.read().await.get(&id) {
                                 let event = ResponseEvent::Start { status, headers, initial_data };
@@ -906,33 +911,6 @@ async fn handle_tunnel_management_connection(
                                     let _ = request.response_tx.send(ResponseEvent::End).await;
                                     active_requests.write().await.remove(&id);
                                 }
-                            }
-                        }
-
-                        // Legacy message handlers (for backward compatibility)
-                        Message::HttpResponse { id, status, headers, body } => {
-                            // Handle legacy HTTP response
-                            if let Some(request) = active_requests.read().await.get(&id) {
-                                // Decode body
-                                let body_bytes = match base64::engine::general_purpose::STANDARD.decode(&body) {
-                                    Ok(bytes) => bytes,
-                                    Err(e) => {
-                                        error!("Failed to decode legacy response body: {}", e);
-                                        vec![]
-                                    }
-                                };
-
-                                let event = ResponseEvent::Start {
-                                    status,
-                                    headers,
-                                    initial_data: body_bytes
-                                };
-
-                                if request.response_tx.send(event).await.is_ok() {
-                                    let _ = request.response_tx.send(ResponseEvent::End).await;
-                                }
-
-                                active_requests.write().await.remove(&id);
                             }
                         }
 

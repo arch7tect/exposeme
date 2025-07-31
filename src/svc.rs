@@ -30,7 +30,7 @@ pub type TunnelMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>
 pub type ActiveRequests = Arc<RwLock<HashMap<String, ActiveRequest>>>;
 pub type ActiveWebSockets = Arc<RwLock<HashMap<String, WebSocketConnection>>>;
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
-type ResponseBody = BoxBody<Bytes, BoxError>;
+type ResponseBody = BoxBody<bytes::Bytes, BoxError>;
 
 const CHANNEL_BUFFER_SIZE: usize = 32; // Backpressure control
 const SMALL_BODY_THRESHOLD: usize = 256 * 1024; // 256KB
@@ -328,8 +328,8 @@ fn is_websocket_upgrade(req: &Request<Incoming>) -> bool {
 }
 
 fn boxed_body(
-    text: impl Into<Bytes>,
-) -> BoxBody<Bytes, BoxError> {
+    text: impl Into<bytes::Bytes>,
+) -> BoxBody<bytes::Bytes, BoxError> {
     Full::new(text.into())
         .map_err(|e: Infallible| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
         .boxed()
@@ -509,7 +509,17 @@ async fn handle_tunnel_request(
     active_requests: ActiveRequests,
     config: ServerConfig,
 ) -> Result<Response<ResponseBody>, BoxError> {
-    let (tunnel_id, forwarded_path) = extract_tunnel_id_from_request(&req, &config)?;
+    let (tunnel_id, forwarded_path) = match extract_tunnel_id_from_request(&req, &config) {
+        Ok(result) => result,
+        Err(e) => {
+            warn!("Failed to extract tunnel ID: {}", e);
+            return Ok(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(boxed_body(format!("Invalid request: {}", e)))
+                .unwrap());
+        }
+    };
+
     let request_id = uuid::Uuid::new_v4().to_string();
 
     // Get tunnel sender
@@ -551,51 +561,87 @@ async fn handle_tunnel_request(
     // Process request body based on size
     match body_size {
         BodySize::Empty => {
-            // Send request with no body
-            tunnel_sender.send(Message::HttpRequestStart {
-                id: request_id.clone(),
-                method: method.to_string(),
-                path: forwarded_path,
-                headers,
-                initial_data: vec![],
-            })?;
+            // Send request with no body - combine into single atomic operation
+            let messages = vec![
+                Message::HttpRequestStart {
+                    id: request_id.clone(),
+                    method: method.to_string(),
+                    path: forwarded_path,
+                    headers,
+                    initial_data: vec![],
+                },
+                Message::DataChunk {
+                    id: request_id.clone(),
+                    data: vec![],
+                    is_final: true,
+                }
+            ];
 
-            // Send immediate end marker
-            tunnel_sender.send(Message::DataChunk {
-                id: request_id.clone(),
-                data: vec![],
-                is_final: true,
-            })?;
+            for message in messages {
+                if let Err(_) = tunnel_sender.send(message) {
+                    active_requests.write().await.remove(&request_id);
+                    return Ok(Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(boxed_body("Tunnel communication error"))
+                        .unwrap());
+                }
+            }
         }
 
         BodySize::Small => {
             // Collect small body efficiently
-            let body_bytes = req.into_body().collect().await?.to_bytes();
+            let body_bytes = match req.into_body().collect().await {
+                Ok(collected) => collected.to_bytes(),
+                Err(_) => {
+                    active_requests.write().await.remove(&request_id);
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(boxed_body("Failed to read request body"))
+                        .unwrap());
+                }
+            };
 
-            tunnel_sender.send(Message::HttpRequestStart {
-                id: request_id.clone(),
-                method: method.to_string(),
-                path: forwarded_path,
-                headers,
-                initial_data: body_bytes.to_vec(),
-            })?;
+            let messages = vec![
+                Message::HttpRequestStart {
+                    id: request_id.clone(),
+                    method: method.to_string(),
+                    path: forwarded_path,
+                    headers,
+                    initial_data: body_bytes.to_vec(),
+                },
+                Message::DataChunk {
+                    id: request_id.clone(),
+                    data: vec![],
+                    is_final: true,
+                }
+            ];
 
-            tunnel_sender.send(Message::DataChunk {
-                id: request_id.clone(),
-                data: vec![],
-                is_final: true,
-            })?;
+            for message in messages {
+                if let Err(_) = tunnel_sender.send(message) {
+                    active_requests.write().await.remove(&request_id);
+                    return Ok(Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(boxed_body("Tunnel communication error"))
+                        .unwrap());
+                }
+            }
         }
 
         BodySize::Large | BodySize::Unknown => {
             // Stream from the start
-            tunnel_sender.send(Message::HttpRequestStart {
+            if let Err(_) = tunnel_sender.send(Message::HttpRequestStart {
                 id: request_id.clone(),
                 method: method.to_string(),
                 path: forwarded_path,
                 headers,
                 initial_data: vec![],
-            })?;
+            }) {
+                active_requests.write().await.remove(&request_id);
+                return Ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(boxed_body("Tunnel communication error"))
+                    .unwrap());
+            }
 
             // Stream body chunks
             tokio::spawn(stream_request_body(
@@ -700,7 +746,6 @@ async fn build_streaming_response(
 
         Some(ResponseEvent::Data(_)) | Some(ResponseEvent::End) => {
             // These events should not be received when waiting for response start
-            // This indicates a protocol error or race condition
             warn!("Received unexpected Data/End event when waiting for response start for request {}", request_id);
             active_requests.write().await.remove(&request_id);
             Ok(Response::builder()
@@ -807,11 +852,24 @@ async fn handle_tunnel_management_connection(
     // Spawn task to handle outgoing messages
     let outgoing_task = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
+            // Add debug logging for sent messages
+            match &message {
+                Message::HttpRequestStart { id, method, path, .. } => {
+                    info!("📤 Sending HttpRequestStart: {} {} (id: {})", method, path, id);
+                }
+                Message::DataChunk { id, data, is_final } => {
+                    info!("📤 Sending DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
+                }
+                _ => {}
+            }
+
             if let Ok(json) = message.to_json() {
                 if let Err(e) = ws_sender.send(WsMessage::Text(json.into())).await {
                     error!("Failed to send WS message to client: {}", e);
                     break;
                 }
+            } else {
+                error!("Failed to serialize message to JSON");
             }
         }
     });
@@ -1506,18 +1564,17 @@ fn extract_tunnel_id_from_request(
     }
 
     // domain.com/tunnel-id/path
-    let path_parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-    if path_parts.is_empty() || path_parts[0].is_empty() {
-        if let RoutingMode::Path = config.server.routing_mode {
-            Err("Tunnel ID required in path".into())
-        }
-        else {
-            Err("Tunnel ID required in path or subdomain".into())
-        }
+    let path_parts: Vec<&str> = path.trim_start_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+    if path_parts.is_empty() {
+        return Err("Tunnel ID required in path or subdomain".into());
     }
-    else {
-        let tunnel_id = path_parts[0].to_string();
-        let forwarded_path = format!("/{}{}", path_parts[1..].join("/"), query);
-        Ok((tunnel_id, forwarded_path))
-    }
+
+    let tunnel_id = path_parts[0].to_string();
+    let forwarded_path = if path_parts.len() > 1 {
+        format!("/{}{}", path_parts[1..].join("/"), query)
+    } else {
+        format!("/{}", query)
+    };
+
+    Ok((tunnel_id, forwarded_path))
 }

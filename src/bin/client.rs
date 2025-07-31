@@ -308,6 +308,17 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
         match message {
             Ok(WsMessage::Text(text)) => {
                 if let Ok(msg) = Message::from_json(&text.to_string()) {
+                    // Add debug logging for received messages
+                    match &msg {
+                        Message::HttpRequestStart { id, method, path, .. } => {
+                            info!("📥 Received HttpRequestStart: {} {} (id: {})", method, path, id);
+                        }
+                        Message::DataChunk { id, data, is_final } => {
+                            info!("📥 Received DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
+                        }
+                        _ => {}
+                    }
+
                     match msg {
                         Message::AuthSuccess {
                             tunnel_id,
@@ -325,7 +336,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
                         // Streaming protocol handlers
                         Message::HttpRequestStart { id, method, path, headers, initial_data } => {
-                            debug!("📥 Received streaming request start: {} {}", method, path);
+                            debug!("📥 Processing streaming request start: {} {}", method, path);
 
                             // Spawn parallel task for each HTTP request
                             let http_client = http_client.clone();
@@ -434,20 +445,24 @@ async fn handle_http_request_streaming(
     headers: HashMap<String, String>,
     initial_data: Vec<u8>,
 ) {
-    info!("📥 Processing streaming HTTP request: {} {}", method, path);
+    info!("📥 Processing streaming HTTP request: {} {} (id: {})", method, path, id);
 
     // Create streaming body channel
     let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
 
     // Send initial data if present
     if !initial_data.is_empty() {
+        info!("📦 Sending initial data: {} bytes", initial_data.len());
         let _ = body_tx.send(Ok(initial_data.into())).await;
     }
 
     // Register request for incoming chunks
-    outgoing_requests.write().await.insert(id.clone(), OutgoingRequest {
-        body_tx: Some(body_tx.clone()),
-    });
+    {
+        outgoing_requests.write().await.insert(id.clone(), OutgoingRequest {
+            body_tx: Some(body_tx.clone()),
+        });
+        info!("✅ Registered outgoing request: {}", id);
+    }
 
     // Create request
     let url = format!("{}{}", local_target, path);
@@ -491,6 +506,12 @@ async fn handle_data_chunk(
             drop(tx); // Close the stream
             outgoing_requests.write().await.remove(&id);
         }
+    } else {
+        warn!("❌ Received DataChunk for unknown request ID: {} (this indicates HttpRequestStart was not received)", id);
+        // List current active requests for debugging
+        let requests = outgoing_requests.read().await;
+        let active_ids: Vec<String> = requests.keys().cloned().collect();
+        warn!("📋 Active request IDs: {:?}", active_ids);
     }
 }
 

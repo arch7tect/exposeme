@@ -307,95 +307,150 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
     while let Some(message) = ws_receiver.next().await {
         match message {
             Ok(WsMessage::Text(text)) => {
-                if let Ok(msg) = Message::from_json(&text.to_string()) {
-                    // Add debug logging for received messages
-                    match &msg {
-                        Message::HttpRequestStart { id, method, path, .. } => {
-                            info!("📥 Received HttpRequestStart: {} {} (id: {})", method, path, id);
+                debug!("📨 Raw WebSocket message received: {}", text);
+                match Message::from_json(&text.to_string()) {
+                    Ok(msg) => {
+                        debug!("✅ Successfully parsed message: {:?}", msg);
+                        match msg {
+                            Message::AuthSuccess {
+                                tunnel_id,
+                                public_url,
+                            } => {
+                                info!("✅ Tunnel '{}' established!", tunnel_id);
+                                info!("🌐 Public URL: {}", public_url);
+                                info!("🔄 Forwarding to: {}", config.client.local_target);
+                            }
+
+                            Message::AuthError { error, message } => {
+                                error!("❌ Authentication failed: {} - {}", error, message);
+                                return Err(format!("Auth error: {}", message).into());
+                            }
+
+                            // Streaming protocol handlers
+                            Message::HttpRequestStart { id, method, path, headers, initial_data, is_complete } => {
+                                info!("📥 Received HttpRequestStart: {} {} (id: {}, complete: {:?})", method, path, id, is_complete);
+
+                                let http_client = http_client.clone();
+                                let local_target = config.client.local_target.clone();
+                                let to_server_tx = to_server_tx.clone();
+
+                                if is_complete == Some(true) {
+                                    // ✨ Complete request - process immediately
+                                    info!("📦 Processing complete request: {} {} ({} bytes)", method, path, initial_data.len());
+
+                                    tokio::spawn(async move {
+                                        let url = format!("{}{}", local_target, path);
+                                        let mut request = create_request_builder(&http_client, &method, &url, &headers);
+
+                                        // Set body if present
+                                        if !initial_data.is_empty() {
+                                            request = request.body(initial_data);
+                                        }
+
+                                        // Send request and stream response
+                                        match request.send().await {
+                                            Ok(response) => {
+                                                info!("✅ Complete request succeeded: {} {}", method, path);
+                                                stream_response_to_server(&to_server_tx, id, response).await;
+                                            }
+                                            Err(e) => {
+                                                error!("❌ Complete request failed: {} {}: {}", method, path, e);
+                                                send_error_response(&to_server_tx, id, e.to_string()).await;
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    // ✨ Streaming request - expect DataChunk messages
+                                    debug!("📥 Processing streaming request start: {} {}", method, path);
+
+                                    // Create streaming body channel
+                                    let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+
+                                    // Send initial data if present
+                                    if !initial_data.is_empty() {
+                                        info!("📦 Sending initial data: {} bytes", initial_data.len());
+                                        let _ = body_tx.send(Ok(initial_data.into())).await;
+                                    }
+
+                                    // Register request for incoming chunks
+                                    {
+                                        outgoing_requests.write().await.insert(id.clone(), OutgoingRequest {
+                                            body_tx: Some(body_tx.clone()),
+                                        });
+                                        info!("✅ Registered streaming request: {}", id);
+                                    }
+
+                                    // Spawn task for streaming HTTP request
+                                    tokio::spawn(async move {
+                                        let url = format!("{}{}", local_target, path);
+                                        let mut request = create_request_builder(&http_client, &method, &url, &headers);
+
+                                        if ["POST", "PUT", "PATCH"].contains(&method.as_str()) {
+                                            let body_stream = tokio_stream::wrappers::ReceiverStream::new(body_rx);
+                                            request = request.body(reqwest::Body::wrap_stream(body_stream));
+                                        } else {
+                                            drop(body_tx); // Close body for GET requests
+                                        }
+
+                                        // Send request and stream response
+                                        match request.send().await {
+                                            Ok(response) => {
+                                                info!("✅ Streaming request succeeded: {} {}", method, path);
+                                                stream_response_to_server(&to_server_tx, id, response).await;
+                                            }
+                                            Err(e) => {
+                                                error!("❌ Streaming request failed: {} {}: {}", method, path, e);
+                                                send_error_response(&to_server_tx, id, e.to_string()).await;
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+
+                            Message::DataChunk { id, data, is_final } => {
+                                debug!("📥 Received DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
+                                handle_data_chunk(&outgoing_requests, id, data, is_final).await;
+                            }
+
+                            Message::WebSocketUpgrade { connection_id, method, path, headers } => {
+                                debug!("📥 Received WebSocketUpgrade: {} {} (connection: {})", method, path, connection_id);
+
+                                let local_target = config.client.local_target.clone();
+                                let to_server_tx = to_server_tx.clone();
+                                let active_websockets = active_websockets.clone();
+                                let config = config.clone();
+
+                                tokio::spawn(async move {
+                                    handle_websocket_upgrade(
+                                        &local_target,
+                                        &to_server_tx,
+                                        active_websockets,
+                                        connection_id,
+                                        method,
+                                        path,
+                                        headers,
+                                        &config,
+                                    ).await;
+                                });
+                            }
+                            Message::WebSocketData { connection_id, data } => {
+                                info!("📥 Received WebSocketData: {} ({} bytes)", connection_id, data.len());
+                                handle_websocket_data(active_websockets.clone(), connection_id, data).await;
+                            }
+                            Message::WebSocketClose { connection_id, code, reason } => {
+                                info!("📥 Received WebSocketClose: {} (code: {:?}, reason: {:?})", connection_id, code, reason);
+                                handle_websocket_close(active_websockets.clone(), connection_id, code, reason).await;
+                            }
+                            Message::Error { message } => {
+                                error!("Server error: {}", message);
+                            }
+                            _ => {
+                                warn!("Unexpected message type from server");
+                            }
                         }
-                        Message::DataChunk { id, data, is_final } => {
-                            info!("📥 Received DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
-                        }
-                        _ => {}
                     }
-
-                    match msg {
-                        Message::AuthSuccess {
-                            tunnel_id,
-                            public_url,
-                        } => {
-                            info!("✅ Tunnel '{}' established!", tunnel_id);
-                            info!("🌐 Public URL: {}", public_url);
-                            info!("🔄 Forwarding to: {}", config.client.local_target);
-                        }
-
-                        Message::AuthError { error, message } => {
-                            error!("❌ Authentication failed: {} - {}", error, message);
-                            return Err(format!("Auth error: {}", message).into());
-                        }
-
-                        // Streaming protocol handlers
-                        Message::HttpRequestStart { id, method, path, headers, initial_data } => {
-                            debug!("📥 Processing streaming request start: {} {}", method, path);
-
-                            // Spawn parallel task for each HTTP request
-                            let http_client = http_client.clone();
-                            let local_target = config.client.local_target.clone();
-                            let to_server_tx = to_server_tx.clone();
-                            let outgoing_requests = outgoing_requests.clone();
-
-                            tokio::spawn(async move {
-                                handle_http_request_streaming(
-                                    &http_client,
-                                    &local_target,
-                                    &to_server_tx,
-                                    &outgoing_requests,
-                                    id,
-                                    method,
-                                    path,
-                                    headers,
-                                    initial_data,
-                                ).await;
-                            });
-                        }
-
-                        Message::DataChunk { id, data, is_final } => {
-                            handle_data_chunk(&outgoing_requests, id, data, is_final).await;
-                        }
-
-                        Message::WebSocketUpgrade { connection_id, method, path, headers } => {
-                            info!("🔌 Received WebSocket upgrade: {} {}", method, path);
-
-                            let local_target = config.client.local_target.clone();
-                            let to_server_tx = to_server_tx.clone();
-                            let active_websockets = active_websockets.clone();
-                            let config = config.clone();
-
-                            tokio::spawn(async move {
-                                handle_websocket_upgrade(
-                                    &local_target,
-                                    &to_server_tx,
-                                    active_websockets,
-                                    connection_id,
-                                    method,
-                                    path,
-                                    headers,
-                                    &config,
-                                ).await;
-                            });
-                        }
-                        Message::WebSocketData { connection_id, data } => {
-                            handle_websocket_data(active_websockets.clone(), connection_id, data).await;
-                        }
-                        Message::WebSocketClose { connection_id, code, reason } => {
-                            handle_websocket_close(active_websockets.clone(), connection_id, code, reason).await;
-                        }
-                        Message::Error { message } => {
-                            error!("Server error: {}", message);
-                        }
-                        _ => {
-                            warn!("Unexpected message type from server");
-                        }
+                    Err(e) => {
+                        error!("❌ Failed to parse WebSocket message: {}", e);
                     }
                 }
             }
@@ -431,59 +486,6 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
     info!("Client connection ended");
     Ok(())
-}
-
-// Handle streaming HTTP requests
-async fn handle_http_request_streaming(
-    http_client: &HttpClient,
-    local_target: &str,
-    to_server_tx: &mpsc::UnboundedSender<Message>,
-    outgoing_requests: &OutgoingRequests,
-    id: String,
-    method: String,
-    path: String,
-    headers: HashMap<String, String>,
-    initial_data: Vec<u8>,
-) {
-    info!("📥 Processing streaming HTTP request: {} {} (id: {})", method, path, id);
-
-    // Create streaming body channel
-    let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
-
-    // Send initial data if present
-    if !initial_data.is_empty() {
-        info!("📦 Sending initial data: {} bytes", initial_data.len());
-        let _ = body_tx.send(Ok(initial_data.into())).await;
-    }
-
-    // Register request for incoming chunks
-    {
-        outgoing_requests.write().await.insert(id.clone(), OutgoingRequest {
-            body_tx: Some(body_tx.clone()),
-        });
-        info!("✅ Registered outgoing request: {}", id);
-    }
-
-    // Create request
-    let url = format!("{}{}", local_target, path);
-    let mut request = create_request_builder(http_client, &method, &url, &headers);
-
-    if ["POST", "PUT", "PATCH"].contains(&method.as_str()) {
-        let body_stream = tokio_stream::wrappers::ReceiverStream::new(body_rx);
-        request = request.body(reqwest::Body::wrap_stream(body_stream));
-    } else {
-        drop(body_tx); // Close body for GET requests
-    }
-
-    // Send request and stream response
-    match request.send().await {
-        Ok(response) => {
-            stream_response_to_server(to_server_tx, id, response).await;
-        }
-        Err(e) => {
-            send_error_response(to_server_tx, id, e.to_string()).await;
-        }
-    }
 }
 
 async fn handle_data_chunk(
@@ -535,12 +537,7 @@ async fn stream_response_to_server(
                     status,
                     headers,
                     initial_data: bytes.to_vec(),
-                }).ok();
-
-                to_server_tx.send(Message::DataChunk {
-                    id,
-                    data: vec![],
-                    is_final: true,
+                    is_complete: Some(true),
                 }).ok();
             }
             Err(e) => {
@@ -554,6 +551,7 @@ async fn stream_response_to_server(
             status,
             headers,
             initial_data: vec![],
+            is_complete: Some(false),
         }).ok();
 
         let mut stream = response.bytes_stream();
@@ -654,15 +652,12 @@ async fn send_error_response(
         status: 502,
         headers: HashMap::new(),
         initial_data: error.into_bytes(),
+        is_complete: Some(true),
     };
 
     to_server_tx.send(error_response).ok();
 
-    to_server_tx.send(Message::DataChunk {
-        id,
-        data: vec![],
-        is_final: true,
-    }).ok();
+    debug!("✅ Sent complete error response for {}", id);
 }
 
 // Handle WebSocket upgrade requests

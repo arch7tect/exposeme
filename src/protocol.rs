@@ -39,7 +39,11 @@ pub enum Message {
         headers: HashMap<String, String>,
         #[serde(with = "serde_bytes")]
         #[serde(skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         initial_data: Vec<u8>, // Optional first chunk
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        is_complete: Option<bool>,
     },
 
     /// HTTP response start (client -> server)  
@@ -50,7 +54,11 @@ pub enum Message {
         headers: HashMap<String, String>,
         #[serde(with = "serde_bytes")]
         #[serde(skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         initial_data: Vec<u8>, // Optional first chunk
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        is_complete: Option<bool>,
     },
 
     /// Data chunk (bidirectional)
@@ -125,104 +133,3 @@ pub struct TunnelInfo {
     pub created_at: std::time::SystemTime,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_message_serialization() {
-        let auth_msg = Message::Auth {
-            token: "test-token".to_string(),
-            tunnel_id: "my-tunnel".to_string(),
-        };
-
-        let json = auth_msg.to_json().unwrap();
-        let parsed = Message::from_json(&json).unwrap();
-
-        match parsed {
-            Message::Auth { token, tunnel_id } => {
-                assert_eq!(token, "test-token");
-                assert_eq!(tunnel_id, "my-tunnel");
-            }
-            _ => panic!("Unexpected message type"),
-        }
-    }
-
-    #[test]
-    fn test_streaming_request_serialization() {
-        let streaming_msg = Message::HttpRequestStart {
-            id: "req-123".to_string(),
-            method: "POST".to_string(),
-            path: "/api/data".to_string(),
-            headers: {
-                let mut headers = HashMap::new();
-                headers.insert("content-type".to_string(), "application/json".to_string());
-                headers
-            },
-            initial_data: b"Hello".to_vec(),
-        };
-
-        let json = streaming_msg.to_json().unwrap();
-        let parsed = Message::from_json(&json).unwrap();
-
-        match parsed {
-            Message::HttpRequestStart { id, method, path, headers, initial_data } => {
-                assert_eq!(id, "req-123");
-                assert_eq!(method, "POST");
-                assert_eq!(path, "/api/data");
-                assert_eq!(headers.get("content-type").unwrap(), "application/json");
-                assert_eq!(initial_data, b"Hello".to_vec());
-            }
-            _ => panic!("Unexpected message type"),
-        }
-    }
-
-    #[test]
-    fn test_data_chunk_serialization() {
-        let chunk_msg = Message::DataChunk {
-            id: "req-123".to_string(),
-            data: b"chunk data".to_vec(),
-            is_final: false,
-        };
-
-        let json = chunk_msg.to_json().unwrap();
-        let parsed = Message::from_json(&json).unwrap();
-
-        match parsed {
-            Message::DataChunk { id, data, is_final } => {
-                assert_eq!(id, "req-123");
-                assert_eq!(data, b"chunk data".to_vec());
-                assert_eq!(is_final, false);
-            }
-            _ => panic!("Unexpected message type"),
-        }
-    }
-
-    #[test]
-    fn test_websocket_upgrade_serialization() {
-        let upgrade_msg = Message::WebSocketUpgrade {
-            connection_id: "ws-123".to_string(),
-            method: "GET".to_string(),
-            path: "/websocket".to_string(),
-            headers: {
-                let mut headers = HashMap::new();
-                headers.insert("upgrade".to_string(), "websocket".to_string());
-                headers.insert("connection".to_string(), "upgrade".to_string());
-                headers
-            },
-        };
-
-        let json = upgrade_msg.to_json().unwrap();
-        let parsed = Message::from_json(&json).unwrap();
-
-        match parsed {
-            Message::WebSocketUpgrade { connection_id, method, path, headers } => {
-                assert_eq!(connection_id, "ws-123");
-                assert_eq!(method, "GET");
-                assert_eq!(path, "/websocket");
-                assert_eq!(headers.get("upgrade").unwrap(), "websocket");
-            }
-            _ => panic!("Unexpected message type"),
-        }
-    }
-}

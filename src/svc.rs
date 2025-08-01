@@ -955,11 +955,20 @@ async fn handle_tunnel_management_connection(
     });
 
     let mut tunnel_id: Option<String> = None;
+    debug!("🔍 Server: Starting WebSocket message processing loop");
+    let mut message_count = 0;
 
     while let Some(message) = ws_receiver.next().await {
+        message_count += 1;
+        debug!("🔍 Server: Received WebSocket message #{}", message_count);
+
         match message {
             Ok(WsMessage::Text(text)) => {
+                debug!("🔍 Server: Processing text message #{} ({} chars)", message_count, text.len());
+
                 if let Ok(msg) = Message::from_json(&text.to_string()) {
+                    debug!("🔍 Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
+
                     match msg {
                         Message::Auth {
                             token,
@@ -1049,6 +1058,8 @@ async fn handle_tunnel_management_connection(
                             );
                             // Find the active request waiting for this response
                             if let Some(request) = active_requests.read().await.get(&id) {
+                                debug!("✅ Server: Found active request for {}", id);
+                                
                                 if is_complete == Some(true) {
                                     // ✨ COMPLETE RESPONSE: Process immediately and finish
                                     info!("📦 Processing complete response: {} (id: {}, {} bytes)", status, id, initial_data.len());
@@ -1060,21 +1071,27 @@ async fn handle_tunnel_management_connection(
                                     };
 
                                     // Send start event
-                                    if request.response_tx.send(start_event).await.is_ok() {
-                                        // Immediately send end event for complete responses
-                                        if request.response_tx.send(ResponseEvent::End).await.is_ok() {
-                                            info!("✅ Complete response sent to browser for {}", id);
-                                        } else {
-                                            warn!("❌ Failed to send end event for complete response {}", id);
+                                    match request.response_tx.send(start_event).await {
+                                        Ok(_) => {
+                                            // Immediately send end event for complete responses
+                                            match request.response_tx.send(ResponseEvent::End).await {
+                                                Ok(_) => {
+                                                    info!("✅ Complete response sent to browser for {}", id);
+                                                }
+                                                Err(e) => {
+                                                    error!("❌ Server: Failed to send end event for {}: {}", id, e);
+                                                }
+                                            }
                                         }
-                                    } else {
-                                        warn!("❌ Failed to send start event for complete response {}", id);
-                                        request.client_disconnected.store(true, Ordering::Relaxed);
+                                        Err(e) => {
+                                            error!("❌ Server: Failed to send start event for {}: {}", id, e);
+                                            request.client_disconnected.store(true, Ordering::Relaxed);
+                                        }
                                     }
 
                                     // Clean up immediately - no DataChunks expected
                                     active_requests.write().await.remove(&id);
-                                    info!("🧹 Cleaned up complete response request {}", id);
+                                    debug!("🧹 Server: Cleaned up complete response request {}", id);
 
                                 } else {
                                     // ✨ STREAMING RESPONSE: Expect DataChunk messages to follow
@@ -1086,22 +1103,25 @@ async fn handle_tunnel_management_connection(
                                         initial_data,
                                     };
 
-                                    if request.response_tx.send(start_event).await.is_err() {
-                                        warn!("❌ Failed to send streaming response start for {}", id);
-                                        request.client_disconnected.store(true, Ordering::Relaxed);
-                                        active_requests.write().await.remove(&id);
-                                    } else {
-                                        info!("✅ Streaming response start sent, waiting for DataChunks for {}", id);
-                                        // Keep request active - DataChunks will follow
+                                    match request.response_tx.send(start_event).await {
+                                        Ok(_) => {
+                                            info!("✅ Streaming response start sent, waiting for DataChunks for {}", id);
+                                            // Keep request active - DataChunks will follow
+                                        }
+                                        Err(e) => {
+                                            error!("❌ Server: Failed to send streaming response start for {}: {}", id, e);
+                                            request.client_disconnected.store(true, Ordering::Relaxed);
+                                            active_requests.write().await.remove(&id);
+                                        }
                                     }
                                 }
                             } else {
-                                warn!("❌ Received HttpResponseStart for unknown request: {}", id);
+                                error!("❌ Server: Received HttpResponseStart for unknown request: {}", id);
 
                                 // Debug: List active requests
                                 let requests = active_requests.read().await;
                                 let active_ids: Vec<String> = requests.keys().cloned().collect();
-                                warn!("📋 Active request IDs: {:?}", active_ids);
+                                error!("📋 Server: Active request IDs: {:?}", active_ids);
                             }
                         }
 

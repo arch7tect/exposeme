@@ -264,16 +264,32 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
     // Spawn task to handle outgoing messages to server
     tokio::spawn(async move {
+        debug!("🔍 Starting outgoing message handler task");
+        let mut message_count = 0;
+
         while let Some(message) = to_server_rx.recv().await {
+            message_count += 1;
+            debug!("🔍 Processing outgoing message #{}", message_count);
+
             if let Ok(json) = message.to_json() {
-                if let Err(e) = ws_sender.send(WsMessage::Text(json.into())).await {
-                    error!("Failed to send message to server: {}", e);
-                    break;
+                debug!("🔍 Sending message #{} ({} chars)", message_count, json.len());
+                match ws_sender.send(WsMessage::Text(json.into())).await {
+                    Ok(_) => {
+                        debug!("✅ Message #{} sent successfully", message_count);
+                    }
+                    Err(e) => {
+                        debug!("❌ FAILED to send message #{}: {}", message_count, e);
+                        break;
+                    }
                 }
+            } else {
+                debug!("❌ Failed to serialize message #{}", message_count);
             }
         }
-    });
 
+        debug!("⚠️ Outgoing message handler ended (sent {} messages)", message_count);
+    });
+    
     // Add periodic cleanup task for WebSocket connections
     let cleanup_websockets = active_websockets.clone();
     let cleanup_interval = Duration::from_secs(config.client.websocket_cleanup_interval_secs);
@@ -522,63 +538,159 @@ async fn stream_response_to_server(
     id: String,
     response: reqwest::Response,
 ) {
+    debug!("🔍 ENTER stream_response_to_server for id: {}", id);
+
     let status = response.status().as_u16();
     let headers = extract_response_headers(&response);
 
+    debug!("🔍 Response status: {}, headers count: {}", status, headers.len());
+    info!("📤 Preparing response: {} (id: {}, headers: {})", status, id, headers.len());
+
     // Check if we should stream this response
     let should_stream = is_streaming_response(&response);
+    debug!("🔍 Should stream: {}", should_stream);
+
+    // Check WebSocket sender health before processing
+    if to_server_tx.is_closed() {
+        error!("❌ WebSocket sender is CLOSED for {}", id);
+        return;
+    }
+    debug!("✅ WebSocket sender is healthy for {}", id);
 
     if !should_stream && response.content_length().unwrap_or(0) < 256 * 1024 {
+        debug!("🔍 Processing as small/complete response for {}", id);
+
         // Small response - collect and send in one message
         match response.bytes().await {
             Ok(bytes) => {
-                to_server_tx.send(Message::HttpResponseStart {
+                debug!("🔍 Got {} bytes, creating HttpResponseStart for {}", bytes.len(), id);
+                info!("📤 Sending complete response: {} bytes (id: {})", bytes.len(), id);
+
+                let response_msg = Message::HttpResponseStart {
                     id: id.clone(),
                     status,
                     headers,
                     initial_data: bytes.to_vec(),
                     is_complete: Some(true),
-                }).ok();
+                };
+
+                debug!("🔍 Attempting to send HttpResponseStart for {}", id);
+                match to_server_tx.send(response_msg) {
+                    Ok(_) => {
+                        debug!("✅ HttpResponseStart sent successfully for {}", id);
+                        info!("✅ Complete response sent successfully for {}", id);
+                    }
+                    Err(e) => {
+                        error!("❌ FAILED to send HttpResponseStart for {}: {}", id, e);
+                    }
+                }
             }
             Err(e) => {
-                send_error_response(to_server_tx, id, e.to_string()).await;
+                error!("❌ Failed to read response body for {}: {}", id, e);
+                send_error_response(to_server_tx, id.to_owned(), e.to_string()).await;
             }
         }
     } else {
+        debug!("🔍 Processing as streaming response for {}", id);
+
         // Stream the response
-        to_server_tx.send(Message::HttpResponseStart {
+        info!("📤 Starting streaming response (id: {})", id);
+
+        let start_msg = Message::HttpResponseStart {
             id: id.clone(),
             status,
             headers,
             initial_data: vec![],
             is_complete: Some(false),
-        }).ok();
+        };
+
+        debug!("🔍 Attempting to send streaming response start for {}", id);
+        if let Err(e) = to_server_tx.send(start_msg) {
+            error!("❌ Failed to send streaming response start for {}: {}", id, e);
+            return;
+        }
+
+        debug!("✅ Streaming response start sent for {}", id);
+        info!("✅ Streaming response start sent for {}", id);
 
         let mut stream = response.bytes_stream();
+        let mut total_bytes = 0;
+        let mut chunk_count = 0;
+
         while let Some(result) = stream.next().await {
             match result {
                 Ok(chunk) => {
-                    if to_server_tx.send(Message::DataChunk {
+                    total_bytes += chunk.len();
+                    chunk_count += 1;
+
+                    debug!("🔍 Processing chunk {} ({} bytes) for {}", chunk_count, chunk.len(), id);
+
+                    if chunk_count % 10 == 0 || chunk.len() > 1024 {
+                        info!("📤 Sending chunk {} ({} bytes, {} total) for {}", 
+                              chunk_count, chunk.len(), total_bytes, id);
+                    }
+
+                    let chunk_msg = Message::DataChunk {
                         id: id.clone(),
                         data: chunk.to_vec(),
                         is_final: false,
-                    }).is_err() {
+                    };
+
+                    debug!("🔍 Attempting to send data chunk {} for {}", chunk_count, id);
+                    if let Err(e) = to_server_tx.send(chunk_msg) {
+                        error!("❌ Failed to send data chunk for {}: {}", id, e);
                         break;
                     }
+                    debug!("✅ Data chunk {} sent for {}", chunk_count, id);
                 }
                 Err(e) => {
-                    error!("Response stream error: {}", e);
+                    error!("❌ Response stream error for {}: {}", id, e);
                     break;
                 }
             }
         }
 
         // Send final chunk
-        to_server_tx.send(Message::DataChunk {
-            id,
+        debug!("🔍 Sending final chunk for {} ({} total bytes, {} chunks)", id, total_bytes, chunk_count);
+        info!("📤 Sending final chunk for {} ({} total bytes, {} chunks)", id, total_bytes, chunk_count);
+
+        let final_msg = Message::DataChunk {
+            id: id.clone(),
             data: vec![],
             is_final: true,
-        }).ok();
+        };
+
+        debug!("🔍 Attempting to send final chunk for {}", id);
+        if let Err(e) = to_server_tx.send(final_msg) {
+            error!("❌ Failed to send final chunk for {}: {}", id, e);
+        } else {
+            debug!("✅ Final chunk sent for {}", id);
+            info!("✅ Streaming response completed for {}", id);
+        }
+    }
+
+    debug!("🔍 EXIT stream_response_to_server for id: {}", id);
+}
+
+async fn send_error_response(
+    to_server_tx: &mpsc::UnboundedSender<Message>,
+    id: String,
+    error: String,
+) {
+    error!("📤 Sending error response for {}: {}", id, error);
+
+    let error_response = Message::HttpResponseStart {
+        id: id.clone(),
+        status: 502,
+        headers: HashMap::new(),
+        initial_data: error.into_bytes(),
+        is_complete: Some(true),
+    };
+
+    if let Err(e) = to_server_tx.send(error_response) {
+        error!("❌ Failed to send error response for {}: {}", id, e);
+    } else {
+        info!("✅ Error response sent for {}", id);
     }
 }
 
@@ -640,24 +752,6 @@ fn extract_response_headers(response: &reqwest::Response) -> HashMap<String, Str
         response_headers.insert(name.to_string(), value.to_str().unwrap_or("").to_string());
     }
     response_headers
-}
-
-async fn send_error_response(
-    to_server_tx: &mpsc::UnboundedSender<Message>,
-    id: String,
-    error: String,
-) {
-    let error_response = Message::HttpResponseStart {
-        id: id.clone(),
-        status: 502,
-        headers: HashMap::new(),
-        initial_data: error.into_bytes(),
-        is_complete: Some(true),
-    };
-
-    to_server_tx.send(error_response).ok();
-
-    debug!("✅ Sent complete error response for {}", id);
 }
 
 // Handle WebSocket upgrade requests

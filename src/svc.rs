@@ -2,7 +2,8 @@ use crate::{ChallengeStore, Message, RoutingMode, ServerConfig, SslManager, SslP
 use base64::Engine;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use tokio_stream::wrappers::ReceiverStream;
+use http_body_util::{BodyExt, Full, combinators::BoxBody, StreamBody};
 use hyper::upgrade::Upgraded;
 use hyper::{Request, Response, StatusCode, body::Incoming};
 use hyper_util::rt::TokioIo;
@@ -44,161 +45,19 @@ pub struct ActiveRequest {
 
 #[derive(Debug)]
 pub enum ResponseEvent {
-    Start {
+    Complete {
+        status: u16,
+        headers: HashMap<String, String>,
+        body: Vec<u8>,
+    },
+    StreamStart {
         status: u16,
         headers: HashMap<String, String>,
         initial_data: Vec<u8>,
     },
-    Data(Bytes),
-    End,
+    StreamChunk(Bytes),
+    StreamEnd,
     Error(String),
-}
-
-async fn create_streaming_body(
-    response_rx: mpsc::Receiver<ResponseEvent>,
-    request_id: String,
-    active_requests: ActiveRequests,
-) -> ResponseBody {
-    // Create a custom streaming body
-    let stream_body = StreamingResponseBody::new(response_rx, request_id, active_requests);
-    stream_body.boxed()
-}
-
-async fn create_streaming_body_with_initial(
-    initial_data: Vec<u8>,
-    response_rx: mpsc::Receiver<ResponseEvent>,
-    request_id: String,
-    active_requests: ActiveRequests,
-) -> ResponseBody {
-    // Create a custom streaming body with initial data
-    let stream_body = StreamingResponseBody::new_with_initial(
-        initial_data,
-        response_rx,
-        request_id,
-        active_requests,
-    );
-    stream_body.boxed()
-}
-
-// Custom streaming body implementation
-struct StreamingResponseBody {
-    initial_data: Option<Bytes>,
-    response_rx: Option<mpsc::Receiver<ResponseEvent>>,
-    request_id: String,
-    active_requests: ActiveRequests,
-    is_complete: bool,
-}
-
-impl StreamingResponseBody {
-    fn new(
-        response_rx: mpsc::Receiver<ResponseEvent>,
-        request_id: String,
-        active_requests: ActiveRequests,
-    ) -> Self {
-        Self {
-            initial_data: None,
-            response_rx: Some(response_rx),
-            request_id,
-            active_requests,
-            is_complete: false,
-        }
-    }
-
-    fn new_with_initial(
-        initial_data: Vec<u8>,
-        response_rx: mpsc::Receiver<ResponseEvent>,
-        request_id: String,
-        active_requests: ActiveRequests,
-    ) -> Self {
-        Self {
-            initial_data: Some(initial_data.into()),
-            response_rx: Some(response_rx),
-            request_id,
-            active_requests,
-            is_complete: false,
-        }
-    }
-}
-
-impl hyper::body::Body for StreamingResponseBody {
-    type Data = Bytes;
-    type Error = BoxError;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
-        // Return initial data first if available
-        if let Some(initial) = self.initial_data.take() {
-            return Poll::Ready(Some(Ok(hyper::body::Frame::data(initial))));
-        }
-
-        // If already complete, return None
-        if self.is_complete {
-            return Poll::Ready(None);
-        }
-
-        // Poll the receiver for more data
-        if let Some(receiver) = &mut self.response_rx {
-            match receiver.poll_recv(cx) {
-                Poll::Ready(Some(event)) => {
-                    match event {
-                        ResponseEvent::Data(chunk) => {
-                            Poll::Ready(Some(Ok(hyper::body::Frame::data(chunk))))
-                        }
-                        ResponseEvent::End => {
-                            self.is_complete = true;
-                            self.response_rx = None;
-
-                            // Cleanup
-                            let request_id = self.request_id.clone();
-                            let active_requests = self.active_requests.clone();
-                            tokio::spawn(async move {
-                                active_requests.write().await.remove(&request_id);
-                            });
-
-                            Poll::Ready(None)
-                        }
-                        ResponseEvent::Error(e) => {
-                            self.is_complete = true;
-                            self.response_rx = None;
-
-                            // Cleanup
-                            let request_id = self.request_id.clone();
-                            let active_requests = self.active_requests.clone();
-                            tokio::spawn(async move {
-                                active_requests.write().await.remove(&request_id);
-                            });
-
-                            Poll::Ready(Some(Err(e.into())))
-                        }
-                        _ => {
-                            // Continue polling for the next event
-                            cx.waker().wake_by_ref();
-                            Poll::Pending
-                        }
-                    }
-                }
-                Poll::Ready(None) => {
-                    // Channel closed
-                    self.is_complete = true;
-                    self.response_rx = None;
-
-                    // Cleanup
-                    let request_id = self.request_id.clone();
-                    let active_requests = self.active_requests.clone();
-                    tokio::spawn(async move {
-                        active_requests.write().await.remove(&request_id);
-                    });
-
-                    Poll::Ready(None)
-                }
-                Poll::Pending => Poll::Pending,
-            }
-        } else {
-            Poll::Ready(None)
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -250,6 +109,78 @@ impl WebSocketConnection {
                 "upgrading"
             }
         )
+    }
+}
+
+async fn build_response(
+    request_id: String,
+    mut response_rx: mpsc::Receiver<ResponseEvent>,
+    active_requests: ActiveRequests,
+) -> Result<Response<ResponseBody>, BoxError> {
+    match response_rx.recv().await {
+        Some(ResponseEvent::Complete { status, headers, body }) => {
+            info!("✅ Complete response: {} ({} bytes)", status, body.len());
+            active_requests.write().await.remove(&request_id);
+
+            let mut builder = Response::builder().status(status);
+            for (key, value) in headers {
+                builder = builder.header(key, value);
+            }
+
+            Ok(builder.body(boxed_body(body))?)
+        }
+
+        Some(ResponseEvent::StreamStart { status, headers, initial_data }) => {
+            info!("🔄 Streaming response: {} (initial: {} bytes)", status, initial_data.len());
+
+            let mut builder = Response::builder().status(status);
+            for (key, value) in headers {
+                builder = builder.header(key, value);
+            }
+
+            let stream = ReceiverStream::new(response_rx)
+                .map(|event| -> Result<Bytes, BoxError> {
+                    match event {
+                        ResponseEvent::StreamChunk(chunk) => Ok(chunk),
+                        ResponseEvent::StreamEnd => Err("Stream ended".into()),
+                        ResponseEvent::Error(e) => Err(e.into()),
+                        _ => Err("Unexpected event".into()),
+                    }
+                })
+                .take_while(|result| std::future::ready(result.is_ok()));
+
+            let full_stream = if initial_data.is_empty() {
+                stream.boxed()
+            } else {
+                let initial_stream = tokio_stream::once(Ok(Bytes::from(initial_data)));
+                initial_stream.chain(stream).boxed()
+            };
+
+            let body = StreamBody::new(full_stream).boxed();
+
+            let active_requests_clone = active_requests.clone();
+            let request_id_clone = request_id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                active_requests_clone.write().await.remove(&request_id_clone);
+            });
+
+            Ok(builder.body(body)?)
+        }
+
+        Some(ResponseEvent::Error(e)) => {
+            active_requests.write().await.remove(&request_id);
+            Ok(Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(boxed_body(e))?)
+        }
+
+        None => {
+            active_requests.write().await.remove(&request_id);
+            Ok(Response::builder()
+                .status(StatusCode::GATEWAY_TIMEOUT)
+                .body(boxed_body("No response from tunnel"))?)
+        }
     }
 }
 
@@ -593,14 +524,13 @@ async fn handle_tunnel_request(
         }
     };
 
-    // Analyze request
-    let body_size = analyze_request_body(&req);
+    // Detect if this should be a streaming request
+    let is_streaming_request = is_streaming_request(&req);
     let method = req.method().clone();
     let headers = extract_headers(&req);
 
-    // Create response channel with backpressure
-    let (response_tx, response_rx) = mpsc::channel(CHANNEL_BUFFER_SIZE);
-    let client_disconnected = Arc::new(AtomicBool::new(false));
+    // Create response channel
+    let (response_tx, response_rx) = mpsc::channel(32);
 
     // Register request
     active_requests.write().await.insert(
@@ -608,109 +538,112 @@ async fn handle_tunnel_request(
         ActiveRequest {
             tunnel_id: tunnel_id.clone(),
             response_tx,
-            client_disconnected: client_disconnected.clone(),
+            client_disconnected: Arc::new(AtomicBool::new(false)),
         },
     );
 
-    // Process request body based on size
-    match body_size {
-        BodySize::Empty => {
-            info!("🔍 Processing empty body request (id: {})", request_id);
+    if is_streaming_request {
+        // Handle as streaming request
+        info!("🔄 Processing streaming request: {} {}", method, forwarded_path);
 
-            // Send single complete message - no DataChunk needed!
-            let complete_request = Message::HttpRequestStart {
-                id: request_id.clone(),
-                method: method.to_string(),
-                path: forwarded_path,
-                headers,
-                initial_data: vec![], // Empty body
-                is_complete: Some(true),
-            };
+        // Send initial request without body
+        let initial_request = Message::HttpRequestStart {
+            id: request_id.clone(),
+            method: method.to_string(),
+            path: forwarded_path,
+            headers,
+            initial_data: vec![],
+            is_complete: None, // Streaming
+        };
 
-            if let Err(_) = tunnel_sender.send(complete_request) {
-                active_requests.write().await.remove(&request_id);
-                return Ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(boxed_body("Tunnel communication error"))
-                    .unwrap());
-            }
-
-            info!("✅ Sent complete empty body request {}", request_id);
+        if tunnel_sender.send(initial_request).is_err() {
+            active_requests.write().await.remove(&request_id);
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(boxed_body("Tunnel communication error"))
+                .unwrap());
         }
 
-        BodySize::Small => {
-            info!("🔍 Processing small body request (id: {})", request_id);
+        // Stream request body if present
+        tokio::spawn(stream_request_body(
+            req.into_body(),
+            request_id.clone(),
+            tunnel_sender,
+            Arc::new(AtomicBool::new(false)),
+        ));
 
-            // Collect small body efficiently
-            let body_bytes = match req.into_body().collect().await {
-                Ok(collected) => collected.to_bytes(),
-                Err(_) => {
-                    active_requests.write().await.remove(&request_id);
-                    return Ok(Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(boxed_body("Failed to read request body"))
-                        .unwrap());
-                }
-            };
-
-            // Send single complete message with all data - no DataChunk needed!
-            let complete_request = Message::HttpRequestStart {
-                id: request_id.clone(),
-                method: method.to_string(),
-                path: forwarded_path,
-                headers,
-                initial_data: body_bytes.to_vec(),
-                is_complete: Some(true),
-            };
-
-            if let Err(_) = tunnel_sender.send(complete_request) {
+    } else {
+        // Handle as complete request
+        let body_bytes = match req.into_body().collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(_) => {
                 active_requests.write().await.remove(&request_id);
                 return Ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(boxed_body("Tunnel communication error"))
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(boxed_body("Failed to read request body"))
                     .unwrap());
             }
+        };
 
-            info!(
-                "✅ Sent complete small body request {} ({} bytes)",
-                request_id,
-                body_bytes.len()
-            );
-        }
+        let complete_request = Message::HttpRequestStart {
+            id: request_id.clone(),
+            method: method.to_string(),
+            path: forwarded_path,
+            headers,
+            initial_data: body_bytes.to_vec(),
+            is_complete: Some(true),
+        };
 
-        BodySize::Large | BodySize::Unknown => {
-            info!("🔍 Processing streaming body request (id: {})", request_id);
-
-            // Stream from the start - use existing streaming protocol
-            if let Err(_) = tunnel_sender.send(Message::HttpRequestStart {
-                id: request_id.clone(),
-                method: method.to_string(),
-                path: forwarded_path,
-                headers,
-                initial_data: vec![],
-                is_complete: None,
-            }) {
-                active_requests.write().await.remove(&request_id);
-                return Ok(Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(boxed_body("Tunnel communication error"))
-                    .unwrap());
-            }
-
-            info!("✅ Sent streaming request start {}", request_id);
-
-            // Stream body chunks (existing logic remains unchanged)
-            tokio::spawn(stream_request_body(
-                req.into_body(),
-                request_id.clone(),
-                tunnel_sender,
-                client_disconnected.clone(),
-            ));
+        if tunnel_sender.send(complete_request).is_err() {
+            active_requests.write().await.remove(&request_id);
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(boxed_body("Tunnel communication error"))
+                .unwrap());
         }
     }
 
-    // Build streaming response
-    build_streaming_response(request_id, response_rx, active_requests).await
+    // Build response (handles both complete and streaming)
+    build_response(request_id, response_rx, active_requests).await
+}
+
+// Helper to detect streaming requests
+fn is_streaming_request(req: &Request<Incoming>) -> bool {
+    // Check for SSE
+    if req.headers().get("accept")
+        .and_then(|h| h.to_str().ok())
+        .map(|accept| accept.contains("text/event-stream"))
+        .unwrap_or(false) {
+        return true;
+    }
+
+    // Check for streaming content types
+    if let Some(content_type) = req.headers().get("content-type")
+        .and_then(|h| h.to_str().ok()) {
+        if content_type.contains("application/octet-stream")
+            || content_type.contains("multipart/") {
+            return true;
+        }
+    }
+
+    // Check for chunked encoding
+    if req.headers().get("transfer-encoding")
+        .and_then(|h| h.to_str().ok())
+        .map(|te| te.contains("chunked"))
+        .unwrap_or(false) {
+        return true;
+    }
+
+    // Large content length
+    if let Some(content_length) = req.headers().get("content-length")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<usize>().ok()) {
+        if content_length > 1024 * 1024 { // > 1MB
+            return true;
+        }
+    }
+
+    false
 }
 
 async fn stream_request_body(
@@ -751,81 +684,6 @@ async fn stream_request_body(
     })?;
 
     Ok(())
-}
-
-async fn build_streaming_response(
-    request_id: String,
-    mut response_rx: mpsc::Receiver<ResponseEvent>,
-    active_requests: ActiveRequests,
-) -> Result<Response<ResponseBody>, BoxError> {
-    // Wait for response start
-    match response_rx.recv().await {
-        Some(ResponseEvent::Start {
-            status,
-            headers,
-            initial_data,
-        }) => {
-            // Build response
-            let mut builder = Response::builder().status(status);
-            for (key, value) in headers {
-                builder = builder.header(key, value);
-            }
-
-            // Create response body
-            if initial_data.is_empty() {
-                // Create streaming body from channel
-                let body =
-                    create_streaming_body(response_rx, request_id.clone(), active_requests.clone())
-                        .await;
-                Ok(builder.body(body)?)
-            } else {
-                // Check if there's more data coming
-                let has_more_data = !response_rx.is_closed();
-
-                if has_more_data {
-                    // Combine initial data with streaming data
-                    let body = create_streaming_body_with_initial(
-                        initial_data,
-                        response_rx,
-                        request_id.clone(),
-                        active_requests.clone(),
-                    )
-                    .await;
-                    Ok(builder.body(body)?)
-                } else {
-                    // Just return the initial data
-                    active_requests.write().await.remove(&request_id);
-                    Ok(builder.body(boxed_body(initial_data))?)
-                }
-            }
-        }
-
-        Some(ResponseEvent::Error(e)) => {
-            active_requests.write().await.remove(&request_id);
-            Ok(Response::builder()
-                .status(StatusCode::BAD_GATEWAY)
-                .body(boxed_body(e))?)
-        }
-
-        Some(ResponseEvent::Data(_)) | Some(ResponseEvent::End) => {
-            // These events should not be received when waiting for response start
-            warn!(
-                "Received unexpected Data/End event when waiting for response start for request {}",
-                request_id
-            );
-            active_requests.write().await.remove(&request_id);
-            Ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(boxed_body("Protocol error: unexpected response event"))?)
-        }
-
-        None => {
-            active_requests.write().await.remove(&request_id);
-            Ok(Response::builder()
-                .status(StatusCode::GATEWAY_TIMEOUT)
-                .body(boxed_body("No response from tunnel"))?)
-        }
-    }
 }
 
 fn extract_headers(req: &Request<Incoming>) -> HashMap<String, String> {
@@ -1041,7 +899,6 @@ async fn handle_tunnel_management_connection(
                             info!("Tunnel '{}' registered successfully", requested_tunnel_id);
                         }
 
-                        // Streaming message handlers
                         Message::HttpResponseStart {
                             id,
                             status,
@@ -1049,123 +906,55 @@ async fn handle_tunnel_management_connection(
                             initial_data,
                             is_complete,
                         } => {
-                            info!(
-                                "📥 Received HttpResponseStart: {} (id: {}, complete: {:?}, {} bytes)",
-                                status,
-                                id,
-                                is_complete,
-                                initial_data.len()
-                            );
-                            // Find the active request waiting for this response
-                            if let Some(request) = active_requests.read().await.get(&id) {
-                                debug!("✅ Server: Found active request for {}", id);
-                                
-                                if is_complete == Some(true) {
-                                    // ✨ COMPLETE RESPONSE: Process immediately and finish
-                                    info!("📦 Processing complete response: {} (id: {}, {} bytes)", status, id, initial_data.len());
+                            info!("📥 Response: {} (id: {}, complete: {:?}, {} bytes)", 
+          status, id, is_complete, initial_data.len());
 
-                                    let start_event = ResponseEvent::Start {
+                            if let Some(request) = active_requests.read().await.get(&id) {
+                                if is_complete == Some(true) {
+                                    let complete_event = ResponseEvent::Complete {
                                         status,
                                         headers,
-                                        initial_data: initial_data.clone(),
+                                        body: initial_data,
                                     };
 
-                                    // Send start event
-                                    match request.response_tx.send(start_event).await {
-                                        Ok(_) => {
-                                            // Immediately send end event for complete responses
-                                            match request.response_tx.send(ResponseEvent::End).await {
-                                                Ok(_) => {
-                                                    info!("✅ Complete response sent to browser for {}", id);
-                                                }
-                                                Err(e) => {
-                                                    error!("❌ Server: Failed to send end event for {}: {}", id, e);
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("❌ Server: Failed to send start event for {}: {}", id, e);
-                                            request.client_disconnected.store(true, Ordering::Relaxed);
-                                        }
+                                    match request.response_tx.send(complete_event).await {
+                                        Ok(_) => info!("✅ Complete response queued for {}", id),
+                                        Err(e) => error!("❌ Failed to queue complete response for {}: {}", id, e),
                                     }
-
-                                    // Clean up immediately - no DataChunks expected
-                                    active_requests.write().await.remove(&id);
-                                    debug!("🧹 Server: Cleaned up complete response request {}", id);
-
                                 } else {
-                                    // ✨ STREAMING RESPONSE: Expect DataChunk messages to follow
-                                    info!("🔄 Processing streaming response start: {} (id: {})", status, id);
-
-                                    let start_event = ResponseEvent::Start {
+                                    let stream_start = ResponseEvent::StreamStart {
                                         status,
                                         headers,
                                         initial_data,
                                     };
 
-                                    match request.response_tx.send(start_event).await {
-                                        Ok(_) => {
-                                            info!("✅ Streaming response start sent, waiting for DataChunks for {}", id);
-                                            // Keep request active - DataChunks will follow
-                                        }
+                                    match request.response_tx.send(stream_start).await {
+                                        Ok(_) => info!("✅ Stream started for {}", id),
                                         Err(e) => {
-                                            error!("❌ Server: Failed to send streaming response start for {}: {}", id, e);
-                                            request.client_disconnected.store(true, Ordering::Relaxed);
+                                            error!("❌ Failed to start stream for {}: {}", id, e);
                                             active_requests.write().await.remove(&id);
                                         }
                                     }
                                 }
-                            } else {
-                                error!("❌ Server: Received HttpResponseStart for unknown request: {}", id);
-
-                                // Debug: List active requests
-                                let requests = active_requests.read().await;
-                                let active_ids: Vec<String> = requests.keys().cloned().collect();
-                                error!("📋 Server: Active request IDs: {:?}", active_ids);
                             }
                         }
 
                         Message::DataChunk { id, data, is_final } => {
-                            info!("📥 Received DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
+                            info!("📥 DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
 
-                            // Find the active request waiting for this data
                             if let Some(request) = active_requests.read().await.get(&id) {
-                                let mut should_cleanup = false;
-                                let mut send_success = true;
-
-                                // Send response body chunk if not empty
                                 if !data.is_empty() {
-                                    if request.response_tx.send(ResponseEvent::Data(data.into())).await.is_err() {
-                                        warn!("❌ Failed to send DataChunk for streaming response {}", id);
-                                        request.client_disconnected.store(true, Ordering::Relaxed);
-                                        should_cleanup = true;
-                                        send_success = false;
-                                    }
+                                    let _ = request.response_tx.send(
+                                        ResponseEvent::StreamChunk(data.into())
+                                    ).await;
                                 }
 
-                                // If final chunk and previous send was successful, end the streaming response
-                                if is_final && send_success {
-                                    if request.response_tx.send(ResponseEvent::End).await.is_ok() {
-                                        info!("✅ Streaming response completed for {}", id);
-                                    } else {
-                                        warn!("❌ Failed to send end event for streaming response {}", id);
-                                    }
-                                    should_cleanup = true;
-                                }
-
-                                // Clean up if needed
-                                if should_cleanup {
-                                    active_requests.write().await.remove(&id);
-                                    info!("🧹 Cleaned up streaming response request {}", id);
+                                if is_final {
+                                    let _ = request.response_tx.send(ResponseEvent::StreamEnd).await;
+                                    info!("✅ Stream ended for {}", id);
                                 }
                             } else {
                                 warn!("❌ Received DataChunk for unknown request: {}", id);
-                                warn!("🚨 This might indicate a protocol issue - DataChunk without prior HttpResponseStart");
-
-                                // Debug: List active requests
-                                let requests = active_requests.read().await;
-                                let active_ids: Vec<String> = requests.keys().cloned().collect();
-                                warn!("📋 Active request IDs: {:?}", active_ids);
                             }
                         }
                         

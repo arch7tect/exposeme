@@ -156,7 +156,7 @@ async fn build_response(
                 initial_stream.chain(stream).boxed()
             };
 
-            let body = StreamBody::new(full_stream).boxed();
+            let body = BoxBody::new(StreamBody::new(full_stream));
 
             let active_requests_clone = active_requests.clone();
             let request_id_clone = request_id.clone();
@@ -165,8 +165,7 @@ async fn build_response(
                 active_requests_clone.write().await.remove(&request_id_clone);
             });
 
-            Ok(builder.body(body)?)
-        }
+            Ok(builder.body(body)?)        }
 
         Some(ResponseEvent::Error(e)) => {
             active_requests.write().await.remove(&request_id);

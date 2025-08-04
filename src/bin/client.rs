@@ -323,10 +323,9 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
     while let Some(message) = ws_receiver.next().await {
         match message {
             Ok(WsMessage::Text(text)) => {
-                debug!("📨 Raw WebSocket message received: {}", text);
+                debug!("📨 Raw WebSocket message received: {} bytes", text.len());
                 match Message::from_json(&text.to_string()) {
                     Ok(msg) => {
-                        debug!("✅ Successfully parsed message: {:?}", msg);
                         match msg {
                             Message::AuthSuccess {
                                 tunnel_id,

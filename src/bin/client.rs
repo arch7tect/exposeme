@@ -15,7 +15,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::Connector;
 use rustls::ClientConfig as RustlsClientConfig;
 
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use exposeme::{initialize_tracing, ClientArgs, ClientConfig, Message};
 use exposeme::insecure_cert::InsecureCertVerifier;
@@ -269,7 +269,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
         while let Some(message) = to_server_rx.recv().await {
             message_count += 1;
-            debug!("🔍 Processing outgoing message #{}", message_count);
+            trace!("🔍 Processing outgoing message #{}", message_count);
 
             if let Ok(json) = message.to_json() {
                 debug!("🔍 Sending message #{} ({} chars)", message_count, json.len());
@@ -351,7 +351,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
                                 if is_complete == Some(true) {
                                     // ✨ Complete request - process immediately
-                                    info!("📦 Processing complete request: {} {} ({} bytes)", method, path, initial_data.len());
+                                    debug!("📦 Processing complete request: {} {} ({} bytes)", method, path, initial_data.len());
 
                                     tokio::spawn(async move {
                                         let url = format!("{}{}", local_target, path);
@@ -365,7 +365,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                                         // Send request and stream response
                                         match request.send().await {
                                             Ok(response) => {
-                                                info!("✅ Complete request succeeded: {} {}", method, path);
+                                                debug!("✅ Complete request succeeded: {} {}", method, path);
                                                 stream_response_to_server(&to_server_tx, id, response).await;
                                             }
                                             Err(e) => {
@@ -383,7 +383,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
                                     // Send initial data if present
                                     if !initial_data.is_empty() {
-                                        info!("📦 Sending initial data: {} bytes", initial_data.len());
+                                        debug!("📦 Sending initial data: {} bytes", initial_data.len());
                                         let _ = body_tx.send(Ok(initial_data.into())).await;
                                     }
 
@@ -392,7 +392,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                                         outgoing_requests.write().await.insert(id.clone(), OutgoingRequest {
                                             body_tx: Some(body_tx.clone()),
                                         });
-                                        info!("✅ Registered streaming request: {}", id);
+                                        debug!("✅ Registered streaming request: {}", id);
                                     }
 
                                     // Spawn task for streaming HTTP request
@@ -403,14 +403,15 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                                         if ["POST", "PUT", "PATCH"].contains(&method.as_str()) {
                                             let body_stream = tokio_stream::wrappers::ReceiverStream::new(body_rx);
                                             request = request.body(reqwest::Body::wrap_stream(body_stream));
-                                        } else {
-                                            drop(body_tx); // Close body for GET requests
                                         }
+
+                                        // Close body
+                                        drop(body_tx);
 
                                         // Send request and stream response
                                         match request.send().await {
                                             Ok(response) => {
-                                                info!("✅ Streaming request succeeded: {} {}", method, path);
+                                                debug!("✅ Streaming request succeeded: {} {}", method, path);
                                                 stream_response_to_server(&to_server_tx, id, response).await;
                                             }
                                             Err(e) => {
@@ -449,11 +450,11 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                                 });
                             }
                             Message::WebSocketData { connection_id, data } => {
-                                info!("📥 Received WebSocketData: {} ({} bytes)", connection_id, data.len());
+                                debug!("📥 Received WebSocketData: {} ({} bytes)", connection_id, data.len());
                                 handle_websocket_data(active_websockets.clone(), connection_id, data).await;
                             }
                             Message::WebSocketClose { connection_id, code, reason } => {
-                                info!("📥 Received WebSocketClose: {} (code: {:?}, reason: {:?})", connection_id, code, reason);
+                                debug!("📥 Received WebSocketClose: {} (code: {:?}, reason: {:?})", connection_id, code, reason);
                                 handle_websocket_close(active_websockets.clone(), connection_id, code, reason).await;
                             }
                             Message::Error { message } => {
@@ -492,9 +493,9 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
         let websockets = active_websockets.read().await;
         let connection_count = websockets.len();
         if connection_count > 0 {
-            info!("🔌 Cleaning up {} WebSocket connections on shutdown", connection_count);
-            for (_id, connection) in websockets.iter() {
-                connection.log_info("Shutting down due to client disconnect");
+            debug!("🔌 Cleaning up {} WebSocket connections on shutdown", connection_count);
+            for (id, connection) in websockets.iter() {
+                connection.log_info(&format!("Shutting down {} due to client disconnect", id));
             }
         }
     }
@@ -531,7 +532,8 @@ async fn handle_data_chunk(
 
     if is_final {
         outgoing_requests.write().await.remove(&id);
-        drop(tx); // Close the stream
+        // Close the stream
+        drop(tx);
     }
 }
 
@@ -540,13 +542,12 @@ async fn stream_response_to_server(
     id: String,
     response: reqwest::Response,
 ) {
-    debug!("🔍 ENTER stream_response_to_server for id: {}", id);
+    trace!("🔍 ENTER stream_response_to_server for id: {}", id);
 
     let status = response.status().as_u16();
     let headers = extract_response_headers(&response);
 
-    debug!("🔍 Response status: {}, headers count: {}", status, headers.len());
-    info!("📤 Preparing response: {} (id: {}, headers: {})", status, id, headers.len());
+    debug!("📤 Preparing response: {} (id: {}, headers: {})", status, id, headers.len());
 
     // Check if we should stream this response
     let should_stream = is_streaming_response(&response);
@@ -566,7 +567,6 @@ async fn stream_response_to_server(
         match response.bytes().await {
             Ok(bytes) => {
                 debug!("🔍 Got {} bytes, creating HttpResponseStart for {}", bytes.len(), id);
-                info!("📤 Sending complete response: {} bytes (id: {})", bytes.len(), id);
 
                 let response_msg = Message::HttpResponseStart {
                     id: id.clone(),
@@ -579,8 +579,7 @@ async fn stream_response_to_server(
                 debug!("🔍 Attempting to send HttpResponseStart for {}", id);
                 match to_server_tx.send(response_msg) {
                     Ok(_) => {
-                        debug!("✅ HttpResponseStart sent successfully for {}", id);
-                        info!("✅ Complete response sent successfully for {}", id);
+                        debug!("✅ Complete HttpResponseStart sent successfully for {}", id);
                     }
                     Err(e) => {
                         error!("❌ FAILED to send HttpResponseStart for {}: {}", id, e);
@@ -596,8 +595,6 @@ async fn stream_response_to_server(
         debug!("🔍 Processing as streaming response for {}", id);
 
         // Stream the response
-        info!("📤 Starting streaming response (id: {})", id);
-
         let start_msg = Message::HttpResponseStart {
             id: id.clone(),
             status,
@@ -613,7 +610,6 @@ async fn stream_response_to_server(
         }
 
         debug!("✅ Streaming response start sent for {}", id);
-        info!("✅ Streaming response start sent for {}", id);
 
         let mut stream = response.bytes_stream();
         let mut total_bytes = 0;
@@ -625,10 +621,8 @@ async fn stream_response_to_server(
                     total_bytes += chunk.len();
                     chunk_count += 1;
 
-                    debug!("🔍 Processing chunk {} ({} bytes) for {}", chunk_count, chunk.len(), id);
-
                     if chunk_count % 10 == 0 || chunk.len() > 1024 {
-                        info!("📤 Sending chunk {} ({} bytes, {} total) for {}",
+                        debug!("📤 Sending chunk {} ({} bytes, {} total) for {}",
                               chunk_count, chunk.len(), total_bytes, id);
                     }
 
@@ -654,7 +648,6 @@ async fn stream_response_to_server(
 
         // Send final chunk
         debug!("🔍 Sending final chunk for {} ({} total bytes, {} chunks)", id, total_bytes, chunk_count);
-        info!("📤 Sending final chunk for {} ({} total bytes, {} chunks)", id, total_bytes, chunk_count);
 
         let final_msg = Message::DataChunk {
             id: id.clone(),
@@ -667,11 +660,10 @@ async fn stream_response_to_server(
             error!("❌ Failed to send final chunk for {}: {}", id, e);
         } else {
             debug!("✅ Final chunk sent for {}", id);
-            info!("✅ Streaming response completed for {}", id);
         }
     }
 
-    debug!("🔍 EXIT stream_response_to_server for id: {}", id);
+    trace!("🔍 EXIT stream_response_to_server for id: {}", id);
 }
 
 async fn send_error_response(
@@ -779,13 +771,13 @@ async fn handle_websocket_upgrade(
         format!("ws://{}{}", local_target, path)
     };
 
-    info!("🔗 Connecting to local WebSocket: {}", ws_url);
+    debug!("🔗 Connecting to local WebSocket: {}", ws_url);
     let connect_timeout = Duration::from_secs(config.client.websocket_connection_timeout_secs);
     let connect_result = timeout(connect_timeout, connect_async(&ws_url)).await;
 
     match connect_result {
         Ok(Ok((local_ws, response))) => {
-            info!("✅ Connected to local WebSocket service for {}", connection_id);
+            debug!("✅ Connected to local WebSocket service for {}", connection_id);
 
             // Extract response headers
             let mut response_headers = HashMap::new();
@@ -908,7 +900,7 @@ async fn handle_websocket_upgrade(
                     };
 
                     active_websockets_clone.write().await.remove(&connection_id);
-                    info!("🔌 Local-to-server task ended: {}", final_status);
+                    debug!("🔌 Local-to-server task ended: {}", final_status);
                 })
             };
 
@@ -944,7 +936,7 @@ async fn handle_websocket_upgrade(
                 let max_idle = Duration::from_secs(config.client.websocket_max_idle_secs);
 
                 tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(monitoring_interval); // Check every 30 seconds
+                    let mut interval = tokio::time::interval(monitoring_interval);
 
                     loop {
                         interval.tick().await;
@@ -1037,17 +1029,13 @@ async fn handle_websocket_data(
 ) {
     if let Some(connection) = active_websockets.read().await.get(&connection_id) {
         connection.update_activity().await;
-        // Decode base64 data
         match base64::engine::general_purpose::STANDARD.decode(&data) {
             Ok(binary_data) => {
                 let data_size = binary_data.len();
 
-                // Use connection method for proper error handling and logging
                 if connection.send_to_local(binary_data).await.is_ok() {
                     connection.log_debug(&format!("Forwarded {} bytes to local WebSocket", data_size));
                 } else {
-                    // Connection method already logged the error
-                    // Remove dead connection
                     active_websockets.write().await.remove(&connection_id);
                     connection.log_error("Failed to forward data to local WebSocket");
                 }

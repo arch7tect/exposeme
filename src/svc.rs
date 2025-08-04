@@ -761,7 +761,7 @@ async fn handle_tunnel_management_connection(
                     );
                 }
                 Message::DataChunk { id, data, is_final } => {
-                    info!(
+                    debug!(
                         "📤 Sending DataChunk: {} bytes, final={} (id: {})",
                         data.len(),
                         is_final,
@@ -876,7 +876,7 @@ async fn handle_tunnel_management_connection(
                             initial_data,
                             is_complete,
                         } => {
-                            info!("📥 Response: {} (id: {}, complete: {:?}, {} bytes)", 
+                            debug!("📥 Response: {} (id: {}, complete: {:?}, {} bytes)", 
           status, id, is_complete, initial_data.len());
 
                             if let Some(request) = active_requests.read().await.get(&id) {
@@ -888,7 +888,7 @@ async fn handle_tunnel_management_connection(
                                     };
 
                                     match request.response_tx.send(complete_event).await {
-                                        Ok(_) => info!("✅ Complete response queued for {}", id),
+                                        Ok(_) => debug!("✅ Complete response queued for {}", id),
                                         Err(e) => error!("❌ Failed to queue complete response for {}: {}", id, e),
                                     }
                                 } else {
@@ -899,7 +899,7 @@ async fn handle_tunnel_management_connection(
                                     };
 
                                     match request.response_tx.send(stream_start).await {
-                                        Ok(_) => info!("✅ Stream started for {}", id),
+                                        Ok(_) => debug!("✅ Stream started for {}", id),
                                         Err(e) => {
                                             error!("❌ Failed to start stream for {}: {}", id, e);
                                             active_requests.write().await.remove(&id);
@@ -910,7 +910,7 @@ async fn handle_tunnel_management_connection(
                         }
 
                         Message::DataChunk { id, data, is_final } => {
-                            info!("📥 DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
+                            debug!("📥 DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
 
                             if let Some(request) = active_requests.read().await.get(&id) {
                                 if !data.is_empty() {
@@ -921,7 +921,7 @@ async fn handle_tunnel_management_connection(
 
                                 if is_final {
                                     let _ = request.response_tx.send(ResponseEvent::StreamEnd).await;
-                                    info!("✅ Stream ended for {}", id);
+                                    debug!("✅ Stream ended for {}", id);
                                 }
                             } else {
                                 warn!("❌ Received DataChunk for unknown request: {}", id);
@@ -1102,7 +1102,7 @@ async fn shutdown_tunnel(
         );
         for connection_id in websocket_connections_to_cleanup {
             if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
-                info!("🗑️  Cleaned up WebSocket connection: {}", connection_id);
+                debug!("🗑️  Cleaned up WebSocket connection: {}", connection_id);
                 // Close the browser WebSocket connection gracefully
                 if let Some(ws_tx) = &connection.ws_tx {
                     let close_msg = WsMessage::Close(Some(
@@ -1310,7 +1310,7 @@ async fn handle_websocket_upgrade_request(
         headers.insert(name.to_string(), value.to_str().unwrap_or("").to_string());
     }
 
-    info!(
+    debug!(
         "🔌 Processing WebSocket upgrade for connection {}",
         connection_id
     );
@@ -1392,7 +1392,7 @@ async fn handle_websocket_upgrade_request(
         }
     });
 
-    info!("✅ WebSocket upgrade response sent for {}", connection_id);
+    debug!("✅ WebSocket upgrade response sent for {}", connection_id);
     Ok(response)
 }
 

@@ -2,13 +2,14 @@ use crate::{ChallengeStore, Message, RoutingMode, ServerConfig, SslManager, SslP
 use base64::Engine;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
-use tokio_stream::wrappers::ReceiverStream;
 use http_body_util::{BodyExt, Full, combinators::BoxBody, StreamBody};
 use hyper::upgrade::Upgraded;
 use hyper::{Request, Response, StatusCode, body::Incoming};
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
+use hyper::body::Frame;
+use async_stream::stream;
 use rustls::ServerConfig as RustlsConfig;
 use serde_json::json;
 use sha1::{Digest, Sha1};
@@ -33,9 +34,6 @@ pub type ActiveWebSockets = Arc<RwLock<HashMap<String, WebSocketConnection>>>;
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type ResponseBody = BoxBody<Bytes, BoxError>;
 
-const CHANNEL_BUFFER_SIZE: usize = 32; // Backpressure control
-const SMALL_BODY_THRESHOLD: usize = 256 * 1024; // 256KB
-
 #[derive(Debug)]
 pub struct ActiveRequest {
     tunnel_id: String,
@@ -58,14 +56,6 @@ pub enum ResponseEvent {
     StreamChunk(Bytes),
     StreamEnd,
     Error(String),
-}
-
-#[derive(Debug, Clone, Copy)]
-enum BodySize {
-    Empty,
-    Small,   // <= 256KB
-    Large,   // > 256KB
-    Unknown, // No Content-Length
 }
 
 #[derive(Debug)]
@@ -117,6 +107,7 @@ async fn build_response(
     mut response_rx: mpsc::Receiver<ResponseEvent>,
     active_requests: ActiveRequests,
 ) -> Result<Response<ResponseBody>, BoxError> {
+    // ✨ IMPORTANT: Only match on the FIRST event to determine response type
     match response_rx.recv().await {
         Some(ResponseEvent::Complete { status, headers, body }) => {
             info!("✅ Complete response: {} ({} bytes)", status, body.len());
@@ -138,25 +129,30 @@ async fn build_response(
                 builder = builder.header(key, value);
             }
 
-            let stream = ReceiverStream::new(response_rx)
-                .map(|event| -> Result<Bytes, BoxError> {
+            // ✨ Handle streaming with Frame<Bytes>
+            let body_stream = stream! {
+                // Send initial data if present
+                if !initial_data.is_empty() {
+                    yield Ok(Frame::data(Bytes::from(initial_data)));
+                }
+                
+                // Stream the rest - this handles StreamChunk and StreamEnd
+                while let Some(event) = response_rx.recv().await {
                     match event {
-                        ResponseEvent::StreamChunk(chunk) => Ok(chunk),
-                        ResponseEvent::StreamEnd => Err("Stream ended".into()),
-                        ResponseEvent::Error(e) => Err(e.into()),
-                        _ => Err("Unexpected event".into()),
+                        ResponseEvent::StreamChunk(chunk) => {
+                            yield Ok(Frame::data(chunk));
+                        }
+                        ResponseEvent::StreamEnd => break,
+                        ResponseEvent::Error(e) => {
+                            yield Err(e.into());
+                            break;
+                        }
+                        _ => break, // Ignore other events in streaming context
                     }
-                })
-                .take_while(|result| std::future::ready(result.is_ok()));
-
-            let full_stream = if initial_data.is_empty() {
-                stream.boxed()
-            } else {
-                let initial_stream = tokio_stream::once(Ok(Bytes::from(initial_data)));
-                initial_stream.chain(stream).boxed()
+                }
             };
 
-            let body = BoxBody::new(StreamBody::new(full_stream));
+            let body = BoxBody::new(StreamBody::new(body_stream));
 
             let active_requests_clone = active_requests.clone();
             let request_id_clone = request_id.clone();
@@ -165,13 +161,33 @@ async fn build_response(
                 active_requests_clone.write().await.remove(&request_id_clone);
             });
 
-            Ok(builder.body(body)?)        }
+            Ok(builder.body(body)?)
+        }
 
         Some(ResponseEvent::Error(e)) => {
             active_requests.write().await.remove(&request_id);
             Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
                 .body(boxed_body(e))?)
+        }
+
+        // ✨ These cases are now handled INSIDE the stream! macro above
+        Some(ResponseEvent::StreamChunk(_)) => {
+            // This shouldn't happen as first event, but handle gracefully
+            warn!("Received StreamChunk as first event for {}", request_id);
+            active_requests.write().await.remove(&request_id);
+            Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(boxed_body("Invalid response sequence"))?)
+        }
+
+        Some(ResponseEvent::StreamEnd) => {
+            // This shouldn't happen as first event, but handle gracefully  
+            warn!("Received StreamEnd as first event for {}", request_id);
+            active_requests.write().await.remove(&request_id);
+            Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(boxed_body("Invalid response sequence"))?)
         }
 
         None => {
@@ -183,51 +199,6 @@ async fn build_response(
     }
 }
 
-fn analyze_request_body(req: &Request<Incoming>) -> BodySize {
-    // SSE always streams
-    if req
-        .headers()
-        .get("accept")
-        .and_then(|h| h.to_str().ok())
-        .map(|accept| accept.contains("text/event-stream"))
-        .unwrap_or(false)
-    {
-        return BodySize::Unknown;
-    }
-
-    // ✨ FIX: GET, HEAD, DELETE requests are always empty body
-    match req.method() {
-        &hyper::Method::GET | &hyper::Method::HEAD | &hyper::Method::DELETE => {
-            return BodySize::Empty;
-        }
-        _ => {} // Continue with content-length analysis for POST/PUT/PATCH
-    }
-
-    // Check Content-Length for POST/PUT/PATCH requests
-    match req
-        .headers()
-        .get("content-length")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse::<usize>().ok())
-    {
-        Some(0) => BodySize::Empty,
-        Some(len) if len <= SMALL_BODY_THRESHOLD => BodySize::Small,
-        Some(_) => BodySize::Large,
-        None => {
-            // No content-length header
-            match req.method() {
-                &hyper::Method::POST | &hyper::Method::PUT | &hyper::Method::PATCH => {
-                    // POST/PUT/PATCH without content-length might be chunked
-                    BodySize::Unknown
-                }
-                _ => {
-                    // Other methods without body
-                    BodySize::Empty
-                }
-            }
-        }
-    }
-}
 #[derive(Clone)]
 struct UnifiedService {
     tunnels: TunnelMap,

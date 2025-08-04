@@ -289,7 +289,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
 
         debug!("⚠️ Outgoing message handler ended (sent {} messages)", message_count);
     });
-    
+
     // Add periodic cleanup task for WebSocket connections
     let cleanup_websockets = active_websockets.clone();
     let cleanup_interval = Duration::from_secs(config.client.websocket_cleanup_interval_secs);
@@ -514,21 +514,24 @@ async fn handle_data_chunk(
         requests.get(&id).and_then(|r| r.body_tx.clone())
     };
 
-    if let Some(tx) = body_tx {
-        if !data.is_empty() {
-            let _ = tx.send(Ok(data.into())).await;
-        }
-
-        if is_final {
-            drop(tx); // Close the stream
-            outgoing_requests.write().await.remove(&id);
-        }
-    } else {
+    let Some(tx) = body_tx else {
         warn!("❌ Received DataChunk for unknown request ID: {} (this indicates HttpRequestStart was not received)", id);
         // List current active requests for debugging
         let requests = outgoing_requests.read().await;
         let active_ids: Vec<String> = requests.keys().cloned().collect();
         warn!("📋 Active request IDs: {:?}", active_ids);
+        return;
+    };
+
+    if !data.is_empty() {
+        if let Err(e) = tx.send(Ok(data.into())).await {
+            error!("Failed to send data: {}", e);
+        }
+    }
+
+    if is_final {
+        outgoing_requests.write().await.remove(&id);
+        drop(tx); // Close the stream
     }
 }
 
@@ -625,7 +628,7 @@ async fn stream_response_to_server(
                     debug!("🔍 Processing chunk {} ({} bytes) for {}", chunk_count, chunk.len(), id);
 
                     if chunk_count % 10 == 0 || chunk.len() > 1024 {
-                        info!("📤 Sending chunk {} ({} bytes, {} total) for {}", 
+                        info!("📤 Sending chunk {} ({} bytes, {} total) for {}",
                               chunk_count, chunk.len(), total_bytes, id);
                     }
 

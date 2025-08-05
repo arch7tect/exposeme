@@ -74,7 +74,7 @@ async fn route_request(
     //         .unwrap());
     // }
 
-    // Certificate API
+    // Internal API
     if path.starts_with("/api/") {
         if let Some(resp) = api::handle_api(&req, &context.ssl_manager, &context.config).await? {
             return Ok(resp);

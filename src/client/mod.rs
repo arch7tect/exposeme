@@ -15,7 +15,6 @@ use crate::insecure_cert::InsecureCertVerifier;
 pub mod connection;
 pub mod http_handler;
 pub mod websocket_handler;
-pub mod utils;
 
 pub use connection::{ActiveWebSocketConnection, ActiveWebSockets};
 use http_handler::{HttpHandler, OutgoingRequests};

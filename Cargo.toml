@@ -1,6 +1,6 @@
 [package]
 name = "exposeme"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 authors = ["Oleg Orlov <arch7tect@gmail.com>"]
 description = "Secure HTTP tunneling service"

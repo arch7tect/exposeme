@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{RwLock};
 use tracing::{error, info};
-use exposeme::svc::{BoxError, TunnelMap, ActiveRequests, ActiveWebSockets, start_http_server, start_https_server};
+use exposeme::svc::{start_http_server, start_https_server, TunnelMap, ActiveRequests, ActiveWebSockets, BoxError};
 
 #[tokio::main]
 async fn main() -> Result<(), BoxError> {

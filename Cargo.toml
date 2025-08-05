@@ -18,6 +18,10 @@ path = "src/bin/client.rs"
 name = "test_server"
 path = "examples/test_server.rs"
 
+[[example]]
+name = "sse_test_server"
+path = "examples/sse_test_server.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }

@@ -26,7 +26,7 @@ use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMessage};
 use tower::Service;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 pub type TunnelMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>>;
 pub type ActiveRequests = Arc<RwLock<HashMap<String, ActiveRequest>>>;
@@ -788,14 +788,14 @@ async fn handle_tunnel_management_connection(
 
     while let Some(message) = ws_receiver.next().await {
         message_count += 1;
-        debug!("🔍 Server: Received WebSocket message #{}", message_count);
+        trace!("🔍 Server: Received WebSocket message #{}", message_count);
 
         match message {
             Ok(WsMessage::Text(text)) => {
-                debug!("🔍 Server: Processing text message #{} ({} chars)", message_count, text.len());
+                trace!("🔍 Server: Processing text message #{} ({} chars)", message_count, text.len());
 
                 if let Ok(msg) = Message::from_json(&text.to_string()) {
-                    debug!("🔍 Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
+                    trace!("🔍 Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
 
                     match msg {
                         Message::Auth {

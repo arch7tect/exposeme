@@ -5,6 +5,7 @@ mod ssl;
 mod dns;
 pub mod svc;
 pub mod insecure_cert;
+pub mod client;
 
 use tracing_subscriber::EnvFilter;
 pub use protocol::*;

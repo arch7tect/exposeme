@@ -49,7 +49,7 @@ pub async fn handle_tunnel_request(
     };
 
     // Enhanced SSE and streaming detection
-    let is_streaming_request = is_enhanced_streaming_request(&req);
+    let is_streaming_request = is_streaming_request(&req);
     let method = req.method().clone();
     let mut headers = extract_headers(&req);
 
@@ -146,11 +146,11 @@ pub async fn handle_tunnel_request(
     }
 
     // Build response (handles both complete and streaming)
-    build_enhanced_response(request_id, response_rx, context.active_requests).await
+    build_response(request_id, response_rx, context.active_requests).await
 }
 
-/// Enhanced streaming detection that includes SSE-specific patterns
-fn is_enhanced_streaming_request(req: &Request<Incoming>) -> bool {
+/// Streaming detection
+fn is_streaming_request(req: &Request<Incoming>) -> bool {
     // Check for SSE first (most specific)
     if is_sse_request(req) {
         return true;
@@ -195,8 +195,8 @@ fn is_sse_request(req: &Request<Incoming>) -> bool {
         .unwrap_or(false)
 }
 
-/// Enhanced response builder that adds SSE-specific headers when needed
-async fn build_enhanced_response(
+/// Response builder that adds SSE-specific headers when needed
+async fn build_response(
     request_id: String,
     mut response_rx: mpsc::Receiver<ResponseEvent>,
     active_requests: ActiveRequests,

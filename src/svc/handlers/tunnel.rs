@@ -6,12 +6,16 @@ use crate::svc::types::*;
 use crate::svc::utils::{boxed_body, extract_headers, extract_tunnel_id_from_request};
 use crate::Message;
 use futures_util::StreamExt;
-use http_body_util::BodyExt;
+use http_body_util::{BodyExt, StreamBody};
 use hyper::{Request, Response, StatusCode, body::Incoming};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use async_stream::stream;
+use bytes::Bytes;
+use http_body_util::combinators::BoxBody;
+use hyper::body::Frame;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Handle HTTP requests that should be tunneled to clients
 pub async fn handle_tunnel_request(
@@ -251,42 +255,46 @@ async fn build_response(
             }
 
             // Handle streaming with Frame<Bytes>
-            let body_stream = async_stream::stream! {
+            let active_requests_for_stream = active_requests.clone();
+            let request_id_for_stream = request_id.clone();
+
+            let body_stream = stream! {
                 // Send initial data if present
                 if !initial_data.is_empty() {
-                    yield Ok(hyper::body::Frame::data(bytes::Bytes::from(initial_data)));
+                    yield Ok(Frame::data(Bytes::from(initial_data)));
                 }
-
+        
                 // Stream the rest - this handles StreamChunk and StreamEnd
                 while let Some(event) = response_rx.recv().await {
                     match event {
                         ResponseEvent::StreamChunk(chunk) => {
-                            yield Ok(hyper::body::Frame::data(chunk));
+                            yield Ok(Frame::data(chunk));
                         }
                         ResponseEvent::StreamEnd => {
-                            debug!("✅ {} stream ended", response_type);
+                            debug!("✅ Stream ended {}", request_id_for_stream);
+                            // Clean up the request when stream ends
+                            active_requests_for_stream.write().await.remove(&request_id_for_stream);
                             break;
                         }
                         ResponseEvent::Error(e) => {
+                            error!("Stream error {}: {}", request_id_for_stream, e);
+                            // Clean up on error
+                            active_requests_for_stream.write().await.remove(&request_id_for_stream);
                             yield Err(e.into());
                             break;
                         }
                         _ => break, // Ignore other events in streaming context
                     }
                 }
+                
+                // Final cleanup in case we exit the loop without StreamEnd/Error
+                if active_requests_for_stream.write().await.remove(&request_id_for_stream).is_some() {
+                    debug!("🧹 Final cleanup for streaming request {}", request_id_for_stream);
+                }
             };
 
-            let body = http_body_util::combinators::BoxBody::new(
-                http_body_util::StreamBody::new(body_stream)
-            );
-
-            let active_requests_clone = active_requests.clone();
-            let request_id_clone = request_id.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                active_requests_clone.write().await.remove(&request_id_clone);
-            });
-
+            let body = BoxBody::new(StreamBody::new(body_stream));
+            
             Ok(builder.body(body)?)
         }
 
@@ -349,7 +357,7 @@ async fn stream_request_body(
                 }
             }
             Err(e) => {
-                tracing::error!("Body stream error: {}", e);
+                error!("Body stream error: {}", e);
                 break;
             }
         }

@@ -193,11 +193,6 @@ fn is_sse_request(req: &Request<Incoming>) -> bool {
         .and_then(|h| h.to_str().ok())
         .map(|accept| accept.contains("text/event-stream"))
         .unwrap_or(false)
-        // Also check Cache-Control: no-cache (common SSE pattern)
-        || req.headers().get("cache-control")
-        .and_then(|h| h.to_str().ok())
-        .map(|cc| cc.contains("no-cache"))
-        .unwrap_or(false)
 }
 
 /// Enhanced response builder that adds SSE-specific headers when needed

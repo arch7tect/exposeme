@@ -213,7 +213,7 @@ pub trait DnsProvider: Send + Sync {
                 }
                 Ok(false) => {
                     if attempt < MAX_ATTEMPTS {
-                        info!("⏳ DNS not yet propagated, waiting {} seconds...", RETRY_DELAY);
+                        info!("⏳ DNS not yet propagated, attempt {}. Waiting {} seconds...", attempt, RETRY_DELAY);
                         sleep(Duration::from_secs(RETRY_DELAY)).await;
                         continue;
                     } else {
@@ -223,7 +223,7 @@ pub trait DnsProvider: Send + Sync {
                 }
                 Err(e) => {
                     warn!("DNS check error: {}, continuing...", e);
-                    sleep(Duration::from_secs(15)).await;
+                    sleep(Duration::from_secs(RETRY_DELAY)).await;
                 }
             }
         }

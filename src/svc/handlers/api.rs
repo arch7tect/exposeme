@@ -12,49 +12,44 @@ use tracing::info;
 
 /// Handle certificate management API requests
 pub async fn handle_api(
-    req: Request<Incoming>,
-    ssl_manager: Arc<RwLock<SslManager>>,
-    config: ServerConfig,
-) -> Result<Response<ResponseBody>, BoxError> {
+    req: &Request<Incoming>,
+    ssl_manager: &Arc<RwLock<SslManager>>,
+    config: &ServerConfig,
+) -> Result<Option<Response<ResponseBody>>, BoxError> {
     let path = req.uri().path();
     let method = req.method();
 
     match (method, path) {
         // GET /api/certificates/status - Get certificate status
         (&hyper::Method::GET, "/api/certificates/status") => {
-            handle_certificate_status(ssl_manager, config).await
+            handle_certificate_status(ssl_manager, config).await.map(|resp| Some(resp))
         }
 
         // POST /api/certificates/renew - Force certificate renewal
         (&hyper::Method::POST, "/api/certificates/renew") => {
-            handle_certificate_renewal(ssl_manager, config).await
+            handle_certificate_renewal(ssl_manager, config).await.map(|resp| Some(resp))
         }
 
         // GET /api/certificates/info - Get detailed certificate information
         (&hyper::Method::GET, "/api/certificates/info") => {
-            handle_certificate_info(ssl_manager, config).await
+            handle_certificate_info(ssl_manager, config).await.map(|resp| Some(resp))
         }
 
         // GET /api/health - Extended health check with certificate info
         (&hyper::Method::GET, "/api/health") => {
-            handle_extended_health_check(ssl_manager, config).await
+            handle_extended_health_check(ssl_manager, config).await.map(|resp| Some(resp))
         }
 
         _ => {
-            let response = json!({"error": "API endpoint not found"});
-            Ok(Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .header("Content-Type", "application/json")
-                .body(boxed_body(response.to_string()))
-                .unwrap())
+            Ok(None)
         }
     }
 }
 
 /// Get basic certificate status
 async fn handle_certificate_status(
-    ssl_manager: Arc<RwLock<SslManager>>,
-    config: ServerConfig,
+    ssl_manager: &Arc<RwLock<SslManager>>,
+    config: &ServerConfig,
 ) -> Result<Response<ResponseBody>, BoxError> {
     let manager = ssl_manager.read().await;
     match manager.get_certificate_info() {
@@ -94,8 +89,8 @@ async fn handle_certificate_status(
 
 /// Force certificate renewal
 async fn handle_certificate_renewal(
-    ssl_manager: Arc<RwLock<SslManager>>,
-    config: ServerConfig,
+    ssl_manager: &Arc<RwLock<SslManager>>,
+    config: &ServerConfig,
 ) -> Result<Response<ResponseBody>, BoxError> {
     info!("🔄 Manual certificate renewal requested via API");
 
@@ -152,8 +147,8 @@ async fn handle_certificate_renewal(
 
 /// Get detailed certificate information
 async fn handle_certificate_info(
-    ssl_manager: Arc<RwLock<SslManager>>,
-    config: ServerConfig,
+    ssl_manager: &Arc<RwLock<SslManager>>,
+    config: &ServerConfig,
 ) -> Result<Response<ResponseBody>, BoxError> {
     let manager = ssl_manager.read().await;
 
@@ -200,8 +195,8 @@ async fn handle_certificate_info(
 
 /// Extended health check with certificate information
 async fn handle_extended_health_check(
-    ssl_manager: Arc<RwLock<SslManager>>,
-    config: ServerConfig,
+    ssl_manager: &Arc<RwLock<SslManager>>,
+    config: &ServerConfig,
 ) -> Result<Response<ResponseBody>, BoxError> {
     let manager = ssl_manager.read().await;
 

@@ -10,7 +10,8 @@ ExposeME is a simple tool that lets you share your local development server with
 - Turn `http://localhost:3000` into `https://myapp.yourdomain.com`
 - Share your local development work with clients, teammates, or testing tools
 - Receive webhooks from external services directly to your development machine
-- Test real-time features like WebSocket connections through a secure tunnel
+- Test real-time features like WebSocket connections and Server-Sent Events through a secure tunnel
+- Stream large files and handle real-time data without buffering
 
 **How does it work?**
 You run ExposeME on a server (like a VPS) with your own domain name. Then you run a small client program on your development machine that connects to your server. When someone visits your public URL, the request gets forwarded through the secure tunnel to your local application.
@@ -27,7 +28,7 @@ You run ExposeME on a server (like a VPS) with your own domain name. Then you ru
 - Testing webhooks from payment processors, GitHub, etc.
 - Demonstrating mobile app backends
 - Remote development and testing
-- Getting SSL certificates for local development
+- Streaming apps, file uploads, WebSocket connections, and SSE
 
 ## Architecture
 
@@ -36,6 +37,8 @@ ExposeME creates secure HTTP tunnels to expose local services:
 - **Single HTTP/HTTPS Server**: One server handles both regular HTTP/HTTPS requests and WebSocket upgrades on the same ports (80/443)
 - **Tunnel Setup**: Client connects to server via WebSocket upgrade on `/tunnel-ws` to establish a persistent tunnel
 - **Request Forwarding**: When users visit your public URL, the server forwards their HTTP requests through the existing WebSocket tunnel to your local service
+- **Real-time Support**: Full WebSocket upgrade support for bidirectional communication and SSE streaming
+- **Streaming**: Full support for chunked transfers and large file streaming
 - **Flow**: Internet User → Server (HTTP) → WebSocket Tunnel → Client → Local Service → Response back
 
 ### Connection Types
@@ -153,7 +156,6 @@ RUST_LOG=info
 EOF
 ```
 **⚠️ Important:** Replace the placeholders <...> in `.env` with your actual values!
-
 
 ### Start the server
 
@@ -466,6 +468,36 @@ insecure = true  # Skip TLS verification for self-signed certificates
 ```
 
 **⚠️ Security Warning**: The `insecure` option should only be used for development with self-signed certificates as it disables TLS certificate verification.
+
+## New in v1.1.0
+
+🚀 **Enhanced Streaming Support**
+- Full HTTP request/response streaming without memory buffering
+- Support for large file uploads and downloads
+
+📡 **Real-Time Communication**
+- Native Server-Sent Events (SSE) support with proper headers and streaming
+- Automatic reconnection handling for both SSE and WebSocket connections
+
+⚡ **Protocol Improvements**
+- Enhanced client-server protocol for streaming support
+- **Important**: Requires both server and client to be v1.1.0+
+
+### Upgrading from Previous Versions
+
+**⚠️ Protocol Breaking Change**: Version 1.1.0 includes protocol improvements that require both server and client to be updated together.
+
+```bash
+# Update server
+docker compose pull
+docker compose down
+docker compose up -d
+
+# Update client - arch7tect/exposeme-client:1.1 == arch7tect/exposeme-client:latest
+docker run -it --rm \
+  -v ./client.toml:/etc/exposeme/client.toml \
+  arch7tect/exposeme-client:latest
+```
 
 ## License
 

@@ -76,7 +76,9 @@ async fn route_request(
 
     // Certificate API
     if path.starts_with("/api/") {
-        return api::handle_api(req, context.ssl_manager, context.config).await;
+        if let Some(resp) = api::handle_api(&req, &context.ssl_manager, &context.config).await? {
+            return Ok(resp);
+        }
     }
 
     // WebSocket requests

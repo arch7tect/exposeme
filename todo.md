@@ -4,32 +4,6 @@ This document outlines planned features and improvements for ExposeME.
 
 ## High Priority
 
-### HTTP Request Streaming
-
-**Status**: Not implemented  
-**Priority**: High  
-**Complexity**: High
-
-Current implementation uses `body.collect().await` which loads entire request body into memory, limiting file uploads to ~64MB and causing memory issues.
-
-**Problem**:
-- Large file uploads fail due to WebSocket message size limits
-- Memory usage scales linearly with request size
-- No support for `Transfer-Encoding: chunked` requests
-- Request timeout (30s) insufficient for large transfers
-
-**Approach**:
-- Implement true streaming without collecting entire body in memory
-- Design chunked protocol: `HttpStreamStart` → `HttpStreamChunk` (multiple) → `HttpStreamEnd`
-- Support requests with unknown `Content-Length`
-- Stream processing on both server and client sides
-
-**Implementation**:
-- Replace `body.collect()` with `body.frame()` streaming
-- Add chunk size threshold (suggest 4MB chunks for >10MB requests)
-- Implement client-side streaming to local services without buffering
-- Handle backpressure and flow control
-
 ## Medium Priority
 
 ### Performance Optimization
@@ -50,9 +24,8 @@ Current implementation uses `body.collect().await` which loads entire request bo
 **Priority**: Medium  
 **Complexity**: Low-Medium
 
-Current support: DigitalOcean, Azure DNS, Hetzner  
+Current support: Cloudflare DNS, DigitalOcean, Azure DNS, Hetzner  
 **Planned providers**:
-- Cloudflare DNS
 - AWS Route53
 - Namecheap
 - Google Cloud DNS
@@ -88,12 +61,6 @@ A web-based management interface would improve operational visibility and contro
 - Export capabilities for metrics and logs
 
 ## Known Issues
-
-### WebSocket Frame Size Limits
-
-**Issue**: Default 64MB WebSocket message limit  
-**Workaround**: Increase tokio-tungstenite configuration  
-**Long-term fix**: Implement chunked streaming (see HTTP Request Streaming above)
 
 ### Request Timeout
 

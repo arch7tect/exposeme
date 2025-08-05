@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 /// Handle certificate management API requests
-pub async fn handle_certificate_api(
+pub async fn handle_api(
     req: Request<Incoming>,
     ssl_manager: Arc<RwLock<SslManager>>,
     config: ServerConfig,
@@ -41,7 +41,7 @@ pub async fn handle_certificate_api(
         }
 
         _ => {
-            let response = json!({"error": "Certificate API endpoint not found"});
+            let response = json!({"error": "API endpoint not found"});
             Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .header("Content-Type", "application/json")

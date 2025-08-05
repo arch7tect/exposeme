@@ -66,17 +66,17 @@ async fn route_request(
     }
 
     // Health check
-    if path == "/api/health" {
-        return Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header("X-Served-By", if context.is_https { "HTTPS" } else { "HTTP" })
-            .body(boxed_body("OK"))
-            .unwrap());
-    }
+    // if path == "/api/health" {
+    //     return Ok(Response::builder()
+    //         .status(StatusCode::OK)
+    //         .header("X-Served-By", if context.is_https { "HTTPS" } else { "HTTP" })
+    //         .body(boxed_body("OK"))
+    //         .unwrap());
+    // }
 
     // Certificate API
-    if path.starts_with("/api/certificates/") {
-        return api::handle_certificate_api(req, context.ssl_manager, context.config).await;
+    if path.starts_with("/api/") {
+        return api::handle_api(req, context.ssl_manager, context.config).await;
     }
 
     // WebSocket requests

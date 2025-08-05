@@ -1,101 +1,31 @@
 // src/bin/client.rs
+use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use bytes::Bytes;
 
+use base64::Engine;
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
-use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
-use base64::Engine;
+use rustls::ClientConfig as RustlsClientConfig;
 use tokio::signal;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio::time::timeout;
 use tokio_tungstenite::Connector;
-use rustls::ClientConfig as RustlsClientConfig;
+use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
+use tracing::{debug, error, info, warn};
 
-use tracing::{debug, error, info, trace, warn};
-
-use exposeme::{initialize_tracing, ClientArgs, ClientConfig, Message};
 use exposeme::insecure_cert::InsecureCertVerifier;
+use exposeme::{ClientArgs, ClientConfig, Message, initialize_tracing};
 
-pub type OutgoingRequests = Arc<RwLock<HashMap<String, OutgoingRequest>>>;
+type OutgoingRequests = Arc<RwLock<HashMap<String, mpsc::Sender<Result<Bytes, std::io::Error>>>>>;
+type ActiveWebSockets = Arc<RwLock<HashMap<String, ActiveWebSocketConnection>>>;
 
-#[derive(Debug)]
-pub struct OutgoingRequest {
-    body_tx: Option<mpsc::Sender<Result<Bytes, std::io::Error>>>,
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Set up crypto provider
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("Failed to install ring CryptoProvider");
-
-    // Handle Ctrl+C gracefully
-    tokio::spawn(async {
-        signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
-        info!("🛑 Received Ctrl+C, shutting down...");
-        std::process::exit(0);
-    });
-
-    // Parse CLI arguments
-    let args = ClientArgs::parse();
-
-    initialize_tracing(args.verbose);
-
-    // Generate config if requested
-    if args.generate_config {
-        ClientConfig::generate_default_file(&args.config)?;
-        return Ok(());
-    }
-
-    // Load configuration
-    let config = ClientConfig::load(&args)?;
-    info!("Loaded configuration from {:?}", args.config);
-    info!("Server: {}", config.client.server_url);
-    info!("Tunnel ID: {}", config.client.tunnel_id);
-    info!("Local target: {}", config.client.local_target);
-
-    info!("Starting ExposeME Client...");
-
-    // Main client loop with reconnection
-    loop {
-        match run_client(&config).await {
-            Ok(_) => {
-                info!("Client disconnected normally");
-                break;
-            }
-            Err(e) => {
-                error!("Client error: {}", e);
-
-                if config.client.auto_reconnect {
-                    info!(
-                        "Reconnecting in {} seconds...",
-                        config.client.reconnect_delay_secs
-                    );
-                    tokio::time::sleep(Duration::from_secs(config.client.reconnect_delay_secs))
-                        .await;
-                    continue;
-                } else {
-                    break;
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-// WebSocket connection management
 #[derive(Debug, Clone)]
 struct ActiveWebSocketConnection {
     connection_id: String,
-    // Channel for sending data to local WebSocket service
     local_tx: mpsc::UnboundedSender<Vec<u8>>,
-    // Channel for sending data back to server
     to_server_tx: mpsc::UnboundedSender<Message>,
     created_at: std::time::Instant,
     last_activity: Arc<RwLock<std::time::Instant>>,
@@ -117,369 +47,290 @@ impl ActiveWebSocketConnection {
         }
     }
 
-    // Use created_at for connection monitoring
-    fn connection_age(&self) -> Duration {
-        self.created_at.elapsed()
-    }
-
-    // Update last activity timestamp
     async fn update_activity(&self) {
         *self.last_activity.write().await = std::time::Instant::now();
     }
 
-    async fn is_idle(&self, max_idle_duration: Duration) -> bool {
-        let last_activity = *self.last_activity.read().await;
-        last_activity.elapsed() > max_idle_duration
+    async fn is_idle(&self, max_idle: Duration) -> bool {
+        self.last_activity.read().await.elapsed() > max_idle
     }
 
-    // Get idle time (time since last activity)
-    async fn idle_time(&self) -> Duration {
-        let last_activity = *self.last_activity.read().await;
-        last_activity.elapsed()
-    }
-
-    async fn status_summary(&self) -> String {
-        let idle = self.idle_time().await;
-        let idle_info = if idle.as_secs() < 60 {
-            format!("idle: {}s", idle.as_secs())
-        } else {
-            format!("idle: {}m", idle.as_secs() / 60)
-        };
-
-        format!(
-            "Connection {} (age: {}, {}, channels: server={}, local={})",
-            self.connection_id,
-            self.age_info(),
-            idle_info,
-            if self.to_server_tx.is_closed() { "closed" } else { "open" },
-            if self.local_tx.is_closed() { "closed" } else { "open" }
-        )
-    }
-
-    fn age_info(&self) -> String {
-        let age = self.connection_age();
-        if age.as_secs() < 60 {
-            format!("{}s", age.as_secs())
-        } else if age.as_secs() < 3600 {
-            format!("{}m", age.as_secs() / 60)
-        } else {
-            format!("{}h{}m", age.as_secs() / 3600, (age.as_secs() % 3600) / 60)
-        }
-    }
-
-    // Use to_server_tx for reliable message sending with error handling
     async fn send_to_server(&self, message: Message) -> Result<(), String> {
         self.update_activity().await;
         self.to_server_tx
             .send(message)
-            .map_err(|e| {
-                let error_msg = format!("Failed to send message to server: {}", e);
-                error!("❌ WebSocket {}: {}", self.connection_id, error_msg);
-                error_msg
-            })
+            .map_err(|e| format!("Server send failed: {}", e))
     }
 
-    // Use local_tx for reliable data forwarding
     async fn send_to_local(&self, data: Vec<u8>) -> Result<(), String> {
         self.update_activity().await;
         self.local_tx
             .send(data)
-            .map_err(|e| {
-                let error_msg = format!("Failed to send data to local WebSocket: {}", e);
-                error!("❌ WebSocket {}: {}", self.connection_id, error_msg);
-                error_msg
-            })
+            .map_err(|e| format!("Local send failed: {}", e))
+    }
+
+    fn age_str(&self) -> String {
+        let secs = self.created_at.elapsed().as_secs();
+        if secs < 60 {
+            format!("{}s", secs)
+        } else if secs < 3600 {
+            format!("{}m", secs / 60)
+        } else {
+            format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+        }
     }
 }
 
-type ActiveWebSockets = Arc<RwLock<HashMap<String, ActiveWebSocketConnection>>>;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install ring CryptoProvider");
+
+    tokio::spawn(async {
+        signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+        info!("🛑 Received Ctrl+C, shutting down...");
+        std::process::exit(0);
+    });
+
+    let args = ClientArgs::parse();
+    initialize_tracing(args.verbose);
+
+    if args.generate_config {
+        ClientConfig::generate_default_file(&args.config)?;
+        return Ok(());
+    }
+
+    let config = ClientConfig::load(&args)?;
+    info!("Loaded config from {:?}", args.config);
+    info!(
+        "Server: {} | Tunnel: {} | Target: {}",
+        config.client.server_url, config.client.tunnel_id, config.client.local_target
+    );
+
+    loop {
+        match run_client(&config).await {
+            Ok(_) => {
+                info!("Client disconnected normally");
+                break;
+            }
+            Err(e) => {
+                error!("Client error: {}", e);
+                if !config.client.auto_reconnect {
+                    break;
+                }
+                info!("Reconnecting in {}s...", config.client.reconnect_delay_secs);
+                tokio::time::sleep(Duration::from_secs(config.client.reconnect_delay_secs)).await;
+            }
+        }
+    }
+    Ok(())
+}
 
 async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Error>> {
-    // Connect to WebSocket server
-    let (ws_stream, _) = if config.client.insecure && config.client.server_url.starts_with("wss://") {
-        // For self-signed certificates, use insecure connection
-        warn!("⚠️  Using insecure connection (skipping TLS verification)");
-        warn!("⚠️  This should only be used for development with self-signed certificates");
-
-        // Create insecure TLS config that accepts any certificate
+    let (ws_stream, _) = if config.client.insecure && config.client.server_url.starts_with("wss://")
+    {
+        warn!("⚠️  Using insecure connection (development only)");
         let tls_config = RustlsClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))
             .with_no_client_auth();
-
-        let connector = Connector::Rustls(Arc::new(tls_config));
         tokio_tungstenite::connect_async_tls_with_config(
             &config.client.server_url,
             None,
             false,
-            Some(connector),
-        ).await?
+            Some(Connector::Rustls(Arc::new(tls_config))),
+        )
+        .await?
     } else {
-        // Normal secure connection
         connect_async(&config.client.server_url).await?
     };
-    info!("Connected to WebSocket server");
 
+    info!("Connected to WebSocket server");
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    // Send authentication
-    let auth_message = Message::Auth {
-        token: config.client.auth_token.clone(),
-        tunnel_id: config.client.tunnel_id.clone(),
-    };
-
-    let auth_json = auth_message.to_json()?;
-    ws_sender.send(WsMessage::Text(auth_json.into())).await?;
+    // Authentication
+    ws_sender
+        .send(WsMessage::Text(
+            Message::Auth {
+                token: config.client.auth_token.clone(),
+                tunnel_id: config.client.tunnel_id.clone(),
+            }
+            .to_json()?
+            .into(),
+        ))
+        .await?;
     info!(
         "Sent authentication for tunnel '{}'",
         config.client.tunnel_id
     );
 
-    // Create HTTP client for forwarding requests
     let http_client = HttpClient::new();
-
-    // Store active WebSocket connections and outgoing HTTP requests
     let active_websockets: ActiveWebSockets = Arc::new(RwLock::new(HashMap::new()));
     let outgoing_requests: OutgoingRequests = Arc::new(RwLock::new(HashMap::new()));
-
-    // Create channel for sending messages back to server
     let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<Message>();
 
-    // Spawn task to handle outgoing messages to server
+    // Outgoing message handler
     tokio::spawn(async move {
-        debug!("🔍 Starting outgoing message handler task");
-        let mut message_count = 0;
-
         while let Some(message) = to_server_rx.recv().await {
-            message_count += 1;
-            trace!("🔍 Processing outgoing message #{}", message_count);
-
             if let Ok(json) = message.to_json() {
-                debug!("🔍 Sending message #{} ({} chars)", message_count, json.len());
-                match ws_sender.send(WsMessage::Text(json.into())).await {
-                    Ok(_) => {
-                        trace!("✅ Message #{} sent successfully", message_count);
-                    }
-                    Err(e) => {
-                        debug!("❌ FAILED to send message #{}: {}", message_count, e);
-                        break;
-                    }
+                if ws_sender.send(WsMessage::Text(json.into())).await.is_err() {
+                    break;
                 }
-            } else {
-                debug!("❌ Failed to serialize message #{}", message_count);
             }
         }
-
-        debug!("⚠️ Outgoing message handler ended (sent {} messages)", message_count);
     });
 
-    // Add periodic cleanup task for WebSocket connections
+    // Cleanup task
     let cleanup_websockets = active_websockets.clone();
     let cleanup_interval = Duration::from_secs(config.client.websocket_cleanup_interval_secs);
-    let max_connection_idle = Duration::from_secs(config.client.websocket_max_idle_secs);
-    let cleanup_task = tokio::spawn(async move {
+    let max_idle = Duration::from_secs(config.client.websocket_max_idle_secs);
+    let _cleanup_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(cleanup_interval);
-
         loop {
             interval.tick().await;
-
-            let cleaned = cleanup_expired_connections(
-                cleanup_websockets.clone(),
-                max_connection_idle
-            ).await;
-
-            // Log current connection count
-            let current_count = cleanup_websockets.read().await.len();
-            if current_count > 0 || cleaned > 0 {
+            let mut to_remove = Vec::new();
+            {
+                let websockets = cleanup_websockets.read().await;
+                for (id, conn) in websockets.iter() {
+                    if conn.is_idle(max_idle).await {
+                        to_remove.push(id.clone());
+                    }
+                }
+            }
+            if !to_remove.is_empty() {
+                let mut websockets = cleanup_websockets.write().await;
+                for id in &to_remove {
+                    websockets.remove(id);
+                }
                 info!(
-                    "🔌 WebSocket status: {} active connections, {} cleaned up (max_idle: {}s, check_interval: {}s)",
-                    current_count,
-                    cleaned,
-                    max_connection_idle.as_secs(),
-                    cleanup_interval.as_secs()
+                    "🧹 Cleaned up {} idle WebSocket connections",
+                    to_remove.len()
                 );
             }
         }
     });
 
-    // Handle incoming WebSocket messages
+    // Main message processing loop
     while let Some(message) = ws_receiver.next().await {
-        match message {
-            Ok(WsMessage::Text(text)) => {
-                debug!("📨 Raw WebSocket message received: {} bytes", text.len());
-                match Message::from_json(&text.to_string()) {
-                    Ok(msg) => {
-                        match msg {
-                            Message::AuthSuccess {
-                                tunnel_id,
-                                public_url,
-                            } => {
-                                info!("✅ Tunnel '{}' established!", tunnel_id);
-                                info!("🌐 Public URL: {}", public_url);
-                                info!("🔄 Forwarding to: {}", config.client.local_target);
-                            }
-
-                            Message::AuthError { error, message } => {
-                                error!("❌ Authentication failed: {} - {}", error, message);
-                                return Err(format!("Auth error: {}", message).into());
-                            }
-
-                            // Streaming protocol handlers
-                            Message::HttpRequestStart { id, method, path, headers, initial_data, is_complete } => {
-                                info!("📥 Received HttpRequestStart: {} {} (id: {}, complete: {:?})", method, path, id, is_complete);
-
-                                let http_client = http_client.clone();
-                                let local_target = config.client.local_target.clone();
-                                let to_server_tx = to_server_tx.clone();
-
-                                if is_complete == Some(true) {
-                                    // ✨ Complete request - process immediately
-                                    debug!("📦 Processing complete request: {} {} ({} bytes)", method, path, initial_data.len());
-
-                                    tokio::spawn(async move {
-                                        let url = format!("{}{}", local_target, path);
-                                        let mut request = create_request_builder(&http_client, &method, &url, &headers);
-
-                                        // Set body if present
-                                        if !initial_data.is_empty() {
-                                            request = request.body(initial_data);
-                                        }
-
-                                        // Send request and stream response
-                                        match request.send().await {
-                                            Ok(response) => {
-                                                debug!("✅ Complete request succeeded: {} {}", method, path);
-                                                stream_response_to_server(&to_server_tx, id, response).await;
-                                            }
-                                            Err(e) => {
-                                                error!("❌ Complete request failed: {} {}: {}", method, path, e);
-                                                send_error_response(&to_server_tx, id, e.to_string()).await;
-                                            }
-                                        }
-                                    });
-                                } else {
-                                    // ✨ Streaming request - expect DataChunk messages
-                                    debug!("📥 Processing streaming request start: {} {}", method, path);
-
-                                    // Create streaming body channel
-                                    let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
-
-                                    // Send initial data if present
-                                    if !initial_data.is_empty() {
-                                        debug!("📦 Sending initial data: {} bytes", initial_data.len());
-                                        let _ = body_tx.send(Ok(initial_data.into())).await;
-                                    }
-
-                                    // Register request for incoming chunks
-                                    {
-                                        outgoing_requests.write().await.insert(id.clone(), OutgoingRequest {
-                                            body_tx: Some(body_tx.clone()),
-                                        });
-                                        debug!("✅ Registered streaming request: {}", id);
-                                    }
-
-                                    // Spawn task for streaming HTTP request
-                                    tokio::spawn(async move {
-                                        let url = format!("{}{}", local_target, path);
-                                        let mut request = create_request_builder(&http_client, &method, &url, &headers);
-
-                                        if ["POST", "PUT", "PATCH"].contains(&method.as_str()) {
-                                            let body_stream = tokio_stream::wrappers::ReceiverStream::new(body_rx);
-                                            request = request.body(reqwest::Body::wrap_stream(body_stream));
-                                        }
-
-                                        // Close body
-                                        drop(body_tx);
-
-                                        // Send request and stream response
-                                        match request.send().await {
-                                            Ok(response) => {
-                                                debug!("✅ Streaming request succeeded: {} {}", method, path);
-                                                stream_response_to_server(&to_server_tx, id, response).await;
-                                            }
-                                            Err(e) => {
-                                                error!("❌ Streaming request failed: {} {}: {}", method, path, e);
-                                                send_error_response(&to_server_tx, id, e.to_string()).await;
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-
-                            Message::DataChunk { id, data, is_final } => {
-                                debug!("📥 Received DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
-                                handle_data_chunk(&outgoing_requests, id, data, is_final).await;
-                            }
-
-                            Message::WebSocketUpgrade { connection_id, method, path, headers } => {
-                                debug!("📥 Received WebSocketUpgrade: {} {} (connection: {})", method, path, connection_id);
-
-                                let local_target = config.client.local_target.clone();
-                                let to_server_tx = to_server_tx.clone();
-                                let active_websockets = active_websockets.clone();
-                                let config = config.clone();
-
-                                tokio::spawn(async move {
-                                    handle_websocket_upgrade(
-                                        &local_target,
-                                        &to_server_tx,
-                                        active_websockets,
-                                        connection_id,
-                                        method,
-                                        path,
-                                        headers,
-                                        &config,
-                                    ).await;
-                                });
-                            }
-                            Message::WebSocketData { connection_id, data } => {
-                                debug!("📥 Received WebSocketData: {} ({} bytes)", connection_id, data.len());
-                                handle_websocket_data(active_websockets.clone(), connection_id, data).await;
-                            }
-                            Message::WebSocketClose { connection_id, code, reason } => {
-                                debug!("📥 Received WebSocketClose: {} (code: {:?}, reason: {:?})", connection_id, code, reason);
-                                handle_websocket_close(active_websockets.clone(), connection_id, code, reason).await;
-                            }
-                            Message::Error { message } => {
-                                error!("Server error: {}", message);
-                            }
-                            _ => {
-                                warn!("Unexpected message type from server");
+        if let Ok(WsMessage::Text(text)) = message {
+            debug!("📨 Received message: {} bytes", text.len());
+            if let Ok(msg) = Message::from_json(&text.to_string()) {
+                match msg {
+                    Message::AuthSuccess {
+                        tunnel_id,
+                        public_url,
+                    } => {
+                        info!(
+                            "✅ Tunnel '{}' established! Public: {}",
+                            tunnel_id, public_url
+                        );
+                        info!("🔄 Forwarding to: {}", config.client.local_target);
+                    }
+                    Message::AuthError { error, message } => {
+                        error!("❌ Auth failed: {} - {}", error, message);
+                        return Err(format!("Auth error: {}", message).into());
+                    }
+                    Message::HttpRequestStart {
+                        id,
+                        method,
+                        path,
+                        headers,
+                        initial_data,
+                        is_complete,
+                    } => {
+                        info!(
+                            "📥 HTTP {} {} (id: {}, complete: {:?}, {} bytes)",
+                            method,
+                            path,
+                            id,
+                            is_complete,
+                            initial_data.len()
+                        );
+                        handle_http_request(
+                            id,
+                            method,
+                            path,
+                            headers,
+                            initial_data,
+                            is_complete,
+                            &http_client,
+                            &config.client.local_target,
+                            &to_server_tx,
+                            &outgoing_requests,
+                        )
+                        .await;
+                    }
+                    Message::DataChunk { id, data, is_final } => {
+                        debug!(
+                            "📥 DataChunk: {} bytes, final={} (id: {})",
+                            data.len(),
+                            is_final,
+                            id
+                        );
+                        handle_data_chunk(&outgoing_requests, id, data, is_final).await;
+                    }
+                    Message::WebSocketUpgrade {
+                        connection_id,
+                        method,
+                        path,
+                        headers,
+                    } => {
+                        debug!(
+                            "📥 WebSocket upgrade: {} {} (conn: {})",
+                            method, path, connection_id
+                        );
+                        let local_target = config.client.local_target.clone();
+                        let to_server_tx = to_server_tx.clone();
+                        let active_websockets = active_websockets.clone();
+                        let config = config.clone();
+                        tokio::spawn(async move {
+                            handle_websocket_upgrade(
+                                local_target,
+                                to_server_tx,
+                                active_websockets,
+                                connection_id,
+                                method,
+                                path,
+                                headers,
+                                config,
+                            )
+                            .await;
+                        });
+                    }
+                    Message::WebSocketData {
+                        connection_id,
+                        data,
+                    } => {
+                        debug!(
+                            "📥 WebSocket data: {} ({} bytes)",
+                            connection_id,
+                            data.len()
+                        );
+                        if let Some(conn) = active_websockets.read().await.get(&connection_id) {
+                            if let Ok(binary_data) =
+                                base64::engine::general_purpose::STANDARD.decode(&data)
+                            {
+                                let _ = conn.send_to_local(binary_data).await;
                             }
                         }
                     }
-                    Err(e) => {
-                        error!("❌ Failed to parse WebSocket message: {}", e);
+                    Message::WebSocketClose { connection_id, .. } => {
+                        active_websockets.write().await.remove(&connection_id);
+                        info!("🔌 WebSocket {} closed", connection_id);
                     }
+                    Message::Error { message } => error!("Server error: {}", message),
+                    _ => warn!("Unexpected message type"),
                 }
             }
-
-            Ok(WsMessage::Close(_)) => {
-                info!("WebSocket connection closed by server");
-                break;
-            }
-
-            Err(e) => {
-                error!("WebSocket error: {}", e);
-                break;
-            }
-
-            _ => {}
-        }
-    }
-
-    // Cleanup on client disconnect
-    cleanup_task.abort();
-
-    // Clean up all WebSocket connections on shutdown
-    {
-        let websockets = active_websockets.read().await;
-        let connection_count = websockets.len();
-        if connection_count > 0 {
-            debug!("🔌 Cleaning up {} WebSocket connections on shutdown", connection_count);
-            for (id, connection) in websockets.iter() {
-                info!("🔌 WebSocket {}: Shutting down {} due to client disconnect", connection.connection_id, id);
-            }
+        } else if matches!(message, Ok(WsMessage::Close(_))) {
+            info!("WebSocket closed by server");
+            break;
+        } else if let Err(e) = message {
+            error!("WebSocket error: {}", e);
+            break;
         }
     }
 
@@ -487,166 +338,176 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-async fn handle_data_chunk(
-    outgoing_requests: &OutgoingRequests,
+async fn handle_http_request(
     id: String,
-    data: Vec<u8>,
-    is_final: bool,
+    method: String,
+    path: String,
+    headers: HashMap<String, String>,
+    initial_data: Vec<u8>,
+    is_complete: Option<bool>,
+    http_client: &HttpClient,
+    local_target: &str,
+    to_server_tx: &mpsc::UnboundedSender<Message>,
+    outgoing_requests: &OutgoingRequests,
 ) {
-    let body_tx = {
-        let requests = outgoing_requests.read().await;
-        requests.get(&id).and_then(|r| r.body_tx.clone())
-    };
+    let url = format!("{}{}", local_target, path);
+    let to_server_tx = to_server_tx.clone();
+    let id_clone = id.clone();
+    let http_client = http_client.clone();
 
-    let Some(tx) = body_tx else {
-        warn!("❌ Received DataChunk for unknown request ID: {} (this indicates HttpRequestStart was not received)", id);
-        // List current active requests for debugging
-        let requests = outgoing_requests.read().await;
-        let active_ids: Vec<String> = requests.keys().cloned().collect();
-        warn!("📋 Active request IDs: {:?}", active_ids);
-        return;
-    };
-
-    if !data.is_empty() {
-        if let Err(e) = tx.send(Ok(data.into())).await {
-            error!("Failed to send data: {}", e);
+    if is_complete == Some(true) {
+        // Complete request
+        debug!("📦 Processing complete request: {} {}", method, path);
+        let mut request = create_request(&http_client, &method, &url, &headers);
+        if !initial_data.is_empty() {
+            request = request.body(initial_data);
         }
-    }
 
-    if is_final {
-        outgoing_requests.write().await.remove(&id);
-        // Close the stream
-        drop(tx);
+        tokio::spawn(async move {
+            match request.send().await {
+                Ok(response) => {
+                    debug!("✅ Complete request succeeded: {} {}", method, path);
+                    stream_response(&to_server_tx, id_clone, response).await;
+                }
+                Err(e) => {
+                    error!("❌ Complete request failed: {} {}: {}", method, path, e);
+                    send_error_response(&to_server_tx, id_clone, e.to_string()).await;
+                }
+            }
+        });
+    } else {
+        // Streaming request
+        debug!("📥 Processing streaming request: {} {}", method, path);
+        let (body_tx, body_rx) = mpsc::channel(32);
+        if !initial_data.is_empty() {
+            debug!("📦 Sending initial data: {} bytes", initial_data.len());
+            let _ = body_tx.send(Ok(initial_data.into())).await;
+        }
+
+        outgoing_requests
+            .write()
+            .await
+            .insert(id.clone(), body_tx.clone());
+        debug!("✅ Registered streaming request: {}", id);
+
+        tokio::spawn(async move {
+            let mut request = create_request(&http_client, &method, &url, &headers);
+            if ["POST", "PUT", "PATCH"].contains(&method.as_str()) {
+                request = request.body(reqwest::Body::wrap_stream(
+                    tokio_stream::wrappers::ReceiverStream::new(body_rx),
+                ));
+            }
+            drop(body_tx);
+
+            match request.send().await {
+                Ok(response) => {
+                    debug!("✅ Streaming request succeeded: {} {}", method, path);
+                    stream_response(&to_server_tx, id_clone, response).await;
+                }
+                Err(e) => {
+                    error!("❌ Streaming request failed: {} {}: {}", method, path, e);
+                    send_error_response(&to_server_tx, id_clone, e.to_string()).await;
+                }
+            }
+        });
     }
 }
 
-async fn stream_response_to_server(
+async fn handle_data_chunk(requests: &OutgoingRequests, id: String, data: Vec<u8>, is_final: bool) {
+    if let Some(tx) = requests.read().await.get(&id).cloned() {
+        if !data.is_empty() {
+            let _ = tx.send(Ok(data.into())).await;
+        }
+        if is_final {
+            requests.write().await.remove(&id);
+            debug!("✅ Streaming request completed: {}", id);
+        }
+    } else {
+        warn!("❌ Received DataChunk for unknown request: {}", id);
+    }
+}
+
+async fn stream_response(
     to_server_tx: &mpsc::UnboundedSender<Message>,
     id: String,
     response: reqwest::Response,
 ) {
-    trace!("🔍 ENTER stream_response_to_server for id: {}", id);
-
     let status = response.status().as_u16();
-    let headers = extract_response_headers(&response);
+    let headers: HashMap<String, String> = response
+        .headers()
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
 
-    debug!("📤 Preparing response: {} (id: {}, headers: {})", status, id, headers.len());
+    let should_stream = response
+        .headers()
+        .get("transfer-encoding")
+        .and_then(|h| h.to_str().ok())
+        .map(|te| te.contains("chunked"))
+        .unwrap_or(false)
+        || response
+            .content_length()
+            .map(|len| len > 256 * 1024)
+            .unwrap_or(true);
 
-    // Check if we should stream this response
-    let should_stream = is_streaming_response(&response);
-    debug!("🔍 Should stream: {}", should_stream);
+    debug!(
+        "📤 Response {}: {} (streaming: {})",
+        id, status, should_stream
+    );
 
-    // Check WebSocket sender health before processing
-    if to_server_tx.is_closed() {
-        error!("❌ WebSocket sender is CLOSED for {}", id);
-        return;
-    }
-    debug!("✅ WebSocket sender is healthy for {}", id);
-
-    if !should_stream && response.content_length().unwrap_or(0) < 256 * 1024 {
-        debug!("🔍 Processing as small/complete response for {}", id);
-
-        // Small response - collect and send in one message
-        match response.bytes().await {
-            Ok(bytes) => {
-                debug!("🔍 Got {} bytes, creating HttpResponseStart for {}", bytes.len(), id);
-
-                let response_msg = Message::HttpResponseStart {
-                    id: id.clone(),
-                    status,
-                    headers,
-                    initial_data: bytes.to_vec(),
-                    is_complete: Some(true),
-                };
-
-                debug!("🔍 Send HttpResponseStart for {}", id);
-                match to_server_tx.send(response_msg) {
-                    Ok(_) => {
-                        trace!("✅ Complete HttpResponseStart sent successfully for {}", id);
-                    }
-                    Err(e) => {
-                        error!("❌ FAILED to send HttpResponseStart for {}: {}", id, e);
-                    }
-                }
-            }
-            Err(e) => {
-                error!("❌ Failed to read response body for {}: {}", id, e);
-                send_error_response(to_server_tx, id.to_owned(), e.to_string()).await;
-            }
+    if !should_stream {
+        // Complete response
+        debug!("📦 Processing as complete response: {}", id);
+        if let Ok(bytes) = response.bytes().await {
+            debug!(
+                "📤 Sending complete response: {} ({} bytes)",
+                id,
+                bytes.len()
+            );
+            let _ = to_server_tx.send(Message::HttpResponseStart {
+                id,
+                status,
+                headers,
+                initial_data: bytes.to_vec(),
+                is_complete: Some(true),
+            });
         }
     } else {
-        debug!("🔍 Processing as streaming response for {}", id);
-
-        // Stream the response
-        let start_msg = Message::HttpResponseStart {
+        // Streaming response
+        debug!("🔄 Processing as streaming response: {}", id);
+        let _ = to_server_tx.send(Message::HttpResponseStart {
             id: id.clone(),
             status,
             headers,
             initial_data: vec![],
             is_complete: Some(false),
-        };
-
-        debug!("🔍 Attempting to send streaming response start for {}", id);
-        if let Err(e) = to_server_tx.send(start_msg) {
-            error!("❌ Failed to send streaming response start for {}: {}", id, e);
-            return;
-        }
-
-        debug!("✅ Streaming response start sent for {}", id);
+        });
 
         let mut stream = response.bytes_stream();
-        let mut total_bytes = 0;
         let mut chunk_count = 0;
-
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(chunk) => {
-                    total_bytes += chunk.len();
-                    chunk_count += 1;
-
-                    if chunk_count % 10 == 0 || chunk.len() > 1024 {
-                        debug!("📤 Sending chunk {} ({} bytes, {} total) for {}",
-                              chunk_count, chunk.len(), total_bytes, id);
-                    }
-
-                    let chunk_msg = Message::DataChunk {
-                        id: id.clone(),
-                        data: chunk.to_vec(),
-                        is_final: false,
-                    };
-
-                    debug!("🔍 Attempting to send data chunk {} for {}", chunk_count, id);
-                    if let Err(e) = to_server_tx.send(chunk_msg) {
-                        error!("❌ Failed to send data chunk for {}: {}", id, e);
-                        break;
-                    }
-                    debug!("✅ Data chunk {} sent for {}", chunk_count, id);
-                }
-                Err(e) => {
-                    error!("❌ Response stream error for {}: {}", id, e);
-                    break;
-                }
+        while let Some(Ok(chunk)) = stream.next().await {
+            chunk_count += 1;
+            if chunk_count % 10 == 0 {
+                debug!(
+                    "📤 Streaming chunk #{} ({} bytes) for {}",
+                    chunk_count,
+                    chunk.len(),
+                    id
+                );
             }
+            let _ = to_server_tx.send(Message::DataChunk {
+                id: id.clone(),
+                data: chunk.to_vec(),
+                is_final: false,
+            });
         }
-
-        // Send final chunk
-        debug!("🔍 Sending final chunk for {} ({} total bytes, {} chunks)", id, total_bytes, chunk_count);
-
-        let final_msg = Message::DataChunk {
-            id: id.clone(),
+        debug!("✅ Streaming completed: {} ({} chunks)", id, chunk_count);
+        let _ = to_server_tx.send(Message::DataChunk {
+            id,
             data: vec![],
             is_final: true,
-        };
-
-        debug!("🔍 Attempting to send final chunk for {}", id);
-        if let Err(e) = to_server_tx.send(final_msg) {
-            error!("❌ Failed to send final chunk for {}: {}", id, e);
-        } else {
-            debug!("✅ Final chunk sent for {}", id);
-        }
+        });
     }
-
-    trace!("🔍 EXIT stream_response_to_server for id: {}", id);
 }
 
 async fn send_error_response(
@@ -654,439 +515,204 @@ async fn send_error_response(
     id: String,
     error: String,
 ) {
-    error!("📤 Sending error response for {}: {}", id, error);
-
-    let error_response = Message::HttpResponseStart {
-        id: id.clone(),
+    let _ = to_server_tx.send(Message::HttpResponseStart {
+        id,
         status: 502,
         headers: HashMap::new(),
         initial_data: error.into_bytes(),
         is_complete: Some(true),
-    };
-
-    if let Err(e) = to_server_tx.send(error_response) {
-        error!("❌ Failed to send error response for {}: {}", id, e);
-    } else {
-        info!("✅ Error response sent for {}", id);
-    }
+    });
 }
 
-fn is_streaming_response(response: &reqwest::Response) -> bool {
-    // Check for streaming indicators
-    if let Some(content_type) = response.headers().get("content-type") {
-        if let Ok(ct) = content_type.to_str() {
-            if ct.contains("text/event-stream") || ct.contains("application/octet-stream") {
-                return true;
-            }
-        }
-    }
-
-    // Check for chunked encoding
-    if let Some(encoding) = response.headers().get("transfer-encoding") {
-        if let Ok(te) = encoding.to_str() {
-            if te.contains("chunked") {
-                return true;
-            }
-        }
-    }
-
-    // Large or unknown size
-    response.content_length().map(|len| len > 512 * 1024).unwrap_or(true)
-}
-
-fn create_request_builder(
+fn create_request(
     client: &HttpClient,
     method: &str,
     url: &str,
     headers: &HashMap<String, String>,
 ) -> reqwest::RequestBuilder {
-    let mut request_builder = match method {
+    let mut request = match method {
         "GET" => client.get(url),
         "POST" => client.post(url),
         "PUT" => client.put(url),
         "DELETE" => client.delete(url),
         "PATCH" => client.patch(url),
         "HEAD" => client.head(url),
-        _ => client.get(url), // Default to GET for unsupported methods
+        _ => client.get(url),
     };
 
-    // Add headers
     for (name, value) in headers {
-        // Skip headers that reqwest handles automatically
         if !["host", "content-length", "connection", "user-agent"]
             .contains(&name.to_lowercase().as_str())
         {
-            request_builder = request_builder.header(name, value);
+            request = request.header(name, value);
         }
     }
-
-    request_builder
+    request
 }
 
-fn extract_response_headers(response: &reqwest::Response) -> HashMap<String, String> {
-    let mut response_headers = HashMap::new();
-    for (name, value) in response.headers() {
-        response_headers.insert(name.to_string(), value.to_str().unwrap_or("").to_string());
-    }
-    response_headers
-}
-
-// Handle WebSocket upgrade requests
 async fn handle_websocket_upgrade(
-    local_target: &str,
-    to_server_tx: &mpsc::UnboundedSender<Message>,
+    local_target: String,
+    to_server_tx: mpsc::UnboundedSender<Message>,
     active_websockets: ActiveWebSockets,
     connection_id: String,
-    method: String,
+    _method: String,
     path: String,
-    headers: HashMap<String, String>,
-    config: &ClientConfig,
+    _headers: HashMap<String, String>,
+    config: ClientConfig,
 ) {
-    info!("🔌 Processing WebSocket upgrade for connection {}", connection_id);
-    info!("📋 Request: {} {} (headers: {})", method, path, headers.len());
-
-    // Construct WebSocket URL for local service
-    let ws_url = if local_target.starts_with("http://") {
-        local_target.replace("http://", "ws://") + &path
-    } else if local_target.starts_with("https://") {
-        local_target.replace("https://", "wss://") + &path
-    } else {
-        format!("ws://{}{}", local_target, path)
-    };
-
+    let ws_url = local_target
+        .replace("http://", "ws://")
+        .replace("https://", "wss://")
+        + &path;
     debug!("🔗 Connecting to local WebSocket: {}", ws_url);
     let connect_timeout = Duration::from_secs(config.client.websocket_connection_timeout_secs);
-    let connect_result = timeout(connect_timeout, connect_async(&ws_url)).await;
 
-    match connect_result {
+    match timeout(connect_timeout, connect_async(&ws_url)).await {
         Ok(Ok((local_ws, response))) => {
-            debug!("✅ Connected to local WebSocket service for {}", connection_id);
+            debug!("✅ Connected to local WebSocket: {}", connection_id);
 
-            // Extract response headers
-            let mut response_headers = HashMap::new();
-            for (name, value) in response.headers() {
-                response_headers.insert(
-                    name.to_string(),
-                    value.to_str().unwrap_or("").to_string()
-                );
-            }
+            // Send upgrade response
+            let response_headers: HashMap<String, String> = response
+                .headers()
+                .iter()
+                .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect();
 
-            // Send successful upgrade response
-            let upgrade_response = Message::WebSocketUpgradeResponse {
+            let _ = to_server_tx.send(Message::WebSocketUpgradeResponse {
                 connection_id: connection_id.clone(),
                 status: response.status().as_u16(),
                 headers: response_headers,
-            };
+            });
 
-            if let Err(e) = to_server_tx.send(upgrade_response) {
-                error!("Failed to send WebSocket upgrade response for {}: {}", connection_id, e);
-                return;
-            }
-
-            // Split WebSocket for bidirectional communication
             let (mut local_sink, mut local_stream) = local_ws.split();
-
-            // Create channel for sending data to local WebSocket
-            let (local_tx, mut local_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-
+            let (local_tx, mut local_rx) = mpsc::unbounded_channel();
             let connection = ActiveWebSocketConnection::new(
                 connection_id.clone(),
                 local_tx,
                 to_server_tx.clone(),
             );
+
+            // Store connection
+            active_websockets
+                .write()
+                .await
+                .insert(connection_id.clone(), connection.clone());
+            info!(
+                "🔌 WebSocket {} established (age: {})",
+                connection_id,
+                connection.age_str()
+            );
+
             let connection_clone = connection.clone();
-
-            info!("🔌 WebSocket {}: WebSocket connection established", connection.connection_id);
-
-            // Store the connection
-            {
-                let mut websockets = active_websockets.write().await;
-                websockets.insert(connection_id.clone(), connection);
-            }
-
             let active_websockets_clone = active_websockets.clone();
             let connection_id_clone = connection_id.clone();
+            let connection_id_clone2 = connection_id.clone();
 
-            // Forward FROM local service TO server
-            let local_to_server_task = {
-                let connection = connection_clone.clone();
-                let connection_id = connection_id_clone.clone();
-
-                tokio::spawn(async move {
-                    info!("🔌 WebSocket {}: Started local-to-server forwarding task", connection.connection_id);
-
-                    while let Some(msg) = local_stream.next().await {
-                        match msg {
-                            Ok(WsMessage::Text(text)) => {
-                                debug!("🔌 WebSocket {}: 📤 Forwarding text to server: {} chars", connection.connection_id, text.len());
-                                let text_string = text.to_string();
-                                let data = base64::engine::general_purpose::STANDARD.encode(text_string.as_bytes());
-                                let message = Message::WebSocketData {
-                                    connection_id: connection.connection_id.clone(),
-                                    data,
-                                };
-
-                                // Use the stored to_server_tx from connection
-                                if connection.send_to_server(message).await.is_err() {
-                                    error!("❌ WebSocket {}: Failed to send text message to server, terminating", connection.connection_id);
-                                    break;
-                                }
+            // Local to server task
+            let local_to_server = tokio::spawn(async move {
+                debug!(
+                    "🔌 WebSocket {}: Started local-to-server task",
+                    connection_id_clone
+                );
+                while let Some(Ok(msg)) = local_stream.next().await {
+                    let message = match msg {
+                        WsMessage::Text(text) => {
+                            debug!(
+                                "🔌 WebSocket {}: Forwarding text ({} chars)",
+                                connection_id_clone,
+                                text.len()
+                            );
+                            Message::WebSocketData {
+                                connection_id: connection_clone.connection_id.clone(),
+                                data: base64::engine::general_purpose::STANDARD
+                                    .encode(text.as_bytes()),
                             }
-                            Ok(WsMessage::Binary(bytes)) => {
-                                info!("🔌 WebSocket {}: 📤 Forwarding binary to server: {} bytes", connection.connection_id, bytes.len());
-                                let bytes_vec = bytes.to_vec();
-                                let data = base64::engine::general_purpose::STANDARD.encode(&bytes_vec);
-                                let message = Message::WebSocketData {
-                                    connection_id: connection.connection_id.clone(),
-                                    data,
-                                };
-
-                                // Use the stored to_server_tx from connection
-                                if connection.send_to_server(message).await.is_err() {
-                                    error!("❌ WebSocket {}: Failed to send binary message to server, terminating", connection.connection_id);
-                                    break;
-                                }
-                            }
-                            Ok(WsMessage::Close(close_frame)) => {
-                                let (code, reason) = if let Some(frame) = close_frame {
-                                    (Some(frame.code.into()), Some(frame.reason.to_string()))
-                                } else {
-                                    (None, None)
-                                };
-
-                                info!("🔌 WebSocket {}: Local WebSocket closed: code={:?}, reason={:?}", connection.connection_id, code, reason);
-
-                                let message = Message::WebSocketClose {
-                                    connection_id: connection.connection_id.clone(),
-                                    code,
-                                    reason,
-                                };
-                                let _ = connection.send_to_server(message).await;
-                                break;
-                            }
-                            Err(e) => {
-                                error!("❌ WebSocket {}: Local WebSocket error: {}", connection.connection_id, e);
-                                break;
-                            }
-                            _ => {}
                         }
-                    }
-
-                    // Cleanup on task end with connection age info
-                    let final_status = {
-                        let websockets = active_websockets_clone.read().await;
-                        if let Some(conn) = websockets.get(&connection_id) {
-                            conn.status_summary().await
-                        } else {
-                            format!("Connection {} (already cleaned up)", connection_id)
+                        WsMessage::Binary(bytes) => {
+                            debug!(
+                                "🔌 WebSocket {}: Forwarding binary ({} bytes)",
+                                connection_id_clone,
+                                bytes.len()
+                            );
+                            Message::WebSocketData {
+                                connection_id: connection_clone.connection_id.clone(),
+                                data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                            }
                         }
+                        WsMessage::Close(frame) => {
+                            let (code, reason) = frame
+                                .map(|f| (Some(f.code.into()), Some(f.reason.to_string())))
+                                .unwrap_or((None, None));
+                            info!(
+                                "🔌 WebSocket {}: Local close code={:?}",
+                                connection_id_clone, code
+                            );
+                            Message::WebSocketClose {
+                                connection_id: connection_clone.connection_id.clone(),
+                                code,
+                                reason,
+                            }
+                        }
+                        _ => continue,
                     };
-
-                    active_websockets_clone.write().await.remove(&connection_id);
-                    debug!("🔌 Local-to-server task ended: {}", final_status);
-                })
-            };
-
-            // Forward FROM server TO local service
-            let server_to_local_task = {
-                let connection = connection_clone.clone();
-
-                tokio::spawn(async move {
-                    info!("🔌 WebSocket {}: Started server-to-local forwarding task", connection.connection_id);
-
-                    while let Some(data) = local_rx.recv().await {
-                        let ws_message = if let Ok(text) = String::from_utf8(data.clone()) {
-                            WsMessage::Text(text.into())
-                        } else {
-                            WsMessage::Binary(data.into())
-                        };
-
-                        if local_sink.send(ws_message).await.is_err() {
-                            error!("❌ WebSocket {}: Failed to send to local WebSocket, terminating", connection.connection_id);
-                            break;
-                        }
+                    if connection_clone.send_to_server(message).await.is_err() {
+                        break;
                     }
+                }
+                active_websockets_clone
+                    .write()
+                    .await
+                    .remove(&connection_id_clone);
+                debug!(
+                    "🔌 WebSocket {}: Local-to-server task ended",
+                    connection_id_clone
+                );
+            });
 
-                    info!("🔌 WebSocket {}: Server-to-local task ended ({})", connection.connection_id, connection.status_summary().await);
-                })
-            };
-
-            // Connection monitoring task
-            let monitoring_task = {
-                let active_websockets = active_websockets.clone();
-                let connection_id = connection_id.clone();
-                let monitoring_interval = Duration::from_secs(config.client.websocket_monitoring_interval_secs);
-                let max_idle = Duration::from_secs(config.client.websocket_max_idle_secs);
-
-                tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(monitoring_interval);
-
-                    loop {
-                        interval.tick().await;
-
-                        let should_cleanup = {
-                            let websockets = active_websockets.read().await;
-                            if let Some(connection) = websockets.get(&connection_id) {
-                                if connection.is_idle(max_idle).await {
-                                    warn!("⚠️  WebSocket {}: Connection timeout detected ({})", connection.connection_id, connection.status_summary().await);
-                                    true
-                                } else {
-                                    // Log periodic status
-                                    info!("🔌 WebSocket {}: Health check: {}", connection.connection_id, connection.status_summary().await);
-                                    false
-                                }
-                            } else {
-                                // Connection already cleaned up
-                                true
-                            }
-                        };
-
-                        if should_cleanup {
-                            break;
-                        }
+            // Server to local task
+            let server_to_local = tokio::spawn(async move {
+                debug!(
+                    "🔌 WebSocket {}: Started server-to-local task",
+                    connection_id_clone2
+                );
+                while let Some(data) = local_rx.recv().await {
+                    let ws_message = if let Ok(text) = String::from_utf8(data.clone()) {
+                        WsMessage::Text(text.into())
+                    } else {
+                        WsMessage::Binary(data.into())
+                    };
+                    if local_sink.send(ws_message).await.is_err() {
+                        break;
                     }
-
-                    info!("🔌 Monitoring task ended for {}", connection_id);
-                })
-            };
-
-            // Wait for any task to complete
-            tokio::select! {
-                _ = local_to_server_task => {
-                    info!("Local-to-server task completed for {}", connection_id);
                 }
-                _ = server_to_local_task => {
-                    info!("Server-to-local task completed for {}", connection_id);
-                }
-                _ = monitoring_task => {
-                    info!("Monitoring task completed for {}", connection_id);
-                }
-            }
+                debug!(
+                    "🔌 WebSocket {}: Server-to-local task ended",
+                    connection_id_clone2
+                );
+            });
 
-            // Final cleanup
-            {
-                let mut websockets = active_websockets.write().await;
-                if let Some(connection) = websockets.remove(&connection_id) {
-                    info!("🔌 WebSocket {}: Final cleanup: {}", connection.connection_id, connection.status_summary().await);
-                }
-            }
-
-            info!("🔌 WebSocket connection {} fully closed", connection_id);
+            tokio::select! { _ = local_to_server => {}, _ = server_to_local => {} }
+            active_websockets.write().await.remove(&connection_id);
+            info!("🔌 WebSocket {} closed", connection_id);
         }
         Ok(Err(e)) => {
-            error!("❌ Failed to connect to local WebSocket service {}: {}", connection_id, e);
-            send_websocket_error_response(to_server_tx, connection_id, 502, "Connection failed").await;
+            error!(
+                "❌ Failed to connect to local WebSocket {}: {}",
+                connection_id, e
+            );
+            let _ = to_server_tx.send(Message::WebSocketUpgradeResponse {
+                connection_id,
+                status: 502,
+                headers: HashMap::new(),
+            });
         }
         Err(_) => {
             error!("❌ Connection timeout for WebSocket {}", connection_id);
-            send_websocket_error_response(to_server_tx, connection_id, 504, "Connection timeout").await;
+            let _ = to_server_tx.send(Message::WebSocketUpgradeResponse {
+                connection_id,
+                status: 504,
+                headers: HashMap::new(),
+            });
         }
     }
-}
-
-async fn send_websocket_error_response(
-    to_server_tx: &mpsc::UnboundedSender<Message>,
-    connection_id: String,
-    status: u16,
-    reason: &str,
-) {
-    let mut headers = HashMap::new();
-    headers.insert("X-Error-Reason".to_string(), reason.to_string());
-
-    let error_response = Message::WebSocketUpgradeResponse {
-        connection_id,
-        status,
-        headers,
-    };
-
-    if let Err(e) = to_server_tx.send(error_response) {
-        error!("Failed to send WebSocket error response: {}", e);
-    }
-}
-
-// Handle WebSocket data from server (forward to local service)
-async fn handle_websocket_data(
-    active_websockets: ActiveWebSockets,
-    connection_id: String,
-    data: String,
-) {
-    if let Some(connection) = active_websockets.read().await.get(&connection_id) {
-        connection.update_activity().await;
-        match base64::engine::general_purpose::STANDARD.decode(&data) {
-            Ok(binary_data) => {
-                let data_size = binary_data.len();
-
-                if connection.send_to_local(binary_data).await.is_ok() {
-                    debug!("🔌 WebSocket {}: Forwarded {} bytes to local WebSocket", connection.connection_id, data_size);
-                } else {
-                    active_websockets.write().await.remove(&connection_id);
-                    error!("❌ WebSocket {}: Failed to forward data to local WebSocket", connection.connection_id);
-                }
-            }
-            Err(e) => {
-                if let Some(connection) = active_websockets.read().await.get(&connection_id) {
-                    error!("❌ WebSocket {}: Failed to decode WebSocket data: {}", connection.connection_id, e);
-                }
-            }
-        }
-    } else {
-        warn!("Received data for unknown WebSocket connection: {}", connection_id);
-    }
-}
-
-// Handle WebSocket close
-async fn handle_websocket_close(
-    active_websockets: ActiveWebSockets,
-    connection_id: String,
-    code: Option<u16>,
-    reason: Option<String>,
-) {
-    if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
-        info!(
-            "🔌 WebSocket {}: WebSocket closed by server: code={:?}, reason={:?}, final_status={}",
-            connection.connection_id, code, reason, connection.status_summary().await
-        );
-    } else {
-        warn!("Attempted to close unknown WebSocket connection: {}", connection_id);
-    }
-}
-
-async fn cleanup_expired_connections(
-    active_websockets: ActiveWebSockets,
-    max_idle_time: Duration,
-) -> usize {
-    let mut cleanup_count = 0;
-    let mut to_remove = Vec::new();
-
-    {
-        let websockets = active_websockets.read().await;
-        for (id, connection) in websockets.iter() {
-            if connection.is_idle(max_idle_time).await {
-                warn!(
-                    "⚠️  WebSocket {}: Marking for cleanup: {} (idle: {}s, max_idle: {}s)",
-                    connection.connection_id,
-                    connection.status_summary().await,
-                    connection.idle_time().await.as_secs(),
-                    max_idle_time.as_secs()
-                );
-                to_remove.push(id.clone());
-            }
-        }
-    }
-
-    {
-        let mut websockets = active_websockets.write().await;
-        for id in to_remove {
-            if let Some(connection) = websockets.remove(&id) {
-                info!("🔌 WebSocket {}: Cleaned up idle connection (max_idle: {}s)", connection.connection_id, max_idle_time.as_secs());
-                cleanup_count += 1;
-            }
-        }
-    }
-
-    if cleanup_count > 0 {
-        info!("🧹 Cleaned up {} idle WebSocket connections (max_idle: {}s)", cleanup_count, max_idle_time.as_secs());
-    }
-
-    cleanup_count
 }

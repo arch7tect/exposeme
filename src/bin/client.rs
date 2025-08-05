@@ -355,8 +355,14 @@ async fn handle_http_request(
     let id_clone = id.clone();
     let http_client = http_client.clone();
 
-    if is_complete == Some(true) {
-        // Complete request
+    // Check if this is likely an SSE request
+    let is_sse_request = headers
+        .get("accept")
+        .map(|accept| accept.contains("text/event-stream"))
+        .unwrap_or(false);
+
+    if is_complete == Some(true) && !is_sse_request {
+        // Complete request (non-SSE)
         debug!("📦 Processing complete request: {} {}", method, path);
         let mut request = create_request(&http_client, &method, &url, &headers);
         if !initial_data.is_empty() {
@@ -376,8 +382,13 @@ async fn handle_http_request(
             }
         });
     } else {
-        // Streaming request
-        debug!("📥 Processing streaming request: {} {}", method, path);
+        // Streaming request (or SSE)
+        let request_type = if is_sse_request { "SSE" } else { "streaming" };
+        debug!(
+            "📥 Processing {} request: {} {}",
+            request_type, method, path
+        );
+
         let (body_tx, body_rx) = mpsc::channel(32);
         if !initial_data.is_empty() {
             debug!("📦 Sending initial data: {} bytes", initial_data.len());
@@ -388,7 +399,7 @@ async fn handle_http_request(
             .write()
             .await
             .insert(id.clone(), body_tx.clone());
-        debug!("✅ Registered streaming request: {}", id);
+        debug!("✅ Registered {} request: {}", request_type, id);
 
         tokio::spawn(async move {
             let mut request = create_request(&http_client, &method, &url, &headers);
@@ -401,11 +412,14 @@ async fn handle_http_request(
 
             match request.send().await {
                 Ok(response) => {
-                    debug!("✅ Streaming request succeeded: {} {}", method, path);
+                    debug!("✅ {} request succeeded: {} {}", request_type, method, path);
                     stream_response(&to_server_tx, id_clone, response).await;
                 }
                 Err(e) => {
-                    error!("❌ Streaming request failed: {} {}: {}", method, path, e);
+                    error!(
+                        "❌ {} request failed: {} {}: {}",
+                        request_type, method, path, e
+                    );
                     send_error_response(&to_server_tx, id_clone, e.to_string()).await;
                 }
             }
@@ -439,12 +453,19 @@ async fn stream_response(
         .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
 
+    // Check for SSE, chunked encoding, or large responses
     let should_stream = response
         .headers()
-        .get("transfer-encoding")
+        .get("content-type")
         .and_then(|h| h.to_str().ok())
-        .map(|te| te.contains("chunked"))
+        .map(|ct| ct.contains("text/event-stream"))
         .unwrap_or(false)
+        || response
+            .headers()
+            .get("transfer-encoding")
+            .and_then(|h| h.to_str().ok())
+            .map(|te| te.contains("chunked"))
+            .unwrap_or(false)
         || response
             .content_length()
             .map(|len| len > 256 * 1024)
@@ -473,7 +494,7 @@ async fn stream_response(
             });
         }
     } else {
-        // Streaming response
+        // Streaming response (including SSE)
         debug!("🔄 Processing as streaming response: {}", id);
         let _ = to_server_tx.send(Message::HttpResponseStart {
             id: id.clone(),

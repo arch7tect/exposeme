@@ -275,7 +275,7 @@ async fn run_client(config: &ClientConfig) -> Result<(), Box<dyn std::error::Err
                 debug!("🔍 Sending message #{} ({} chars)", message_count, json.len());
                 match ws_sender.send(WsMessage::Text(json.into())).await {
                     Ok(_) => {
-                        debug!("✅ Message #{} sent successfully", message_count);
+                        trace!("✅ Message #{} sent successfully", message_count);
                     }
                     Err(e) => {
                         debug!("❌ FAILED to send message #{}: {}", message_count, e);
@@ -576,10 +576,10 @@ async fn stream_response_to_server(
                     is_complete: Some(true),
                 };
 
-                debug!("🔍 Attempting to send HttpResponseStart for {}", id);
+                debug!("🔍 Send HttpResponseStart for {}", id);
                 match to_server_tx.send(response_msg) {
                     Ok(_) => {
-                        debug!("✅ Complete HttpResponseStart sent successfully for {}", id);
+                        trace!("✅ Complete HttpResponseStart sent successfully for {}", id);
                     }
                     Err(e) => {
                         error!("❌ FAILED to send HttpResponseStart for {}: {}", id, e);

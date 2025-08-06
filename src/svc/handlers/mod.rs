@@ -65,15 +65,6 @@ async fn route_request(
         return acme::handle_acme_challenge(req, context.challenge_store).await;
     }
 
-    // Health check
-    // if path == "/api/health" {
-    //     return Ok(Response::builder()
-    //         .status(StatusCode::OK)
-    //         .header("X-Served-By", if context.is_https { "HTTPS" } else { "HTTP" })
-    //         .body(boxed_body("OK"))
-    //         .unwrap());
-    // }
-
     // Internal API
     if path.starts_with("/api/") {
         if let Some(resp) = api::handle_api(&req, &context.ssl_manager, &context.config).await? {

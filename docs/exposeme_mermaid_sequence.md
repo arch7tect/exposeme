@@ -5,10 +5,10 @@ sequenceDiagram
     participant SSL as SSL Manager
     participant DNS as DNS Provider
     participant LE as Let's Encrypt
-    participant Client as ExposeME Client v1.1.0
+    participant Client as ExposeME Client
     participant Local as Local Service
 
-    Note over Browser,Local: ExposeME v1.1.0 - Streaming & Real-time Support
+    Note over Browser,Local: ExposeME - Streaming & Real-time Support
 
 %% SSL Certificate Setup
     rect rgb(230, 245, 230)
@@ -32,7 +32,7 @@ sequenceDiagram
 
 %% Tunnel Establishment
     rect rgb(227, 242, 253)
-        Note over Client,Server: 2. Tunnel Establishment (v1.1.0 Protocol)
+        Note over Client,Server: 2. Tunnel Establishment
 
         Client->>+Server: WebSocket connect to wss://example.com/tunnel-ws
         Client->>Server: Message::Auth {<br/>  token: "secure_token",<br/>  tunnel_id: "my-app"<br/>}
@@ -43,7 +43,7 @@ sequenceDiagram
         Server->>Server: register in TunnelMap
         Server-->>-Client: Message::AuthSuccess {<br/>  tunnel_id: "my-app",<br/>  public_url: "https://my-app.example.com"<br/>}
 
-        Note over Client,Server: Persistent WebSocket tunnel<br/>established with v1.1.0 protocol
+        Note over Client,Server: Persistent WebSocket tunnel
     end
 
 %% Regular HTTP Request (Complete)
@@ -165,5 +165,4 @@ sequenceDiagram
         Note over Server: All connections and streams<br/>for tunnel "my-app" cleaned up
     end
 
-    Note over Browser,Local: Key v1.1.0 Enhancements:<br/>• New streaming protocol with HttpRequestStart/HttpResponseStart<br/>• DataChunk messages for efficient streaming<br/>• Native SSE support with proper headers<br/>• Large file upload/download support<br/>• Improved connection monitoring and cleanup<br/>• Backward compatibility requires both client/server v1.1.0+
 ```

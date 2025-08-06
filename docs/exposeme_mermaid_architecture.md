@@ -29,14 +29,14 @@ graph TD
     %% Configuration Layer
         subgraph ConfigLayer ["Configuration"]
             Config[ServerConfig<br/>Settings & Routing]
-            Protocol[Message Protocol<br/>v1.1.0 Streaming]
+            Protocol[Message Protocol<br/>Streaming]
         end
     end
 
 %% Client Side
     subgraph ClientSide ["Developer Machine"]
     %% Client Services
-        subgraph ClientServices ["ExposeME Client v1.1.0"]
+        subgraph ClientServices ["ExposeME Client"]
             WSClient[WebSocket Client<br/>Tunnel Connection]
             HTTPForward[HTTP Forwarder<br/>Request Proxy]
             StreamHandler[Streaming Handler<br/>Chunked Transfer]
@@ -79,7 +79,7 @@ graph TD
     Protocol --> StreamHandler
 
 %% Client tunnel connection
-    WSClient -.->|WebSocket Tunnel<br/>v1.1.0 Protocol| WSMgr
+    WSClient -.->|WebSocket Tunnel| WSMgr
 
 %% Client internal connections
     WSClient --> HTTPForward

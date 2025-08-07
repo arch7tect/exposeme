@@ -44,9 +44,9 @@ async fn main() -> Result<(), BoxError> {
     let ssl_manager = Arc::new(RwLock::new(SslManager::new(config.clone())));
     let challenge_store = ssl_manager.read().await.get_challenge_store();
 
-    info!("Starting ExposeME Server...");
+    info!("Starting ExposeME Server (v {})...", env!("CARGO_PKG_VERSION"));
 
-    // Shared state - Updated to use ActiveRequests instead of PendingRequests
+    // Shared state
     let tunnels: TunnelMap = Arc::new(RwLock::new(HashMap::new()));
     let active_requests: ActiveRequests = Arc::new(RwLock::new(HashMap::new()));
     let active_websockets: ActiveWebSockets = Arc::new(RwLock::new(HashMap::new()));

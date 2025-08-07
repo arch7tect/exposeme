@@ -46,7 +46,8 @@ impl HttpHandler {
         initial_data: Vec<u8>,
         is_complete: Option<bool>,
     ) {
-        info!("📥 Received HttpRequestStart: {} {} (id: {}, complete: {:?})", method, path, id, is_complete);
+        info!("📥 Http request: {} {}", method, path);
+        debug!("📥 Received HttpRequestStart: {} {} (id: {}, complete: {:?})", method, path, id, is_complete);
 
         let http_client = self.http_client.clone();
         let local_target = self.local_target.clone();

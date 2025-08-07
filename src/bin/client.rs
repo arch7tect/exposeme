@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Tunnel ID: {}", config.client.tunnel_id);
     info!("Local target: {}", config.client.local_target);
 
-    info!("Starting ExposeME Client...");
+    info!("Starting ExposeME Client (v {})...", env!("CARGO_PKG_VERSION"));
 
     // Create and run client
     let mut client = ExposeMeClient::new(config);

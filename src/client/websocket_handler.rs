@@ -40,7 +40,7 @@ impl WebSocketHandler {
         path: String,
         headers: HashMap<String, String>,
     ) {
-        debug!("📥 Received WebSocketUpgrade: {} {} (connection: {})", method, path, connection_id);
+        info!("📥 Received WebSocketUpgrade: {} {} (connection: {})", method, path, connection_id);
 
         let local_target = self.local_target.clone();
         let to_server_tx = self.to_server_tx.clone();

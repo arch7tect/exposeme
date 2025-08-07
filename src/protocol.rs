@@ -6,7 +6,6 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Message {
-    // === AUTHENTICATION ===
     /// Client authentication request
     #[serde(rename = "auth")]
     Auth {
@@ -27,8 +26,6 @@ pub enum Message {
         error: String,
         message: String,
     },
-
-    // === HTTP STREAMING ===
 
     /// HTTP request start (server -> client)
     #[serde(rename = "http_request_start")]
@@ -70,8 +67,6 @@ pub enum Message {
         is_final: bool,
     },
 
-    // === WEBSOCKET ===
-
     /// WebSocket upgrade request (server -> client)
     #[serde(rename = "websocket_upgrade")]
     WebSocketUpgrade {
@@ -104,8 +99,6 @@ pub enum Message {
         reason: Option<String>,
     },
 
-    // === ERROR ===
-
     /// Error message
     #[serde(rename = "error")]
     Error {
@@ -124,12 +117,3 @@ impl Message {
         serde_json::from_str(json)
     }
 }
-
-/// Tunnel information
-#[derive(Debug, Clone)]
-pub struct TunnelInfo {
-    pub tunnel_id: String,
-    pub token: String,
-    pub created_at: std::time::SystemTime,
-}
-

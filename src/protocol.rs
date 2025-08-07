@@ -11,6 +11,7 @@ pub enum Message {
     Auth {
         token: String,
         tunnel_id: String,
+        version: String,
     },
 
     /// Server authentication response (success)

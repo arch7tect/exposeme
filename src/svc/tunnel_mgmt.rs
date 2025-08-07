@@ -85,10 +85,12 @@ pub async fn handle_tunnel_management_connection(
                         Message::Auth {
                             token,
                             tunnel_id: requested_tunnel_id,
+                            version,
                         } => {
                             if let Err(e) = handle_auth_message(
                                 token,
                                 requested_tunnel_id,
+                                version,
                                 &tx,
                                 &context,
                                 &mut tunnel_id,
@@ -172,6 +174,7 @@ pub async fn handle_tunnel_management_connection(
 async fn handle_auth_message(
     token: String,
     requested_tunnel_id: String,
+    version: String,
     tx: &mpsc::UnboundedSender<Message>,
     context: &ServiceContext,
     tunnel_id: &mut Option<String>,
@@ -212,6 +215,20 @@ async fn handle_auth_message(
             tx.send(error_msg)?;
             return Ok(());
         }
+    }
+
+    let our_version = env!("CARGO_PKG_VERSION").to_string();
+    let compatible = our_version.split('.').zip(version.split('.')).take(2).all(|(a, b)| a == b);
+    if !compatible {
+        let error_msg = Message::AuthError {
+            error: "incompatible_versions".to_string(),
+            message: format!(
+                "Client version '{}' is incompatible with server version '{}'",
+                version, our_version,
+            ),
+        };
+        tx.send(error_msg)?;
+        return Ok(());
     }
 
     // Register tunnel

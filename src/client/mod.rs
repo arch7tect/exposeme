@@ -67,6 +67,7 @@ impl ExposeMeClient {
         let auth_message = Message::Auth {
             token: self.config.client.auth_token.clone(),
             tunnel_id: self.config.client.tunnel_id.clone(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
         };
 
         let auth_json = auth_message.to_json()?;

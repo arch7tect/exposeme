@@ -143,7 +143,7 @@ EXPOSEME_AUTH_TOKEN=<your-secure-auth-token-here>
 RUST_LOG=info
 EOF
 ```
-**⚠️ Important:** Replace the placeholders <...> in `.env` with your actual values!
+**Important:** Replace the placeholders <...> in `.env` with your actual values!
 
 ### Start the server
 

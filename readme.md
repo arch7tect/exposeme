@@ -188,9 +188,6 @@ docker run -it --rm \
 If you're using manual certificates or self-signed certificates, DNS providers are not needed regardless of routing mode.
 
 ### DigitalOcean
-
-**Required for wildcard certificates only**
-
 1. **Create API token** at https://cloud.digitalocean.com/account/api/tokens
 2. **Add your domain** to DigitalOcean Domains
 3. **Set environment variables:**
@@ -200,9 +197,6 @@ If you're using manual certificates or self-signed certificates, DNS providers a
    ```
 
 ### Cloudflare
-
-**Required for wildcard certificates only**
-
 1. **Create API token** at https://dash.cloudflare.com/profile/api-tokens with:
    - **Zone:Zone:Read** permissions
    - **Zone:DNS:Edit** permissions
@@ -215,9 +209,6 @@ If you're using manual certificates or self-signed certificates, DNS providers a
    ```
 
 ### Hetzner DNS
-
-**Required for wildcard certificates only**
-
 1. **Create API token** at https://dns.hetzner.com/ (Console → API tokens)
 2. **Add your domain** to Hetzner DNS
 3. **Set environment variables:**
@@ -227,9 +218,6 @@ If you're using manual certificates or self-signed certificates, DNS providers a
    ```
 
 ### Azure DNS
-
-**Required for wildcard certificates only**
-
 1. **Create a Service Principal** with DNS Zone Contributor role:
    ```bash
    # Create service principal

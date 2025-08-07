@@ -455,25 +455,25 @@ insecure = true  # Skip TLS verification for self-signed certificates
 ./exposeme-client --insecure --server-url wss://localhost/tunnel-ws
 ```
 
-**⚠️ Security Warning**: The `insecure` option should only be used for development with self-signed certificates as it disables TLS certificate verification.
+**Security Warning**: The `insecure` option should only be used for development with self-signed certificates as it disables TLS certificate verification.
 
 ## New in v1.1
 
-🚀 **Enhanced Streaming Support**
+**Enhanced Streaming Support**
 - Full HTTP request/response streaming without memory buffering
 - Support for large file uploads and downloads
 
-📡 **Real-Time Communication**
+**Real-Time Communication**
 - Native Server-Sent Events (SSE) support with proper headers and streaming
 - Automatic reconnection handling for both SSE and WebSocket connections
 
-⚡ **Protocol Improvements**
+**Protocol Improvements**
 - Enhanced client-server protocol for streaming support
 - **Important**: Requires both server and client to be v1.1+
 
 ### Upgrading from Previous Versions
 
-**⚠️ Protocol Breaking Change**: Version 1.1 includes protocol improvements that require both server and client to be updated together.
+**Protocol Breaking Change**: Version 1.1 includes protocol improvements that require both server and client to be updated together.
 
 ```bash
 # Update server

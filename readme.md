@@ -457,7 +457,7 @@ insecure = true  # Skip TLS verification for self-signed certificates
 
 **⚠️ Security Warning**: The `insecure` option should only be used for development with self-signed certificates as it disables TLS certificate verification.
 
-## New in v1.1.0
+## New in v1.1
 
 🚀 **Enhanced Streaming Support**
 - Full HTTP request/response streaming without memory buffering
@@ -469,11 +469,11 @@ insecure = true  # Skip TLS verification for self-signed certificates
 
 ⚡ **Protocol Improvements**
 - Enhanced client-server protocol for streaming support
-- **Important**: Requires both server and client to be v1.1.0+
+- **Important**: Requires both server and client to be v1.1+
 
 ### Upgrading from Previous Versions
 
-**⚠️ Protocol Breaking Change**: Version 1.1.0 includes protocol improvements that require both server and client to be updated together.
+**⚠️ Protocol Breaking Change**: Version 1.1 includes protocol improvements that require both server and client to be updated together.
 
 ```bash
 # Update server

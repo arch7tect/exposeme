@@ -4,42 +4,30 @@ A fast, secure HTTP tunneling solution written in Rust that exposes local servic
 
 ## Introduction
 
-ExposeME is a simple tool that lets you share your local development server with the outside world. Whether you're building a web app on your laptop or testing a local API, ExposeME creates a secure tunnel so others can access your work from anywhere on the internet.
+ExposeME lets you share your local development server with the outside world by creating secure tunnels through your own domain. Turn `http://localhost:3000` into `https://myapp.yourdomain.com` and share your work with clients, teammates, or testing tools.
 
-**What does it do?**
-- Turn `http://localhost:3000` into `https://myapp.yourdomain.com`
-- Share your local development work with clients, teammates, or testing tools
-- Receive webhooks from external services directly to your development machine
-- Test real-time features like WebSocket connections and Server-Sent Events through a secure tunnel
-- Stream large files and handle real-time data without buffering
+**How it works:** You run ExposeME on a server (like a VPS) with your own domain. A client program on your development machine connects to your server. When someone visits your public URL, requests get forwarded through the secure tunnel to your local application.
 
-**How does it work?**
-You run ExposeME on a server (like a VPS) with your own domain name. Then you run a small client program on your development machine that connects to your server. When someone visits your public URL, the request gets forwarded through the secure tunnel to your local application.
+**Why use your own server?** Full control with your own domain and SSL certificates, complete privacy with no third-party dependencies, no rate limits, and cost-effective hosting on any VPS.
 
-**Why use your own server?**
-- **Full control**: Your own domain, your own SSL certificates, no rate limits
-- **Privacy**: Your traffic doesn't go through third-party services
-- **Reliability**: No dependency on external tunnel services
-- **Cost-effective**: Use any cheap VPS instead of paid tunnel subscriptions
-- **Professional**: Use your own domain for demos and client previews
+## Features
 
-**Perfect for:**
-- Sharing development work with clients and teammates
-- Testing webhooks from payment processors, GitHub, etc.
-- Demonstrating mobile app backends
-- Remote development and testing
-- Streaming apps, file uploads, WebSocket connections, and SSE
+- **Secure Tunneling** - WebSocket-based encrypted tunnels with token authentication
+- **Your Own Domain** - Use your domain with automatic SSL certificates via Let's Encrypt
+- **Multiple Routing Modes** - Path-based (`domain.com/app/`) or subdomain (`app.domain.com`) routing
+- **Real-time Support** - WebSocket connections and Server-Sent Events (SSE) streaming
+- **File Streaming** - Large file uploads/downloads without memory buffering
+- **Auto-Reconnection** - Automatic reconnection with configurable retry intervals
+- **Flexible SSL** - Let's Encrypt (auto), bring your own certificates, or self-signed for development
+- **Multi-client Support** - Multiple tunnels with unique identifiers
 
 ## Architecture
 
 ExposeME creates secure HTTP tunnels to expose local services:
 
-- **Single HTTP/HTTPS Server**: One server handles both regular HTTP/HTTPS requests and WebSocket upgrades on the same ports (80/443)
-- **Tunnel Setup**: Client connects to server via WebSocket upgrade on `/tunnel-ws` to establish a persistent tunnel
+- **Tunnel Setup**: Client connects to server via WebSocket upgrade on `/tunnel-ws` (configurable) to establish a persistent tunnel
 - **Request Forwarding**: When users visit your public URL, the server forwards their HTTP requests through the existing WebSocket tunnel to your local service
-- **Real-time Support**: Full WebSocket upgrade support for bidirectional communication and SSE streaming
-- **Streaming**: Full support for chunked transfers and large file streaming
-- **Flow**: Internet User → Server (HTTP) → WebSocket Tunnel → Client → Local Service → Response back
+- **Flow**: Internet User → Server (HTTP(S)) → WebSocket Tunnel → Client → Local Service → Response back
 
 ### Connection Types
 - **HTTP mode**: Client connects to `ws://your-domain.com/tunnel-ws`

@@ -247,28 +247,6 @@ ExposeME uses a **layered configuration system** where higher priority sources o
 2. **Environment Variables**
 3. **TOML Configuration File** (lowest priority)
 
-### Typical Usage Patterns
-
-**Development:**
-```bash
-# Override specific settings for testing
-./exposeme-server --config dev.toml --staging --domain dev.example.com
-```
-
-**Production (Docker):**
-```bash
-# Base config in TOML, secrets via environment
-EXPOSEME_DOMAIN=example.com
-EXPOSEME_DIGITALOCEAN_TOKEN=secret_token
-EXPOSEME_AUTH_TOKEN=secret_auth
-```
-
-**Local Testing:**
-```bash
-# Quick overrides without changing files
-./exposeme-server --disable-https --domain localhost
-```
-
 ### Available Command Line Arguments
 
 #### Server Arguments

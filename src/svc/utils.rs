@@ -101,10 +101,24 @@ pub fn extract_tunnel_id_from_request(
 }
 
 /// Calculate WebSocket accept key for upgrade handshake
+const WS_MAGIC: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 pub fn calculate_websocket_accept_key(ws_key: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(ws_key.as_bytes());
-    hasher.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"); // WebSocket magic string
+    hasher.update(WS_MAGIC); // WebSocket magic string
     let hash = hasher.finalize();
-    base64::engine::general_purpose::STANDARD.encode(&hash)
+    base64::engine::general_purpose::STANDARD.encode(hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::calculate_websocket_accept_key;
+
+    #[test]
+    fn rfc6455_example() {
+        // From RFC 6455 §1.3
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let accept = calculate_websocket_accept_key(key);
+        assert_eq!(accept.as_str(), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
 }

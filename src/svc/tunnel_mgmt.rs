@@ -34,27 +34,6 @@ pub async fn handle_tunnel_management_connection(
     // Spawn task to handle outgoing messages
     let outgoing_task = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            // Add debug logging for sent messages
-            match &message {
-                Message::HttpRequestStart {
-                    id, method, path, ..
-                } => {
-                    info!(
-                        "📤 Sending HttpRequestStart: {} {} (id: {})",
-                        method, path, id
-                    );
-                }
-                Message::DataChunk { id, data, is_final } => {
-                    debug!(
-                        "📤 Sending DataChunk: {} bytes, final={} (id: {})",
-                        data.len(),
-                        is_final,
-                        id
-                    );
-                }
-                _ => {}
-            }
-
             if let Ok(json) = message.to_json() {
                 if let Err(e) = ws_sender.send(WsMessage::Text(json.into())).await {
                     error!("Failed to send WS message to client: {}", e);

@@ -3,7 +3,6 @@
 use crate::svc::{BoxError, ServiceContext};
 use crate::svc::types::*;
 use crate::Message;
-use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
@@ -295,10 +294,10 @@ async fn handle_data_chunk(
     }
 }
 
-/// Handle WebSocket data from tunnel client
+/// Handle WebSocket data from tunnel client - NO MORE BASE64 DECODING
 async fn handle_websocket_data(
     connection_id: String,
-    data: String,
+    data: Vec<u8>,
     context: &ServiceContext,
 ) {
     // Handle WebSocket data from tunnel client
@@ -310,27 +309,17 @@ async fn handle_websocket_data(
             data.len()
         );
         if let Some(ws_tx) = &connection.ws_tx {
-            match base64::engine::general_purpose::STANDARD.decode(&data) {
-                Ok(binary_data) => {
-                    let ws_message = if let Ok(text) = String::from_utf8(binary_data.clone()) {
-                        WsMessage::Text(text.into())
-                    } else {
-                        WsMessage::Binary(binary_data.into())
-                    };
+            let ws_message = if let Ok(text) = String::from_utf8(data.clone()) {
+                WsMessage::Text(text.into())
+            } else {
+                WsMessage::Binary(data.into())
+            };
 
-                    if let Err(e) = ws_tx.send(ws_message) {
-                        error!(
-                            "Failed to forward WebSocket data to client {}: {}",
-                            connection_id, e
-                        );
-                    }
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to decode WebSocket data for {}: {}",
-                        connection_id, e
-                    );
-                }
+            if let Err(e) = ws_tx.send(ws_message) {
+                error!(
+                    "Failed to forward WebSocket data to client {}: {}",
+                    connection_id, e
+                );
             }
         }
     } else {

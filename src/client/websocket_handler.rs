@@ -1,7 +1,6 @@
 // src/client/websocket_handler.rs - WebSocket upgrade and data handling
 use std::collections::HashMap;
 use std::time::Duration;
-use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{mpsc};
 use tokio::time::timeout;
@@ -61,7 +60,7 @@ impl WebSocketHandler {
         });
     }
 
-    pub async fn handle_data(&self, connection_id: String, data: String) {
+    pub async fn handle_data(&self, connection_id: String, data: Vec<u8>) {
         debug!("📥 Received WebSocketData: {} ({} bytes)", connection_id, data.len());
         handle_websocket_data(self.active_websockets.clone(), connection_id, data).await;
     }
@@ -191,11 +190,9 @@ async fn handle_websocket_upgrade(
                         match msg {
                             Ok(WsMessage::Text(text)) => {
                                 trace!("🔌 WebSocket {}: 📤 Forwarding text to server: {} chars", connection.connection_id, text.len());
-                                let text_string = text.to_string();
-                                let data = base64::engine::general_purpose::STANDARD.encode(text_string.as_bytes());
                                 let message = Message::WebSocketData {
                                     connection_id: connection.connection_id.clone(),
-                                    data,
+                                    data: text.as_bytes().to_vec(),
                                 };
 
                                 if connection.send_to_server(message).await.is_err() {
@@ -205,11 +202,9 @@ async fn handle_websocket_upgrade(
                             }
                             Ok(WsMessage::Binary(bytes)) => {
                                 trace!("🔌 WebSocket {}: 📤 Forwarding binary to server: {} bytes", connection.connection_id, bytes.len());
-                                let bytes_vec = bytes.to_vec();
-                                let data = base64::engine::general_purpose::STANDARD.encode(&bytes_vec);
                                 let message = Message::WebSocketData {
                                     connection_id: connection.connection_id.clone(),
-                                    data,
+                                    data: bytes.to_vec(),
                                 };
 
                                 if connection.send_to_server(message).await.is_err() {
@@ -336,26 +331,18 @@ async fn send_websocket_error_response(
 async fn handle_websocket_data(
     active_websockets: ActiveWebSockets,
     connection_id: String,
-    data: String,
+    data: Vec<u8>, // No longer base64 string - raw bytes
 ) {
     if let Some(connection) = active_websockets.read().await.get(&connection_id) {
         connection.update_activity().await;
-        match base64::engine::general_purpose::STANDARD.decode(&data) {
-            Ok(binary_data) => {
-                let data_size = binary_data.len();
+        let data_size = data.len();
 
-                if connection.send_to_local(binary_data).await.is_ok() {
-                    debug!("🔌 WebSocket {}: Forwarded {} bytes to local WebSocket", connection.connection_id, data_size);
-                } else {
-                    active_websockets.write().await.remove(&connection_id);
-                    error!("❌ WebSocket {}: Failed to forward data to local WebSocket", connection.connection_id);
-                }
-            }
-            Err(e) => {
-                if let Some(connection) = active_websockets.read().await.get(&connection_id) {
-                    error!("❌ WebSocket {}: Failed to decode WebSocket data: {}", connection.connection_id, e);
-                }
-            }
+        // No more base64 decoding - data is already raw bytes
+        if connection.send_to_local(data).await.is_ok() {
+            debug!("🔌 WebSocket {}: Forwarded {} bytes to local WebSocket", connection.connection_id, data_size);
+        } else {
+            active_websockets.write().await.remove(&connection_id);
+            error!("❌ WebSocket {}: Failed to forward data to local WebSocket", connection.connection_id);
         }
     } else {
         warn!("Received data for unknown WebSocket connection: {}", connection_id);

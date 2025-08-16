@@ -89,7 +89,8 @@ pub enum Message {
     #[serde(rename = "websocket_data")]
     WebSocketData {
         connection_id: String,
-        data: String, // Keep base64 for WebSocket compat
+        #[serde(with = "serde_bytes")]
+        data: Vec<u8>,
     },
 
     /// WebSocket connection close (bidirectional)

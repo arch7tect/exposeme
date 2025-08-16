@@ -119,6 +119,6 @@ mod tests {
         // From RFC 6455 §1.3
         let key = "dGhlIHNhbXBsZSBub25jZQ==";
         let accept = calculate_websocket_accept_key(key);
-        assert_eq!(accept.as_str(), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+        assert_eq!(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
     }
 }

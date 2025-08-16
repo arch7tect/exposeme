@@ -5,7 +5,6 @@ use crate::svc::types::*;
 use crate::svc::utils::{boxed_body, calculate_websocket_accept_key, extract_headers, extract_tunnel_id_from_request};
 use crate::svc::tunnel_mgmt::handle_tunnel_management_connection;
 use crate::Message;
-use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use hyper::{Request, Response, StatusCode, body::Incoming};
 use hyper_util::rt::TokioIo;
@@ -240,10 +239,9 @@ async fn handle_websocket_proxy_connection(
         while let Some(msg) = original_stream.next().await {
             match msg {
                 Ok(WsMessage::Text(text)) => {
-                    let data = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
                     let message = Message::WebSocketData {
                         connection_id: connection_id_clone.clone(),
-                        data,
+                        data: text.as_bytes().to_vec(),
                     };
 
                     // Send to tunnel client
@@ -258,10 +256,9 @@ async fn handle_websocket_proxy_connection(
                     }
                 }
                 Ok(WsMessage::Binary(bytes)) => {
-                    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
                     let message = Message::WebSocketData {
                         connection_id: connection_id_clone.clone(),
-                        data,
+                        data: bytes.to_vec(),
                     };
 
                     // Send to tunnel client

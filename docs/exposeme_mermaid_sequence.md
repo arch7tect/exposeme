@@ -8,7 +8,7 @@ sequenceDiagram
     participant Client as ExposeME Client
     participant Local as Local Service
 
-    Note over Browser,Local: ExposeME - Streaming & Real-time Support
+    Note over Browser,Local: ExposeME - Binary Protocol with Streaming & Real-time Support
 
 %% SSL Certificate Setup
     rect rgb(230, 245, 230)
@@ -32,18 +32,18 @@ sequenceDiagram
 
 %% Tunnel Establishment
     rect rgb(227, 242, 253)
-        Note over Client,Server: 2. Tunnel Establishment
+        Note over Client,Server: 2. Tunnel Establishment (Binary WebSocket Protocol)
 
         Client->>+Server: WebSocket connect to wss://example.com/tunnel-ws
-        Client->>Server: Message::Auth {<br/>  token: "secure_token",<br/>  tunnel_id: "my-app"<br/>}
+        Client->>Server: Message::Auth {<br/>  token: "secure_token",<br/>  tunnel_id: "my-app"<br/>} [Binary Frame]
 
         Server->>Server: validate token & tunnel_id
         Note right of Server: Check auth tokens,<br/>validate tunnel_id format,<br/>ensure not already taken
 
         Server->>Server: register in TunnelMap
-        Server-->>-Client: Message::AuthSuccess {<br/>  tunnel_id: "my-app",<br/>  public_url: "https://my-app.example.com"<br/>}
+        Server-->>-Client: Message::AuthSuccess {<br/>  tunnel_id: "my-app",<br/>  public_url: "https://my-app.example.com"<br/>} [Binary Frame]
 
-        Note over Client,Server: Persistent WebSocket tunnel
+        Note over Client,Server: Persistent WebSocket tunnel<br/>with binary protocol
     end
 
 %% Regular HTTP Request (Complete)
@@ -56,12 +56,12 @@ sequenceDiagram
         Server->>Server: generate request_id="req-123"
         Server->>Server: store in ActiveRequests
 
-        Server->>Client: Message::HttpRequestStart {<br/>  id: "req-123",<br/>  method: "GET",<br/>  path: "/api/users",<br/>  headers: {...},<br/>  initial_data: "",<br/>  is_complete: true<br/>}
+        Server->>Client: Message::HttpRequestStart {<br/>  id: "req-123",<br/>  method: "GET",<br/>  path: "/api/users",<br/>  headers: {...},<br/>  initial_data: "",<br/>  is_complete: true<br/>} [Binary Frame]
 
         Client->>+Local: HTTP GET http://localhost:3000/api/users
         Local-->>-Client: HTTP 200 + JSON data
 
-        Client->>Server: Message::HttpResponseStart {<br/>  id: "req-123",<br/>  status: 200,<br/>  headers: {...},<br/>  initial_data: "json_data",<br/>  is_complete: true<br/>}
+        Client->>Server: Message::HttpResponseStart {<br/>  id: "req-123",<br/>  status: 200,<br/>  headers: {...},<br/>  initial_data: "json_data",<br/>  is_complete: true<br/>} [Binary Frame]
 
         Server->>Server: remove from ActiveRequests
         Server-->>-Browser: HTTPS 200 + JSON data
@@ -76,20 +76,20 @@ sequenceDiagram
         Server->>Server: detect streaming request
         Server->>Server: generate request_id="req-456"
 
-        Server->>Client: Message::HttpRequestStart {<br/>  id: "req-456",<br/>  method: "POST",<br/>  path: "/upload",<br/>  headers: {...},<br/>  initial_data: "first_chunk",<br/>  is_complete: false<br/>}
+        Server->>Client: Message::HttpRequestStart {<br/>  id: "req-456",<br/>  method: "POST",<br/>  path: "/upload",<br/>  headers: {...},<br/>  initial_data: "first_chunk",<br/>  is_complete: false<br/>} [Binary Frame]
 
         loop Streaming Upload
             Browser->>Server: Upload chunk
-            Server->>Client: Message::DataChunk {<br/>  id: "req-456",<br/>  data: "chunk_data",<br/>  is_final: false<br/>}
+            Server->>Client: Message::DataChunk {<br/>  id: "req-456",<br/>  data: "chunk_data",<br/>  is_final: false<br/>} [Binary Frame]
         end
 
         Browser->>Server: Final chunk
-        Server->>Client: Message::DataChunk {<br/>  id: "req-456",<br/>  data: "",<br/>  is_final: true<br/>}
+        Server->>Client: Message::DataChunk {<br/>  id: "req-456",<br/>  data: "",<br/>  is_final: true<br/>} [Binary Frame]
 
         Client->>+Local: Streaming POST to local service
         Local-->>-Client: HTTP 200 Upload complete
 
-        Client->>Server: Message::HttpResponseStart {<br/>  id: "req-456",<br/>  status: 200,<br/>  headers: {...},<br/>  initial_data: "success",<br/>  is_complete: true<br/>}
+        Client->>Server: Message::HttpResponseStart {<br/>  id: "req-456",<br/>  status: 200,<br/>  headers: {...},<br/>  initial_data: "success",<br/>  is_complete: true<br/>} [Binary Frame]
 
         Server-->>-Browser: HTTPS 200 Upload successful
     end
@@ -103,18 +103,18 @@ sequenceDiagram
         Server->>Server: detect SSE request
         Server->>Server: generate request_id="req-789"
 
-        Server->>Client: Message::HttpRequestStart {<br/>  id: "req-789",<br/>  method: "GET",<br/>  path: "/events",<br/>  headers: {"Accept": "text/event-stream"},<br/>  initial_data: "",<br/>  is_complete: true<br/>}
+        Server->>Client: Message::HttpRequestStart {<br/>  id: "req-789",<br/>  method: "GET",<br/>  path: "/events",<br/>  headers: {"Accept": "text/event-stream"},<br/>  initial_data: "",<br/>  is_complete: true<br/>} [Binary Frame]
 
         Client->>+Local: HTTP GET http://localhost:3000/events
         Local-->>Client: HTTP 200 + SSE headers
 
-        Client->>Server: Message::HttpResponseStart {<br/>  id: "req-789",<br/>  status: 200,<br/>  headers: {<br/>    "Content-Type": "text/event-stream",<br/>    "Cache-Control": "no-cache"<br/>  },<br/>  initial_data: "",<br/>  is_complete: false<br/>}
+        Client->>Server: Message::HttpResponseStart {<br/>  id: "req-789",<br/>  status: 200,<br/>  headers: {<br/>    "Content-Type": "text/event-stream",<br/>    "Cache-Control": "no-cache"<br/>  },<br/>  initial_data: "",<br/>  is_complete: false<br/>} [Binary Frame]
 
         Server-->>Browser: HTTPS 200 + SSE headers
 
         loop Real-time Events
             Local->>Client: SSE event data
-            Client->>Server: Message::DataChunk {<br/>  id: "req-789",<br/>  data: "event_data",<br/>  is_final: false<br/>}
+            Client->>Server: Message::DataChunk {<br/>  id: "req-789",<br/>  data: "event_data",<br/>  is_final: false<br/>} [Binary Frame]
             Server->>Browser: Forward SSE event
         end
 
@@ -130,23 +130,23 @@ sequenceDiagram
         Server->>Server: generate connection_id="ws-456"
         Server->>Server: store in ActiveWebSockets
 
-        Server->>Client: Message::WebSocketUpgrade {<br/>  connection_id: "ws-456",<br/>  method: "GET",<br/>  path: "/websocket",<br/>  headers: {...}<br/>}
+        Server->>Client: Message::WebSocketUpgrade {<br/>  connection_id: "ws-456",<br/>  method: "GET",<br/>  path: "/websocket",<br/>  headers: {...}<br/>} [Binary Frame]
 
         Client->>+Local: WebSocket connect to ws://localhost:3000/websocket
         Local-->>-Client: WebSocket upgrade success
 
-        Client->>Server: Message::WebSocketUpgradeResponse {<br/>  connection_id: "ws-456",<br/>  status: 101,<br/>  headers: {...}<br/>}
+        Client->>Server: Message::WebSocketUpgradeResponse {<br/>  connection_id: "ws-456",<br/>  status: 101,<br/>  headers: {...}<br/>} [Binary Frame]
 
         Server-->>-Browser: WebSocket 101 Switching Protocols
 
-        Note over Browser,Local: Bidirectional WebSocket proxy
+        Note over Browser,Local: Bidirectional WebSocket proxy<br/>with binary tunnel protocol
 
     %% Data flow examples
         Browser->>Server: WebSocket message
-        Server->>Client: Message::WebSocketData {<br/>  connection_id: "ws-456",<br/>  data: "base64_encoded_message"<br/>}
+        Server->>Client: Message::WebSocketData {<br/>  connection_id: "ws-456",<br/>  data: "raw_message_bytes"<br/>} [Binary Frame]
         Client->>Local: Forward WebSocket message
         Local->>Client: WebSocket response
-        Client->>Server: Message::WebSocketData {<br/>  connection_id: "ws-456",<br/>  data: "base64_encoded_response"<br/>}
+        Client->>Server: Message::WebSocketData {<br/>  connection_id: "ws-456",<br/>  data: "raw_response_bytes"<br/>} [Binary Frame]
         Server->>Browser: Forward WebSocket response
     end
 

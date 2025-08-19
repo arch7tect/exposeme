@@ -6,13 +6,13 @@ A fast, secure HTTP tunneling solution written in Rust that exposes local servic
 
 ExposeME lets you share your local development server with the outside world by creating secure tunnels through your own domain. Turn `http://localhost:3000` into `https://myapp.yourdomain.com` and share your work with clients, teammates, or testing tools.
 
-**How it works:** You run ExposeME on a server (like a VPS) with your own domain. A client program on your development machine connects to your server. When someone visits your public URL, requests get forwarded through the secure tunnel to your local application.
+**How it works:** You run ExposeME on a server (like a VPS) with your own domain. A client program on your development machine connects to your server via WebSocket using a binary protocol. When someone visits your public URL, requests get forwarded through the secure tunnel to your local application.
 
 **Why use your own server?** Full control with your own domain and SSL certificates, complete privacy with no third-party dependencies, no rate limits, and cost-effective hosting on any VPS.
 
 ## Features
 
-- **Secure Tunneling** - WebSocket-based encrypted tunnels with token authentication
+- **Secure Tunneling** - WebSocket-based encrypted tunnels with token authentication and binary protocol
 - **Your Own Domain** - Use your domain with automatic SSL certificates via Let's Encrypt
 - **Multiple Routing Modes** - Path-based (`domain.com/app/`) or subdomain (`app.domain.com`) routing
 - **Real-time Support** - WebSocket connections and Server-Sent Events (SSE) streaming
@@ -26,13 +26,16 @@ ExposeME lets you share your local development server with the outside world by 
 ExposeME creates secure HTTP tunnels to expose local services:
 
 - **Tunnel Setup**: Client connects to server via WebSocket upgrade on `/tunnel-ws` (configurable) to establish a persistent tunnel
-- **Request Forwarding**: When users visit your public URL, the server forwards their HTTP requests through the existing WebSocket tunnel to your local service
+- **Request Forwarding**: When users visit your public URL, the server forwards their HTTP requests through the existing WebSocket tunnel to your local service using a binary protocol
 - **Flow**: Internet User → Server (HTTP(S)) → WebSocket Tunnel → Client → Local Service → Response back
 
 ### Connection Types
 - **HTTP mode**: Client connects to `ws://your-domain.com/tunnel-ws`
 - **HTTPS mode**: Client connects to `wss://your-domain.com/tunnel-ws`
 - **Custom path**: Configurable via `tunnel_path` setting
+
+### Protocol
+ExposeME uses a binary protocol over WebSocket connections for efficient communication between client and server. The protocol handles HTTP request/response streaming, WebSocket proxying, and authentication.
 
 ## Authentication & Security
 
@@ -43,6 +46,7 @@ ExposeME uses **token-based authentication** to control access. Configure your s
 - **Tunnel isolation**: Each tunnel has a unique ID and operates independently
 - **Transport encryption**: All tunnel communication is encrypted when SSL is enabled
 - **Private URLs**: Tunnel URLs are only known to those who create them
+- **Binary protocol**: Efficient binary communication reduces overhead
 
 ```bash
 # Generate a secure token
@@ -423,6 +427,22 @@ insecure = true  # Skip TLS verification for self-signed certificates
 
 **Security Warning**: The `insecure` option should only be used for development with self-signed certificates as it disables TLS certificate verification.
 
+## Version Compatibility
+
+ExposeME uses a binary protocol for communication between client and server. Both client and server must be compatible versions:
+
+- **Major.Minor versions must match** (e.g., 1.3.x client works with 1.3.x server)
+- **Patch versions are compatible** within the same major.minor release
+- **Protocol changes** require both client and server updates
+
+## New in v1.3
+
+**Binary Protocol Implementation**
+- Replaced JSON protocol with efficient binary protocol using bincode
+- Reduced protocol overhead for better performance
+- Maintained backward compatibility checking
+- **Important**: Requires both server and client to be v1.3+
+
 ## New in v1.1
 
 **Enhanced Streaming Support**
@@ -439,7 +459,7 @@ insecure = true  # Skip TLS verification for self-signed certificates
 
 ### Upgrading from Previous Versions
 
-**Protocol Breaking Change**: Version 1.1 includes protocol improvements that require both server and client to be updated together.
+**Protocol Breaking Change**: Version 1.3 includes binary protocol implementation that requires both server and client to be updated together.
 
 ```bash
 # Update server
@@ -447,7 +467,7 @@ docker compose pull
 docker compose down
 docker compose up -d
 
-# Update client - arch7tect/exposeme-client:1.1 == arch7tect/exposeme-client:latest
+# Update client - arch7tect/exposeme-client:1.3 == arch7tect/exposeme-client:latest
 docker run -it --rm \
   -v ./client.toml:/etc/exposeme/client.toml \
   arch7tect/exposeme-client:latest

@@ -6,18 +6,6 @@ This document outlines planned features and improvements for ExposeME.
 
 ## Medium Priority
 
-### Performance Optimization
-
-**Status**: Not implemented  
-**Priority**: Medium  
-**Complexity**: Medium
-
-**Binary Protocol Support**:
-- Current JSON protocol has ~30% overhead from base64 encoding
-- Consider MessagePack or Protocol Buffers for high-bandwidth usage
-- Implement when AWS data transfer costs become significant (>$100/month)
-- Maintain JSON for debugging and development
-
 ### DNS Provider Expansion
 
 **Status**: Partially implemented  
@@ -59,6 +47,33 @@ A web-based management interface would improve operational visibility and contro
 - Error logs and troubleshooting interface
 - Performance metrics and bottleneck identification
 - Export capabilities for metrics and logs
+
+## Completed Features
+
+### Enhanced Streaming Support
+
+**Status**: ✅ Implemented in v1.1  
+**Priority**: High  
+**Complexity**: Medium
+
+**Implementation Details**:
+- Full HTTP request/response streaming without memory buffering
+- Support for large file uploads and downloads
+- Native Server-Sent Events (SSE) support with proper headers and streaming
+- Automatic reconnection handling for both SSE and WebSocket connections
+
+### Binary Protocol Support
+
+**Status**: ✅ Implemented in v1.3  
+**Priority**: High  
+**Complexity**: Medium
+
+**Implementation Details**:
+- Replaced JSON protocol with bincode binary serialization
+- WebSocket communication uses binary frames
+- Reduced protocol overhead compared to previous JSON + base64 approach
+- Version compatibility checking ensures client/server protocol alignment
+- Maintains efficient streaming for large transfers
 
 ## Known Issues
 

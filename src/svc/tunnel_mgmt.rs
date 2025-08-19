@@ -136,41 +136,8 @@ pub async fn handle_tunnel_management_connection(
                 }
             }
             Ok(WsMessage::Text(text)) => {
-                warn!("⚠️  Received unexpected text message (should be binary): {} chars", text.len());
-                // Try to parse as legacy JSON for compatibility during migration
-                #[allow(deprecated)]
-                match Message::from_json(&text) {
-                    Ok(msg) => {
-                        warn!("⚠️  Successfully parsed legacy JSON message, but please upgrade client");
-                        // Handle the message normally (same logic as above)
-                        match msg {
-                            Message::Auth {
-                                token,
-                                tunnel_id: requested_tunnel_id,
-                                version,
-                            } => {
-                                if let Err(e) = handle_auth_message(
-                                    token,
-                                    requested_tunnel_id,
-                                    version,
-                                    &tx,
-                                    &context,
-                                    &mut tunnel_id,
-                                ).await {
-                                    error!("Auth handling failed: {}", e);
-                                    break;
-                                }
-                            }
-                            // Add other message types as needed...
-                            _ => {
-                                warn!("Legacy message type not fully supported");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("❌ Failed to parse legacy JSON message: {}", e);
-                    }
-                }
+                error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
+                error!("❌ Please ensure both client and server are using the same protocol version");
             }
             Ok(WsMessage::Close(_)) => {
                 info!("Tunnel management WebSocket closed");

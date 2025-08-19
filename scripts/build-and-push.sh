@@ -6,7 +6,7 @@ set -e
 
 # Configuration
 DOCKER_HUB_USER=${DOCKER_HUB_USER:-"arch7tect"}
-VERSION=${1:-"1.2"}
+VERSION=${1:-"1.3"}
 
 echo "🚀 Building and publishing ExposeME Docker images"
 echo "👤 Docker Hub user: $DOCKER_HUB_USER"

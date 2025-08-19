@@ -146,20 +146,8 @@ impl ExposeMeClient {
                     }
                 }
                 Ok(WsMessage::Text(text)) => {
-                    warn!("⚠️  Received unexpected text message (should be binary): {} chars", text.len());
-                    // Try to parse as legacy JSON for compatibility during migration
-                    #[allow(deprecated)]
-                    match Message::from_json(&text) {
-                        Ok(msg) => {
-                            warn!("⚠️  Successfully parsed legacy JSON message, but please upgrade server");
-                            if let Err(e) = self.handle_message(msg, &http_handler, &websocket_handler).await {
-                                error!("Message handling error: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            error!("❌ Failed to parse legacy JSON message: {}", e);
-                        }
-                    }
+                    error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
+                    error!("❌ Please ensure both client and server are using the same protocol version");
                 }
                 Ok(WsMessage::Close(_)) => {
                     info!("WebSocket connection closed by server");

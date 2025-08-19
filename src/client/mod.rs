@@ -134,6 +134,7 @@ impl ExposeMeClient {
             match message {
                 Ok(WsMessage::Binary(bytes)) => {
                     debug!("📨 Raw WebSocket message received: {} bytes", bytes.len());
+                    trace!("Bytes: {}", bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<String>>().join(" "));
                     match Message::from_bincode(&bytes) {
                         Ok(msg) => {
                             if let Err(e) = self.handle_message(msg, &http_handler, &websocket_handler).await {

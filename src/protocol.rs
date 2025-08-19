@@ -30,11 +30,7 @@ pub enum Message {
         method: String,
         path: String,
         headers: HashMap<String, String>,
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        #[serde(default)]
-        initial_data: Vec<u8>, // Binary data handled natively by bincode
-        #[serde(skip_serializing_if = "Option::is_none")]
-        #[serde(default)]
+        initial_data: Vec<u8>,
         is_complete: Option<bool>,
     },
 
@@ -43,18 +39,14 @@ pub enum Message {
         id: String,
         status: u16,
         headers: HashMap<String, String>,
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        #[serde(default)]
-        initial_data: Vec<u8>, // Binary data handled natively by bincode
-        #[serde(skip_serializing_if = "Option::is_none")]
-        #[serde(default)]
+        initial_data: Vec<u8>,
         is_complete: Option<bool>,
     },
 
     /// Data chunk (bidirectional)
     DataChunk {
         id: String,
-        data: Vec<u8>, // Binary data handled natively by bincode
+        data: Vec<u8>,
         is_final: bool,
     },
 

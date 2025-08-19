@@ -33,13 +33,16 @@ pub async fn handle_tunnel_management_connection(
     // Spawn task to handle outgoing messages
     let outgoing_task = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            if let Ok(json) = message.to_json() {
-                if let Err(e) = ws_sender.send(WsMessage::Text(json.into())).await {
-                    error!("Failed to send WS message to client: {}", e);
-                    break;
+            match message.to_bincode() {
+                Ok(bytes) => {
+                    if let Err(e) = ws_sender.send(WsMessage::Binary(bytes.into())).await {
+                        error!("Failed to send WS message to client: {}", e);
+                        break;
+                    }
                 }
-            } else {
-                error!("Failed to serialize message to JSON");
+                Err(e) => {
+                    error!("Failed to serialize message to bincode: {}", e);
+                }
             }
         }
     });
@@ -53,77 +56,119 @@ pub async fn handle_tunnel_management_connection(
         trace!("🔍 Server: Received WebSocket message #{}", message_count);
 
         match message {
-            Ok(WsMessage::Text(text)) => {
-                trace!("🔍 Server: Processing text message #{} ({} chars)", message_count, text.len());
+            Ok(WsMessage::Binary(bytes)) => {
+                trace!("🔍 Server: Processing binary message #{} ({} bytes)", message_count, bytes.len());
 
-                if let Ok(msg) = Message::from_json(&text.to_string()) {
-                    trace!("🔍 Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
+                match Message::from_bincode(&bytes) {
+                    Ok(msg) => {
+                        trace!("🔍 Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
 
-                    match msg {
-                        Message::Auth {
-                            token,
-                            tunnel_id: requested_tunnel_id,
-                            version,
-                        } => {
-                            if let Err(e) = handle_auth_message(
+                        match msg {
+                            Message::Auth {
                                 token,
-                                requested_tunnel_id,
+                                tunnel_id: requested_tunnel_id,
                                 version,
-                                &tx,
-                                &context,
-                                &mut tunnel_id,
-                            ).await {
-                                error!("Auth handling failed: {}", e);
-                                break;
+                            } => {
+                                if let Err(e) = handle_auth_message(
+                                    token,
+                                    requested_tunnel_id,
+                                    version,
+                                    &tx,
+                                    &context,
+                                    &mut tunnel_id,
+                                ).await {
+                                    error!("Auth handling failed: {}", e);
+                                    break;
+                                }
+                            }
+
+                            Message::HttpResponseStart {
+                                id,
+                                status,
+                                headers,
+                                initial_data,
+                                is_complete,
+                            } => {
+                                handle_http_response_start(
+                                    id, status, headers, initial_data, is_complete, &context
+                                ).await;
+                            }
+
+                            Message::DataChunk { id, data, is_final } => {
+                                handle_data_chunk(id, data, is_final, &context).await;
+                            }
+
+                            Message::WebSocketUpgradeResponse {
+                                connection_id,
+                                status,
+                                headers: _,
+                            } => {
+                                info!(
+                                    "📡 WebSocket upgrade response: {} (status: {})",
+                                    connection_id, status
+                                );
+                                // Nothing to do here as we've already upgraded incoming connection.
+                            }
+
+                            Message::WebSocketData {
+                                connection_id,
+                                data,
+                            } => {
+                                handle_websocket_data(connection_id, data, &context).await;
+                            }
+
+                            Message::WebSocketClose {
+                                connection_id,
+                                code,
+                                reason,
+                            } => {
+                                handle_websocket_close(connection_id, code, reason, &context).await;
+                            }
+
+                            _ => {
+                                warn!("Unexpected message type from tunnel client");
                             }
                         }
-
-                        Message::HttpResponseStart {
-                            id,
-                            status,
-                            headers,
-                            initial_data,
-                            is_complete,
-                        } => {
-                            handle_http_response_start(
-                                id, status, headers, initial_data, is_complete, &context
-                            ).await;
+                    }
+                    Err(e) => {
+                        error!("❌ Failed to parse bincode message: {}", e);
+                    }
+                }
+            }
+            Ok(WsMessage::Text(text)) => {
+                warn!("⚠️  Received unexpected text message (should be binary): {} chars", text.len());
+                // Try to parse as legacy JSON for compatibility during migration
+                #[allow(deprecated)]
+                match Message::from_json(&text) {
+                    Ok(msg) => {
+                        warn!("⚠️  Successfully parsed legacy JSON message, but please upgrade client");
+                        // Handle the message normally (same logic as above)
+                        match msg {
+                            Message::Auth {
+                                token,
+                                tunnel_id: requested_tunnel_id,
+                                version,
+                            } => {
+                                if let Err(e) = handle_auth_message(
+                                    token,
+                                    requested_tunnel_id,
+                                    version,
+                                    &tx,
+                                    &context,
+                                    &mut tunnel_id,
+                                ).await {
+                                    error!("Auth handling failed: {}", e);
+                                    break;
+                                }
+                            }
+                            // Add other message types as needed...
+                            _ => {
+                                warn!("Legacy message type not fully supported");
+                            }
                         }
-
-                        Message::DataChunk { id, data, is_final } => {
-                            handle_data_chunk(id, data, is_final, &context).await;
-                        }
-
-                        Message::WebSocketUpgradeResponse {
-                            connection_id,
-                            status,
-                            headers: _,
-                        } => {
-                            info!(
-                                "📡 WebSocket upgrade response: {} (status: {})",
-                                connection_id, status
-                            );
-                            // Nothing to do here as we've already upgraded incoming connection.
-                        }
-
-                        Message::WebSocketData {
-                            connection_id,
-                            data,
-                        } => {
-                            handle_websocket_data(connection_id, data, &context).await;
-                        }
-
-                        Message::WebSocketClose {
-                            connection_id,
-                            code,
-                            reason,
-                        } => {
-                            handle_websocket_close(connection_id, code, reason, &context).await;
-                        }
-
-                        _ => {
-                            warn!("Unexpected message type from tunnel client");
-                        }
+                    }
+                    Err(e) => {
+                        error!("❌ Failed to parse legacy JSON message: {}", e);
                     }
                 }
             }
@@ -294,7 +339,7 @@ async fn handle_data_chunk(
     }
 }
 
-/// Handle WebSocket data from tunnel client - NO MORE BASE64 DECODING
+/// Handle WebSocket data from tunnel client - Binary data, no base64 needed
 async fn handle_websocket_data(
     connection_id: String,
     data: Vec<u8>,

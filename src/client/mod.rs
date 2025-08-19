@@ -70,8 +70,8 @@ impl ExposeMeClient {
             version: env!("CARGO_PKG_VERSION").to_string(),
         };
 
-        let auth_json = auth_message.to_json()?;
-        ws_sender.send(WsMessage::Text(auth_json.into())).await?;
+        let auth_bytes = auth_message.to_bincode()?;
+        ws_sender.send(WsMessage::Binary(auth_bytes.into())).await?;
         info!("Sent authentication for tunnel '{}'", self.config.client.tunnel_id);
 
         // Create shared state
@@ -104,19 +104,22 @@ impl ExposeMeClient {
             while let Some(message) = to_server_rx.recv().await {
                 message_count += 1;
 
-                if let Ok(json) = message.to_json() {
-                    trace!("🔍 Sending message #{} ({} chars)", message_count, json.len());
-                    match ws_sender.send(WsMessage::Text(json.into())).await {
-                        Ok(_) => {
-                            trace!("✅ Message #{} sent successfully", message_count);
-                        }
-                        Err(e) => {
-                            error!("❌ FAILED to send message #{}: {}", message_count, e);
-                            break;
+                match message.to_bincode() {
+                    Ok(bytes) => {
+                        trace!("🔍 Sending message #{} ({} bytes)", message_count, bytes.len());
+                        match ws_sender.send(WsMessage::Binary(bytes.into())).await {
+                            Ok(_) => {
+                                trace!("✅ Message #{} sent successfully", message_count);
+                            }
+                            Err(e) => {
+                                error!("❌ FAILED to send message #{}: {}", message_count, e);
+                                break;
+                            }
                         }
                     }
-                } else {
-                    debug!("❌ Failed to serialize message #{}", message_count);
+                    Err(e) => {
+                        error!("❌ Failed to serialize message #{}: {}", message_count, e);
+                    }
                 }
             }
 
@@ -129,9 +132,9 @@ impl ExposeMeClient {
         // Handle incoming WebSocket messages
         while let Some(message) = ws_receiver.next().await {
             match message {
-                Ok(WsMessage::Text(text)) => {
-                    debug!("📨 Raw WebSocket message received: {} bytes", text.len());
-                    match Message::from_json(&text.to_string()) {
+                Ok(WsMessage::Binary(bytes)) => {
+                    debug!("📨 Raw WebSocket message received: {} bytes", bytes.len());
+                    match Message::from_bincode(&bytes) {
                         Ok(msg) => {
                             if let Err(e) = self.handle_message(msg, &http_handler, &websocket_handler).await {
                                 error!("Message handling error: {}", e);
@@ -139,6 +142,22 @@ impl ExposeMeClient {
                         }
                         Err(e) => {
                             error!("❌ Failed to parse WebSocket message: {}", e);
+                        }
+                    }
+                }
+                Ok(WsMessage::Text(text)) => {
+                    warn!("⚠️  Received unexpected text message (should be binary): {} chars", text.len());
+                    // Try to parse as legacy JSON for compatibility during migration
+                    #[allow(deprecated)]
+                    match Message::from_json(&text) {
+                        Ok(msg) => {
+                            warn!("⚠️  Successfully parsed legacy JSON message, but please upgrade server");
+                            if let Err(e) = self.handle_message(msg, &http_handler, &websocket_handler).await {
+                                error!("Message handling error: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            error!("❌ Failed to parse legacy JSON message: {}", e);
                         }
                     }
                 }

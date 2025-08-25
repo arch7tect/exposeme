@@ -31,7 +31,7 @@ pub enum Message {
         path: String,
         headers: HashMap<String, String>,
         initial_data: Vec<u8>,
-        is_complete: Option<bool>,
+        is_complete: bool,
     },
 
     /// HTTP response start (client -> server)
@@ -40,7 +40,7 @@ pub enum Message {
         status: u16,
         headers: HashMap<String, String>,
         initial_data: Vec<u8>,
-        is_complete: Option<bool>,
+        is_complete: bool,
     },
 
     /// Data chunk (bidirectional)

@@ -7,6 +7,7 @@ use reqwest::Client as HttpClient;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, trace, warn};
 use crate::Message;
+use crate::streaming::{is_sse, is_streaming_response};
 
 pub type OutgoingRequests = Arc<RwLock<HashMap<String, OutgoingRequest>>>;
 
@@ -44,16 +45,16 @@ impl HttpHandler {
         path: String,
         headers: HashMap<String, String>,
         initial_data: Vec<u8>,
-        is_complete: Option<bool>,
+        is_complete: bool,
     ) {
         info!("📥 Http request: {} {}", method, path);
-        debug!("📥 Received HttpRequestStart: {} {} (id: {}, complete: {:?})", method, path, id, is_complete);
+        debug!("📥 Received HttpRequestStart: {} {} (id: {}, complete: {})", method, path, id, is_complete);
 
         let http_client = self.http_client.clone();
         let local_target = self.local_target.clone();
         let to_server_tx = self.to_server_tx.clone();
 
-        if is_complete == Some(true) {
+        if is_complete == true {
             // Complete request - process immediately
             debug!("📦 Processing complete request: {} {} ({} bytes)", method, path, initial_data.len());
 
@@ -188,15 +189,19 @@ async fn stream_response_to_server(
     debug!("📤 Preparing response: {} (id: {}, headers: {})", status, id, headers.len());
 
     let should_stream = is_streaming_response(&response);
-    debug!("🔍 Should stream: {}", should_stream);
+    let is_sse_resp = is_sse(
+        response.headers().get("content-type").and_then(|h| h.to_str().ok()),
+        None
+    );
+    debug!("🔍 Should stream: {} (SSE: {})", should_stream, is_sse_resp);
 
     if to_server_tx.is_closed() {
         error!("❌ WebSocket sender is CLOSED for {}", id);
         return;
     }
 
-    if !should_stream && response.content_length().unwrap_or(0) < 256 * 1024 {
-        debug!("🔍 Processing as small/complete response for {}", id);
+    if !should_stream {
+        debug!("🔍 Processing as complete response for {}", id);
 
         match response.bytes().await {
             Ok(bytes) => {
@@ -205,7 +210,7 @@ async fn stream_response_to_server(
                     status,
                     headers,
                     initial_data: bytes.to_vec(),
-                    is_complete: Some(true),
+                    is_complete: true,
                 };
 
                 match to_server_tx.send(response_msg) {
@@ -230,7 +235,7 @@ async fn stream_response_to_server(
             status,
             headers,
             initial_data: vec![],
-            is_complete: Some(false),
+            is_complete: false,
         };
 
         if let Err(e) = to_server_tx.send(start_msg) {
@@ -303,7 +308,7 @@ async fn send_error_response(
         status: 502,
         headers: HashMap::new(),
         initial_data: error.into_bytes(),
-        is_complete: Some(true),
+        is_complete: true,
     };
 
     if let Err(e) = to_server_tx.send(error_response) {
@@ -311,26 +316,6 @@ async fn send_error_response(
     } else {
         info!("✅ Error response sent for {}", id);
     }
-}
-
-fn is_streaming_response(response: &reqwest::Response) -> bool {
-    if let Some(content_type) = response.headers().get("content-type") {
-        if let Ok(ct) = content_type.to_str() {
-            if ct.contains("text/event-stream") || ct.contains("application/octet-stream") {
-                return true;
-            }
-        }
-    }
-
-    if let Some(encoding) = response.headers().get("transfer-encoding") {
-        if let Ok(te) = encoding.to_str() {
-            if te.contains("chunked") {
-                return true;
-            }
-        }
-    }
-
-    response.content_length().map(|len| len > 512 * 1024).unwrap_or(true)
 }
 
 fn extract_response_headers(response: &reqwest::Response) -> HashMap<String, String> {

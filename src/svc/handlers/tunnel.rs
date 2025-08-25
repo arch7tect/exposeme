@@ -1,5 +1,4 @@
 // src/svc/handlers/tunnel.rs - HTTP tunnel request handling
-// Enhanced SSE support for src/svc/handlers/tunnel.rs
 
 use crate::svc::{BoxError, ServiceContext};
 use crate::svc::types::*;
@@ -16,6 +15,7 @@ use http_body_util::combinators::BoxBody;
 use hyper::body::Frame;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+use crate::streaming::{add_sse_headers, is_sse, is_streaming_request};
 
 /// Handle HTTP requests that should be tunneled to clients
 pub async fn handle_tunnel_request(
@@ -52,7 +52,7 @@ pub async fn handle_tunnel_request(
         }
     };
 
-    // Enhanced SSE and streaming detection
+    // SSE and streaming detection
     let is_streaming_request = is_streaming_request(&req);
     let method = req.method().clone();
     let mut headers = extract_headers(&req);
@@ -64,8 +64,14 @@ pub async fn handle_tunnel_request(
         headers.insert("Last-Event-ID".to_string(), last_event_id.to_string());
     }
 
+    // USE the unified is_sse function:
+    let is_sse = is_sse(
+        req.headers().get("content-type").and_then(|h| h.to_str().ok()),
+        req.headers().get("accept").and_then(|h| h.to_str().ok())
+    );
+
     // Log request type for debugging
-    let request_type = if is_sse_request(&req) {
+    let request_type = if is_sse {
         "SSE"
     } else if is_streaming_request {
         "streaming"
@@ -99,7 +105,7 @@ pub async fn handle_tunnel_request(
             path: forwarded_path,
             headers,
             initial_data: vec![],
-            is_complete: None, // Streaming
+            is_complete: false,
         };
 
         if tunnel_sender.send(initial_request).is_err() {
@@ -137,7 +143,7 @@ pub async fn handle_tunnel_request(
             path: forwarded_path,
             headers,
             initial_data: body_bytes.to_vec(),
-            is_complete: Some(true),
+            is_complete: true,
         };
 
         if tunnel_sender.send(complete_request).is_err() {
@@ -151,52 +157,6 @@ pub async fn handle_tunnel_request(
 
     // Build response (handles both complete and streaming)
     build_response(request_id, response_rx, context.active_requests).await
-}
-
-/// Streaming detection
-fn is_streaming_request(req: &Request<Incoming>) -> bool {
-    // Check for SSE first (most specific)
-    if is_sse_request(req) {
-        return true;
-    }
-
-    // Check for streaming content types
-    if let Some(content_type) = req.headers().get("content-type")
-        .and_then(|h| h.to_str().ok()) {
-        if content_type.contains("application/octet-stream")
-            || content_type.contains("multipart/")
-            || content_type.contains("text/event-stream") {
-            return true;
-        }
-    }
-
-    // Check for chunked encoding
-    if req.headers().get("transfer-encoding")
-        .and_then(|h| h.to_str().ok())
-        .map(|te| te.contains("chunked"))
-        .unwrap_or(false) {
-        return true;
-    }
-
-    // Large content length
-    if let Some(content_length) = req.headers().get("content-length")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse::<usize>().ok()) {
-        if content_length > 1024 * 1024 { // > 1MB
-            return true;
-        }
-    }
-
-    false
-}
-
-/// Check if this is an SSE request
-fn is_sse_request(req: &Request<Incoming>) -> bool {
-    // Check Accept header for text/event-stream
-    req.headers().get("accept")
-        .and_then(|h| h.to_str().ok())
-        .map(|accept| accept.contains("text/event-stream"))
-        .unwrap_or(false)
 }
 
 /// Response builder that adds SSE-specific headers when needed
@@ -227,26 +187,17 @@ async fn build_response(
         }
 
         Some(ResponseEvent::StreamStart { status, mut headers, initial_data }) => {
-            let is_sse_response = headers.get("content-type")
-                .map(|ct| ct.contains("text/event-stream"))
-                .unwrap_or(false);
+            let is_sse_response = is_sse(
+                headers.get("content-type").map(|s| s.as_str()),
+                None
+            );
 
             let response_type = if is_sse_response { "SSE" } else { "streaming" };
             info!("🔄 {} response: {} (initial: {} bytes)", response_type, status, initial_data.len());
 
-            // Add SSE-specific headers if this is an SSE response
             if is_sse_response {
                 debug!("✨ Adding SSE-specific response headers");
-                headers.insert("Cache-Control".to_string(), "no-cache".to_string());
-                headers.insert("Connection".to_string(), "keep-alive".to_string());
-                headers.insert("X-Accel-Buffering".to_string(), "no".to_string()); // Disable nginx buffering
-
-                // Ensure UTF-8 encoding is specified
-                if let Some(content_type) = headers.get_mut("content-type") {
-                    if !content_type.contains("charset") {
-                        *content_type = format!("{}; charset=utf-8", content_type);
-                    }
-                }
+                add_sse_headers(&mut headers);
             }
 
             let mut builder = Response::builder().status(status);

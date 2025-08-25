@@ -245,14 +245,14 @@ async fn handle_http_response_start(
     status: u16,
     headers: std::collections::HashMap<String, String>,
     initial_data: Vec<u8>,
-    is_complete: Option<bool>,
+    is_complete: bool,
     context: &ServiceContext,
 ) {
     debug!("📥 Response: {} (id: {}, complete: {:?}, {} bytes)",
            status, id, is_complete, initial_data.len());
 
     if let Some(request) = context.active_requests.read().await.get(&id) {
-        if is_complete == Some(true) {
+        if is_complete == true {
             let complete_event = ResponseEvent::Complete {
                 status,
                 headers,

@@ -52,7 +52,7 @@ async fn handle_certificate_status(
     config: &ServerConfig,
 ) -> Result<Response<ResponseBody>, BoxError> {
     let manager = ssl_manager.read().await;
-    match manager.get_certificate_info() {
+    match manager.get_certificate_info().await {
         Ok(cert_info) => {
             let response = json!({
                 "domain": cert_info.domain,
@@ -152,7 +152,7 @@ async fn handle_certificate_info(
 ) -> Result<Response<ResponseBody>, BoxError> {
     let manager = ssl_manager.read().await;
 
-    let cert_info = match manager.get_certificate_info() {
+    let cert_info = match manager.get_certificate_info().await {
         Ok(info) => Some(info),
         Err(_) => None,
     };
@@ -206,7 +206,7 @@ async fn handle_extended_health_check(
 
     // Check SSL configuration
     if config.ssl.enabled {
-        match manager.get_certificate_info() {
+        match manager.get_certificate_info().await {
             Ok(cert_info) => {
                 if !cert_info.exists {
                     health_status = "degraded".to_string();

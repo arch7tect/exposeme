@@ -1,9 +1,7 @@
-// src/ssl.rs - Corrected for instant-acme 0.8.2 API based on official example
+// src/ssl.rs
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs;
-use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -101,8 +99,8 @@ impl SslManager {
 
         let rustls_config = match self.config.ssl.provider {
             SslProvider::LetsEncrypt => self.setup_letsencrypt().await?,
-            SslProvider::Manual => self.load_manual_certificates()?,
-            SslProvider::SelfSigned => self.generate_self_signed()?,
+            SslProvider::Manual => self.load_manual_certificates().await?,
+            SslProvider::SelfSigned => self.generate_self_signed().await?,
         };
 
         self.rustls_config = Some(Arc::new(rustls_config));
@@ -121,7 +119,7 @@ impl SslManager {
         let email = &self.config.ssl.email.clone();
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
 
-        fs::create_dir_all(cache_dir)?;
+        tokio::fs::create_dir_all(cache_dir).await?;
 
         // Determine certificate type and filename
         let (cert_domains, cert_filename) = if self.config.ssl.wildcard {
@@ -145,7 +143,7 @@ impl SslManager {
         // Check existing certificates
         if cert_path.exists() && key_path.exists() {
             info!("Found existing certificates, checking validity...");
-            if let Ok(config) = self.load_certificates(&cert_path, &key_path) {
+            if let Ok(config) = self.load_certificates(&cert_path, &key_path).await {
                 info!("Using existing certificates");
                 return Ok(config);
             }
@@ -161,11 +159,11 @@ impl SslManager {
         let (cert_pem, key_pem) = self.obtain_certificate(&cert_domains, email).await?;
 
         // Save and load certificates
-        fs::write(&cert_path, &cert_pem)?;
-        fs::write(&key_path, &key_pem)?;
+        tokio::fs::write(&cert_path, &cert_pem).await?;
+        tokio::fs::write(&key_path, &key_pem).await?;
         info!("Certificates saved to cache directory");
 
-        self.load_certificates(&cert_path, &key_path)
+        self.load_certificates(&cert_path, &key_path).await
     }
 
     async fn obtain_certificate(
@@ -416,16 +414,16 @@ impl SslManager {
         Ok(challenge.token.clone())
     }
 
-    fn load_certificates(
+    async fn load_certificates(
         &self,
         cert_path: &Path,
         key_path: &Path,
     ) -> Result<RustlsConfig, Box<dyn Error + Send + Sync>> {
-        let cert_file = fs::read(cert_path)?;
+        let cert_file = tokio::fs::read(cert_path).await?;
         let cert_chain =
             rustls_pemfile::certs(&mut cert_file.as_slice()).collect::<Result<Vec<_>, _>>()?;
 
-        let key_file = fs::read(key_path)?;
+        let key_file = tokio::fs::read(key_path).await?;
         let private_key =
             rustls_pemfile::private_key(&mut key_file.as_slice())?.ok_or("No private key found")?;
 
@@ -436,7 +434,7 @@ impl SslManager {
         Ok(config)
     }
 
-    fn load_manual_certificates(
+    async fn load_manual_certificates(
         &self,
     ) -> Result<RustlsConfig, Box<dyn Error + Send + Sync>> {
         let domain = &self.config.server.domain;
@@ -459,14 +457,14 @@ impl SslManager {
             .into());
         }
 
-        self.load_certificates(&cert_path, &key_path)
+        self.load_certificates(&cert_path, &key_path).await
     }
 
-    pub fn generate_self_signed(
+    pub async fn generate_self_signed(
         &self,
     ) -> Result<RustlsConfig, Box<dyn Error + Send + Sync>> {
         let cache_dir = Path::new(&self.config.ssl.cert_cache_dir);
-        fs::create_dir_all(cache_dir)?;
+        tokio::fs::create_dir_all(cache_dir).await?;
 
         let domain = &self.config.server.domain;
         let cert_filename = if self.config.ssl.wildcard {
@@ -479,7 +477,7 @@ impl SslManager {
         let key_path = cache_dir.join(format!("{}.key", cert_filename));
 
         if cert_path.exists() && key_path.exists() {
-            return self.load_certificates(&cert_path, &key_path);
+            return self.load_certificates(&cert_path, &key_path).await;
         }
 
         warn!(
@@ -495,8 +493,8 @@ impl SslManager {
 
         let cert = generate_simple_self_signed(subject_alt_names)?;
 
-        fs::write(&cert_path, cert.cert.pem())?;
-        fs::write(&key_path, cert.signing_key.serialize_pem())?;
+        tokio::fs::write(&cert_path, cert.cert.pem()).await?;
+        tokio::fs::write(&key_path, cert.signing_key.serialize_pem()).await?;
 
         let cert_chain = vec![cert.cert.der().clone()];
         let private_key = cert.signing_key.serialize_der().try_into()?;
@@ -508,7 +506,7 @@ impl SslManager {
         Ok(config)
     }
 
-    pub fn get_certificate_info(
+    pub async fn get_certificate_info(
         &self,
     ) -> Result<CertificateInfo, Box<dyn Error + Send + Sync>> {
         let domain = &self.config.server.domain;
@@ -521,7 +519,7 @@ impl SslManager {
         let cert_path =
             Path::new(&self.config.ssl.cert_cache_dir).join(format!("{}.pem", cert_filename));
 
-        if !cert_path.exists() {
+        if !tokio::fs::try_exists(&cert_path).await? {
             return Ok(CertificateInfo {
                 domain: domain.clone(),
                 exists: false,
@@ -531,8 +529,8 @@ impl SslManager {
             });
         }
 
-        let file = File::open(cert_path)?;
-        let mut reader = BufReader::new(file);
+        let pem_bytes = tokio::fs::read(&cert_path).await?;
+        let mut reader = BufReader::new(Cursor::new(pem_bytes));
         match read_one(&mut reader)? {
             Some(Item::X509Certificate(der_vec)) => {
                 let (_, cert) = parse_x509_certificate(&der_vec)
@@ -580,8 +578,8 @@ impl SslManager {
         // Create backup copies
         let has_backup = if cert_path.exists() && key_path.exists() {
             match (
-                fs::copy(&cert_path, &cert_backup_path),
-                fs::copy(&key_path, &key_backup_path),
+                tokio::fs::copy(&cert_path, &cert_backup_path).await,
+                tokio::fs::copy(&key_path, &key_backup_path).await,
             ) {
                 (Ok(_), Ok(_)) => {
                     info!("📦 Created certificate backup for {}", domain);
@@ -598,16 +596,16 @@ impl SslManager {
 
         // Remove existing certificates
         if cert_path.exists() {
-            fs::remove_file(&cert_path)?;
+            tokio::fs::remove_file(&cert_path).await?;
         }
         if key_path.exists() {
-            fs::remove_file(&key_path)?;
+            tokio::fs::remove_file(&key_path).await?;
         }
 
         // Try to generate new certificate
         let renewal_result = match ssl_provider {
             SslProvider::LetsEncrypt => self.setup_letsencrypt().await,
-            SslProvider::SelfSigned => self.generate_self_signed(),
+            SslProvider::SelfSigned => self.generate_self_signed().await,
             _ => Err(format!("Unsupported SSL provider for renewal: {:?}", ssl_provider).into()),
         };
 
@@ -621,13 +619,13 @@ impl SslManager {
                 // Restore from backup if available
                 if has_backup {
                     match (
-                        fs::copy(&cert_backup_path, &cert_path),
-                        fs::copy(&key_backup_path, &key_path),
+                        tokio::fs::copy(&cert_backup_path, &cert_path).await,
+                        tokio::fs::copy(&key_backup_path, &key_path).await,
                     ) {
                         (Ok(_), Ok(_)) => {
                             info!("🔄 Restored certificate from backup after renewal failure");
                             if let Ok(restored_config) =
-                                self.load_certificates(&cert_path, &key_path)
+                                self.load_certificates(&cert_path, &key_path).await
                             {
                                 self.rustls_config = Some(Arc::new(restored_config));
                                 info!("✅ Successfully restored working certificates");

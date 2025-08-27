@@ -111,7 +111,7 @@ pub async fn cleanup_expired_connections(
     let mut to_remove = Vec::new();
 
     {
-        let websockets = active_websockets.read().await;
+        let mut websockets = active_websockets.write().await;
         for (id, connection) in websockets.iter() {
             if connection.is_idle(max_idle_time).await {
                 warn!(
@@ -124,10 +124,7 @@ pub async fn cleanup_expired_connections(
                 to_remove.push(id.clone());
             }
         }
-    }
 
-    {
-        let mut websockets = active_websockets.write().await;
         for id in to_remove {
             if let Some(connection) = websockets.remove(&id) {
                 info!("🔌 WebSocket {}: Cleaned up idle connection (max_idle: {}s)", connection.connection_id, max_idle_time.as_secs());

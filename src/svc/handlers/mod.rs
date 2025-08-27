@@ -13,7 +13,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tower::Service;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Unified service that routes requests to appropriate handlers
 #[derive(Clone)]
@@ -75,11 +75,11 @@ async fn route_request(
     // WebSocket requests
     if is_websocket {
         return if path == context.config.server.tunnel_path {
-            info!("🔌 Tunnel management WebSocket via {}",
+            debug!("🔌 Tunnel management WebSocket via {}",
                   if context.is_https { "HTTPS" } else { "HTTP" });
             websocket::handle_tunnel_management_websocket(req, context).await
         } else {
-            info!("🔌 Tunneled WebSocket via {}",
+            debug!("🔌 Tunneled WebSocket via {}",
                   if context.is_https { "HTTPS" } else { "HTTP" });
             websocket::handle_websocket_upgrade_request(req, context).await
         };
@@ -103,7 +103,7 @@ async fn route_request(
                 .body(boxed_body("Redirecting to HTTPS"))
                 .unwrap())
         } else {
-            info!("🌐 Processing tunneled HTTP request via HTTP (SSL disabled)");
+            debug!("🌐 Processing tunneled HTTP request via HTTP (SSL disabled)");
             tunnel::handle_tunnel_request(req, context).await
         }
     }

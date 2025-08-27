@@ -113,7 +113,7 @@ async fn main() -> Result<(), BoxError> {
                     config.server.domain
                 );
                 let mut manager = ssl_manager.write().await;
-                match manager.get_certificate_info() {
+                match manager.get_certificate_info().await {
                     Ok(info) => {
                         if let Some(days_until_expiry) = info.days_until_expiry {
                             info!(

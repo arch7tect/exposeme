@@ -129,6 +129,8 @@ impl ExposeMeClient {
         // Start cleanup task
         let cleanup_task = self.start_cleanup_task(active_websockets.clone()).await;
 
+        let mut need_reconnect = false;
+
         // Handle incoming WebSocket messages
         while let Some(message) = ws_receiver.next().await {
             match message {
@@ -149,6 +151,7 @@ impl ExposeMeClient {
                 Ok(WsMessage::Text(text)) => {
                     error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
                     error!("❌ Please ensure both client and server are using the same protocol version");
+                    break;
                 }
                 Ok(WsMessage::Close(_)) => {
                     info!("WebSocket connection closed by server");
@@ -156,6 +159,7 @@ impl ExposeMeClient {
                 }
                 Err(e) => {
                     error!("WebSocket error: {}", e);
+                    need_reconnect = true;
                     break;
                 }
                 _ => {}
@@ -178,7 +182,7 @@ impl ExposeMeClient {
         }
 
         info!("Client connection ended");
-        Ok(())
+        if need_reconnect {Ok(())} else {Err("Network error".into())}
     }
 
     async fn handle_message(

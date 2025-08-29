@@ -182,7 +182,7 @@ impl ExposeMeClient {
         }
 
         info!("Client connection ended");
-        if need_reconnect {Ok(())} else {Err("Network error".into())}
+        if need_reconnect {Err("Network error".into())} else {Ok(())}
     }
 
     async fn handle_message(

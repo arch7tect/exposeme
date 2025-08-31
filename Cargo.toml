@@ -1,6 +1,6 @@
 [package]
 name = "exposeme"
-version = "1.4.2"
+version = "1.4.3"
 edition = "2024"
 authors = ["Oleg Orlov <arch7tect@gmail.com>"]
 description = "Secure HTTP tunneling service"
@@ -63,7 +63,7 @@ base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
-x509-parser = "0.17"
+x509-parser = "0.18.0"
 async-trait = "0.1"
 tower = "0.5"
 bytes = "1.10"

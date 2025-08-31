@@ -4,8 +4,9 @@ use exposeme::{initialize_tracing, ServerArgs, ServerConfig, SslManager, SslProv
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{RwLock};
-use tracing::{error, info};
+use tokio::sync::{RwLock, broadcast};
+use tokio::signal;
+use tracing::{error, info, debug};
 use exposeme::svc::{start_http_server, start_https_server, TunnelMap, ActiveRequests, ActiveWebSockets, BoxError};
 
 #[tokio::main]
@@ -51,6 +52,35 @@ async fn main() -> Result<(), BoxError> {
     let active_requests: ActiveRequests = Arc::new(RwLock::new(HashMap::new()));
     let active_websockets: ActiveWebSockets = Arc::new(RwLock::new(HashMap::new()));
 
+    // Shutdown signal handling
+    let (shutdown_tx, _) = broadcast::channel::<()>(1);
+    let shutdown_tx_clone = shutdown_tx.clone();
+    let shutdown_tx_http = shutdown_tx.clone();
+    let shutdown_tx_https = shutdown_tx.clone();
+
+    // Add signal handler task  
+    let signal_handle = tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("Failed to install SIGTERM handler");
+            let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
+                .expect("Failed to install SIGINT handler");
+            
+            tokio::select! {
+                _ = sigterm.recv() => info!("🛑 Received SIGTERM, initiating graceful shutdown..."),
+                _ = sigint.recv() => info!("🛑 Received SIGINT, initiating graceful shutdown..."),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
+            info!("🛑 Received Ctrl+C, initiating graceful shutdown...");
+        }
+        
+        let _ = shutdown_tx_clone.send(());
+    });
+
     // Clone for servers
     let tunnels_http = tunnels.clone();
     let active_requests_http = active_requests.clone();
@@ -68,6 +98,7 @@ async fn main() -> Result<(), BoxError> {
             active_websockets_http,
             challenge_store_http,
             ssl_manager_http,
+            shutdown_tx_http.subscribe(),
         ).await {
             error!("❌ HTTP server error: {}", e);
         }
@@ -95,6 +126,7 @@ async fn main() -> Result<(), BoxError> {
                 active_websockets_https,
                 ssl_manager_https,
                 ssl_config_for_https,
+                shutdown_tx_https.subscribe(),
             ).await {
                 error!("❌ HTTPS server error: {}", e);
             }
@@ -137,31 +169,26 @@ async fn main() -> Result<(), BoxError> {
         None
     };
 
-    // Wait for all servers
-    match https_handle {
-        Some(https_handle) => match renew_handle {
-            Some(renew_handle) => {
-                tokio::select! {
-                    _ = http_handle => info!("HTTP server terminated"),
-                    _ = https_handle => info!("HTTPS server terminated"),
-                    _ = renew_handle => info!("Renewal task terminated"),
-                }
-            }
-            None => {
-                tokio::select! {
-                    _ = http_handle => info!("HTTP server terminated"),
-                    _ = https_handle => info!("HTTPS server terminated"),
-                }
-            }
-        },
-        None => {
-            tokio::select! {
-                _ = http_handle => info!("HTTP server terminated"),
-            }
-        }
+    // Wait for shutdown signal
+    let mut shutdown_rx_main = shutdown_tx.subscribe();
+    shutdown_rx_main.recv().await.ok();
+
+    info!("🔄 Graceful shutdown initiated...");
+
+    // Stop accepting new connections and clean up
+    graceful_shutdown(tunnels, active_requests, active_websockets, Duration::from_secs(30)).await;
+
+    // Cancel remaining tasks
+    signal_handle.abort();
+    http_handle.abort();
+    if let Some(handle) = https_handle {
+        handle.abort();
+    }
+    if let Some(handle) = renew_handle {
+        handle.abort();
     }
 
-    info!("🛑 ExposeME server shutting down");
+    info!("🛑 ExposeME server shutdown complete");
     Ok(())
 }
 
@@ -197,4 +224,59 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
     }
 
     Ok(())
+}
+
+async fn graceful_shutdown(
+    tunnels: TunnelMap,
+    active_requests: ActiveRequests,
+    active_websockets: ActiveWebSockets,
+    timeout: Duration,
+) {
+    let start = tokio::time::Instant::now();
+    
+    // Close all tunnel WebSocket connections
+    {
+        let tunnels_read = tunnels.read().await;
+        let tunnel_count = tunnels_read.len();
+        info!("🔌 Closing {} active tunnels...", tunnel_count);
+        
+        for (tunnel_id, sender) in tunnels_read.iter() {
+            // Send a WebSocketClose message to signal shutdown
+            let close_msg = exposeme::protocol::Message::WebSocketClose {
+                connection_id: tunnel_id.clone(),
+                code: Some(1001), // Going Away
+                reason: Some("Server shutting down".to_string()),
+            };
+            
+            if let Err(e) = sender.send(close_msg) {
+                debug!("🔌 Failed to send close message to tunnel {}: {}", tunnel_id, e);
+            } else {
+                debug!("🔌 Sent close signal to tunnel: {}", tunnel_id);
+            }
+        }
+    }
+    
+    // Wait for active requests to complete
+    loop {
+        let active_count = {
+            let requests = active_requests.read().await;
+            let websockets = active_websockets.read().await;
+            requests.len() + websockets.len()
+        };
+        
+        if active_count == 0 {
+            info!("✅ All active connections completed gracefully");
+            break;
+        }
+        
+        if start.elapsed() >= timeout {
+            info!("⚠️ Graceful shutdown timeout reached, forcing shutdown ({} active connections)", active_count);
+            break;
+        }
+        
+        debug!("⏳ Waiting for {} active connections to complete...", active_count);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    
+    info!("🛑 Graceful shutdown complete");
 }

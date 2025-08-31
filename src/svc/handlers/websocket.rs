@@ -370,19 +370,31 @@ pub async fn send_to_tunnel(
     // Get tunnel_id from connection
     let tunnel_id = {
         let websockets = context.active_websockets.read().await;
-        websockets
-            .get(connection_id)
-            .map(|conn| conn.tunnel_id.clone())
-            .ok_or("Connection not found")?
+        match websockets.get(connection_id) {
+            Some(conn) => conn.tunnel_id.clone(),
+            None => {
+                // Connection already cleaned up, this is normal during shutdown
+                debug!("Connection {} already cleaned up, ignoring message", connection_id);
+                return Ok(());
+            }
+        }
     };
 
     // Send to correct tunnel
     {
         let tunnels_guard = context.tunnels.read().await;
-        let tunnel_sender = tunnels_guard.get(&tunnel_id).ok_or("Tunnel not found")?;
-        tunnel_sender
-            .send(message)
-            .map_err(|e| format!("Failed to send: {}", e))?;
+        match tunnels_guard.get(&tunnel_id) {
+            Some(tunnel_sender) => {
+                tunnel_sender
+                    .send(message)
+                    .map_err(|e| format!("Failed to send: {}", e))?;
+            }
+            None => {
+                // Tunnel disconnected, connection cleanup in progress
+                debug!("Tunnel {} disconnected, ignoring message for connection {}", tunnel_id, connection_id);
+                return Ok(());
+            }
+        }
     }
 
     Ok(())

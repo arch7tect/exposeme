@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, RwLock, broadcast};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tokio_tungstenite::Connector;
 use rustls::ClientConfig as RustlsClientConfig;
@@ -37,7 +37,7 @@ impl ExposeMeClient {
         &self.config
     }
 
-    pub async fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&mut self, mut shutdown_rx: broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
         // Connect to WebSocket server
         let (ws_stream, _) = if self.config.client.insecure && self.config.client.server_url.starts_with("wss://") {
             warn!("⚠️  Using insecure connection (skipping TLS verification)");
@@ -96,8 +96,12 @@ impl ExposeMeClient {
             self.config.clone(),
         );
 
+        // Split WebSocket sender for shared access
+        let ws_sender_shared = Arc::new(tokio::sync::Mutex::new(ws_sender));
+        let ws_sender_for_task = ws_sender_shared.clone();
+
         // Spawn task to handle outgoing messages to server
-        tokio::spawn(async move {
+        let _outgoing_handle = tokio::spawn(async move {
             debug!("🔍 Starting outgoing message handler task");
             let mut message_count = 0;
 
@@ -107,7 +111,8 @@ impl ExposeMeClient {
                 match message.to_bincode() {
                     Ok(bytes) => {
                         trace!("🔍 Sending message #{} ({} bytes)", message_count, bytes.len());
-                        match ws_sender.send(WsMessage::Binary(bytes.into())).await {
+                        let mut sender = ws_sender_for_task.lock().await;
+                        match sender.send(WsMessage::Binary(bytes.into())).await {
                             Ok(_) => {
                                 trace!("✅ Message #{} sent successfully", message_count);
                             }
@@ -127,58 +132,152 @@ impl ExposeMeClient {
         });
 
         // Start cleanup task
-        let cleanup_task = self.start_cleanup_task(active_websockets.clone()).await;
+        let mut cleanup_task = self.start_cleanup_task(active_websockets.clone()).await;
 
         let mut need_reconnect = false;
 
         // Handle incoming WebSocket messages
-        while let Some(message) = ws_receiver.next().await {
-            match message {
-                Ok(WsMessage::Binary(bytes)) => {
-                    debug!("📨 Raw WebSocket message received: {} bytes", bytes.len());
-                    trace!("Bytes: {}", bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<String>>().join(" "));
-                    match Message::from_bincode(&bytes) {
-                        Ok(msg) => {
-                            if let Err(e) = self.handle_message(msg, &http_handler, &websocket_handler).await {
-                                error!("Message handling error: {}", e);
+        loop {
+            tokio::select! {
+                // Handle shutdown signal
+                _ = shutdown_rx.recv() => {
+                    info!("🔄 Client shutdown requested, closing WebSocket connection...");
+                    
+                    // Send close message to server
+                    let close_msg = Message::WebSocketClose {
+                        connection_id: self.config.client.tunnel_id.clone(),
+                        code: Some(1000), // Normal Closure
+                        reason: Some("Client shutting down".to_string()),
+                    };
+                    
+                    if let Ok(bytes) = close_msg.to_bincode() {
+                        let mut sender = ws_sender_shared.lock().await;
+                        let _ = sender.send(WsMessage::Binary(bytes.into())).await;
+                        // Send WebSocket close frame
+                        let _ = sender.close().await;
+                    }
+                    
+                    break;
+                }
+                
+                // Handle WebSocket messages
+                message = ws_receiver.next() => {
+                    match message {
+                        Some(Ok(WsMessage::Binary(bytes))) => {
+                            debug!("📨 Raw WebSocket message received: {} bytes", bytes.len());
+                            trace!("Bytes: {}", bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<String>>().join(" "));
+                            match Message::from_bincode(&bytes) {
+                                Ok(msg) => {
+                                    if let Err(e) = self.handle_message(msg, &http_handler, &websocket_handler).await {
+                                        error!("Message handling error: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("❌ Failed to parse WebSocket message: {}", e);
+                                }
                             }
                         }
-                        Err(e) => {
-                            error!("❌ Failed to parse WebSocket message: {}", e);
+                        Some(Ok(WsMessage::Text(text))) => {
+                            error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
+                            error!("❌ Please ensure both client and server are using the same protocol version");
+                            break;
                         }
+                        Some(Ok(WsMessage::Close(_))) => {
+                            info!("WebSocket connection closed by server");
+                            break;
+                        }
+                        Some(Err(e)) => {
+                            match e {
+                                tokio_tungstenite::tungstenite::Error::Io(io_err) => {
+                                    match io_err.kind() {
+                                        std::io::ErrorKind::UnexpectedEof => {
+                                            info!("WebSocket connection closed by peer (unexpected EOF)");
+                                        }
+                                        std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset => {
+                                            info!("WebSocket connection closed by peer");
+                                        }
+                                        _ => {
+                                            error!("WebSocket IO error: {}", io_err);
+                                            need_reconnect = true;
+                                        }
+                                    }
+                                }
+                                tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
+                                    info!("WebSocket connection closed");
+                                }
+                                _ => {
+                                    error!("WebSocket error: {}", e);
+                                    need_reconnect = true;
+                                }
+                            }
+                            break;
+                        }
+                        None => {
+                            info!("WebSocket stream ended");
+                            break;
+                        }
+                        _ => {}
                     }
                 }
-                Ok(WsMessage::Text(text)) => {
-                    error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
-                    error!("❌ Please ensure both client and server are using the same protocol version");
-                    break;
-                }
-                Ok(WsMessage::Close(_)) => {
-                    info!("WebSocket connection closed by server");
-                    break;
-                }
-                Err(e) => {
-                    error!("WebSocket error: {}", e);
-                    need_reconnect = true;
-                    break;
-                }
-                _ => {}
             }
         }
 
-        // Cleanup on client disconnect
-        cleanup_task.abort();
-
-        // Clean up all WebSocket connections on shutdown
-        {
-            let websockets = active_websockets.read().await;
-            let connection_count = websockets.len();
-            if connection_count > 0 {
-                debug!("🔌 Cleaning up {} WebSocket connections on shutdown", connection_count);
-                for (id, connection) in websockets.iter() {
-                    info!("🔌 WebSocket {}: Shutting down {} due to client disconnect", connection.connection_id, id);
-                }
+        // Graceful cleanup on client disconnect with timeout
+        info!("🔄 Starting graceful cleanup...");
+        
+        let cleanup_timeout = Duration::from_secs(5);
+        let cleanup_start = tokio::time::Instant::now();
+        
+        // Give cleanup task a chance to finish, then abort it
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(500)) => {
+                debug!("Cleanup grace period completed, aborting task");
+                cleanup_task.abort();
             }
+            result = &mut cleanup_task => {
+                debug!("Cleanup task completed naturally: {:?}", result);
+            }
+        }
+
+        // Clean up all WebSocket connections on shutdown with timeout
+        let cleanup_result = tokio::select! {
+            _ = tokio::time::sleep(cleanup_timeout) => {
+                warn!("⚠️ Cleanup timeout reached after {:?}, forcing shutdown", cleanup_timeout);
+                false
+            }
+            _ = async {
+                let mut websockets = active_websockets.write().await;
+                let connection_count = websockets.len();
+                if connection_count > 0 {
+                    info!("🔌 Cleaning up {} WebSocket connections on shutdown", connection_count);
+                    
+                    // Close all active WebSocket connections gracefully
+                    for (_id, connection) in websockets.iter() {
+                        info!("🔌 Closing WebSocket connection: {}", connection.connection_id);
+                        
+                        // Send close message to server through tunnel
+                        let close_msg = Message::WebSocketClose {
+                            connection_id: connection.connection_id.clone(),
+                            code: Some(1000), // Normal Closure
+                            reason: Some("Client shutting down".to_string()),
+                        };
+                        
+                        let _ = connection.to_server_tx.send(close_msg);
+                    }
+                    
+                    // Clear all connections
+                    websockets.clear();
+                }
+            } => {
+                true
+            }
+        };
+        
+        let cleanup_elapsed = cleanup_start.elapsed();
+        if cleanup_result {
+            info!("✅ Graceful cleanup completed in {:?}", cleanup_elapsed);
+        } else {
+            info!("⚠️ Forced cleanup after {:?}", cleanup_elapsed);
         }
 
         info!("Client connection ended");

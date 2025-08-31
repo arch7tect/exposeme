@@ -1,6 +1,7 @@
 // src/bin/client.rs - Main entry point
 use clap::Parser;
 use tokio::signal;
+use tokio::sync::broadcast;
 use tracing::{error, info};
 use std::time::Duration;
 
@@ -14,11 +15,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .install_default()
         .expect("Failed to install ring CryptoProvider");
 
-    // Handle Ctrl+C gracefully
-    tokio::spawn(async {
-        signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
-        info!("🛑 Received Ctrl+C, shutting down...");
-        std::process::exit(0);
+    // Shutdown signal handling
+    let (shutdown_tx, _) = broadcast::channel::<()>(1);
+    let shutdown_tx_clone = shutdown_tx.clone();
+
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("Failed to install SIGTERM handler");
+            let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
+                .expect("Failed to install SIGINT handler");
+            
+            tokio::select! {
+                _ = sigterm.recv() => info!("🛑 Received SIGTERM, initiating graceful shutdown..."),
+                _ = sigint.recv() => info!("🛑 Received SIGINT, initiating graceful shutdown..."),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
+            info!("🛑 Received Ctrl+C, initiating graceful shutdown...");
+        }
+        
+        let _ = shutdown_tx_clone.send(());
     });
 
     // Parse CLI arguments
@@ -44,25 +64,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = ExposeMeClient::new(config);
 
     // Main client loop with reconnection
+    let mut shutdown_rx = shutdown_tx.subscribe();
     loop {
-        match client.run().await {
-            Ok(_) => {
-                info!("Client disconnected normally");
+        tokio::select! {
+            // Handle shutdown signal
+            _ = shutdown_rx.recv() => {
+                info!("🔄 Graceful shutdown initiated...");
                 break;
             }
-            Err(e) => {
-                error!("Client error: {}", e);
+            // Run client
+            result = client.run(shutdown_tx.subscribe()) => {
+                match result {
+                    Ok(_) => {
+                        info!("Client disconnected normally");
+                        break;
+                    }
+                    Err(e) => {
+                        error!("Client error: {}", e);
 
-                if client.config().client.auto_reconnect {
-                    info!(
-                        "Reconnecting in {} seconds...",
-                        client.config().client.reconnect_delay_secs
-                    );
-                    tokio::time::sleep(Duration::from_secs(client.config().client.reconnect_delay_secs))
-                        .await;
-                    continue;
-                } else {
-                    break;
+                        if client.config().client.auto_reconnect {
+                            info!(
+                                "Reconnecting in {} seconds...",
+                                client.config().client.reconnect_delay_secs
+                            );
+                            tokio::time::sleep(Duration::from_secs(client.config().client.reconnect_delay_secs))
+                                .await;
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
                 }
             }
         }

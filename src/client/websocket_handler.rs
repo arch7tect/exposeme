@@ -361,6 +361,7 @@ async fn handle_websocket_close(
             connection.connection_id, code, reason, connection.status_summary().await
         );
     } else {
-        warn!("Attempted to close unknown WebSocket connection: {}", connection_id);
+        // Connection already cleaned up, this is normal during shutdown
+        debug!("Connection {} already cleaned up, ignoring close message", connection_id);
     }
 }

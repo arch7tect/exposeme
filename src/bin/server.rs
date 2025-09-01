@@ -175,9 +175,6 @@ async fn main() -> Result<(), BoxError> {
 
     info!("🔄 Graceful shutdown initiated...");
 
-    // Stop accepting new connections and clean up
-    graceful_shutdown(tunnels, active_requests, active_websockets, Duration::from_secs(30)).await;
-
     // Cancel remaining tasks
     signal_handle.abort();
     http_handle.abort();
@@ -187,6 +184,9 @@ async fn main() -> Result<(), BoxError> {
     if let Some(handle) = renew_handle {
         handle.abort();
     }
+
+    // Clean up
+    graceful_shutdown(tunnels, active_requests, active_websockets, Duration::from_secs(30)).await;
 
     info!("🛑 ExposeME server shutdown complete");
     Ok(())

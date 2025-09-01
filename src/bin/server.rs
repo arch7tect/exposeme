@@ -236,24 +236,10 @@ async fn graceful_shutdown(
     
     // Close all tunnel WebSocket connections
     {
-        let tunnels_read = tunnels.read().await;
-        let tunnel_count = tunnels_read.len();
-        info!("🔌 Closing {} active tunnels...", tunnel_count);
-        
-        for (tunnel_id, sender) in tunnels_read.iter() {
-            // Send a WebSocketClose message to signal shutdown
-            let close_msg = exposeme::protocol::Message::WebSocketClose {
-                connection_id: tunnel_id.clone(),
-                code: Some(1001), // Going Away
-                reason: Some("Server shutting down".to_string()),
-            };
-            
-            if let Err(e) = sender.send(close_msg) {
-                debug!("🔌 Failed to send close message to tunnel {}: {}", tunnel_id, e);
-            } else {
-                debug!("🔌 Sent close signal to tunnel: {}", tunnel_id);
-            }
-        }
+        let mut tunnels = tunnels.write().await;
+        let tunnel_count = tunnels.len();
+        info!("🔌 Dropping {} tunnel connections...", tunnel_count);
+        tunnels.clear(); // This drops all UnboundedSenders
     }
     
     // Wait for active requests to complete

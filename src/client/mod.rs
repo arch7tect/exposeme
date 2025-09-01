@@ -143,18 +143,9 @@ impl ExposeMeClient {
                 _ = shutdown_rx.recv() => {
                     info!("🔄 Client shutdown requested, closing WebSocket connection...");
                     
-                    // Send close message to server
-                    let close_msg = Message::WebSocketClose {
-                        connection_id: self.config.client.tunnel_id.clone(),
-                        code: Some(1000), // Normal Closure
-                        reason: Some("Client shutting down".to_string()),
-                    };
-                    
-                    if let Ok(bytes) = close_msg.to_bincode() {
+                    {
                         let mut sender = ws_sender_shared.lock().await;
-                        let _ = sender.send(WsMessage::Binary(bytes.into())).await;
-                        // Send WebSocket close frame
-                        let _ = sender.close().await;
+                        let _ = sender.close().await;  // Send WebSocket close frame directly
                     }
                     
                     break;

@@ -185,7 +185,7 @@ impl ExposeMeClient {
                                             info!("WebSocket connection closed by peer (EOF)");
                                         }
                                         std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset => {
-                                            info!("WebSocket connection closed by peer (RESET)");
+                                            info!("WebSocket connection closed by peer (ABORT|RESET)");
                                         }
                                         _ => {
                                             error!("WebSocket IO error: {}", io_err);

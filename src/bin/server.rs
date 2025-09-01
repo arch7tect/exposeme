@@ -241,6 +241,7 @@ async fn graceful_shutdown(
         info!("🔌 Dropping {} tunnel connections...", tunnel_count);
         tunnels.clear(); // This drops all UnboundedSenders
     }
+    tokio::time::sleep(Duration::from_millis(500)).await;
     
     // Wait for active requests to complete
     loop {

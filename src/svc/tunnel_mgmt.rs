@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMessage};
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tracing::{debug, error, info, trace, warn};
 
 /// Handle a tunnel management connection from an exposeme-client
@@ -45,6 +46,15 @@ pub async fn handle_tunnel_management_connection(
                 }
             }
         }
+
+        info!("📤 Sending WebSocket close frame to client");
+        let close_frame = tokio_tungstenite::tungstenite::protocol::CloseFrame {
+            code: CloseCode::Away,
+            reason: "Server shutting down".into(),
+        };
+        let _ = ws_sender.send(WsMessage::Close(Some(close_frame))).await;
+        let _ = ws_sender.close().await;
+        info!("✅ WebSocket closed gracefully");
     });
 
     let mut tunnel_id: Option<String> = None;

@@ -7,6 +7,7 @@ use tokio::sync::{mpsc, RwLock, broadcast};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tokio_tungstenite::Connector;
 use rustls::ClientConfig as RustlsClientConfig;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{ClientConfig, Message};
@@ -173,8 +174,19 @@ impl ExposeMeClient {
                             error!("❌ Please ensure both client and server are using the same protocol version");
                             break;
                         }
-                        Some(Ok(WsMessage::Close(_))) => {
-                            info!("WebSocket connection closed by server");
+                        Some(Ok(WsMessage::Close(frame))) => {
+                            if let Some(frame) = frame {
+                                info!("WebSocket closed by server: code={}, reason={}", frame.code, frame.reason);
+
+                                if frame.code == CloseCode::Away {
+                                    info!("Server shutdown detected - exiting without reconnection");
+                                } else {
+                                    need_reconnect = true;
+                                }
+                            } else {
+                                info!("WebSocket closed by server");
+                                need_reconnect = true;
+                            }
                             break;
                         }
                         Some(Err(e)) => {
@@ -189,9 +201,9 @@ impl ExposeMeClient {
                                         }
                                         _ => {
                                             error!("WebSocket IO error: {}", io_err);
-                                            need_reconnect = true;
                                         }
                                     }
+                                    need_reconnect = true;
                                 }
                                 tokio_tungstenite::tungstenite::Error::ConnectionClosed => {
                                     info!("WebSocket connection closed");

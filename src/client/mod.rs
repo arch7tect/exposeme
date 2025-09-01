@@ -182,10 +182,10 @@ impl ExposeMeClient {
                                 tokio_tungstenite::tungstenite::Error::Io(io_err) => {
                                     match io_err.kind() {
                                         std::io::ErrorKind::UnexpectedEof => {
-                                            info!("WebSocket connection closed by peer (unexpected EOF)");
+                                            info!("WebSocket connection closed by peer (EOF)");
                                         }
                                         std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset => {
-                                            info!("WebSocket connection closed by peer");
+                                            info!("WebSocket connection closed by peer (RESET)");
                                         }
                                         _ => {
                                             error!("WebSocket IO error: {}", io_err);

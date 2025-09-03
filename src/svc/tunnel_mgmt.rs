@@ -7,6 +7,8 @@ use futures_util::{SinkExt, StreamExt};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use futures_util::stream::{SplitSink, SplitStream};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMessage};
@@ -23,15 +25,28 @@ pub async fn handle_tunnel_management_connection(
         TokioIo::new(upgraded),
         Role::Server,
         Some(WebSocketConfig::default()),
-    )
-        .await;
+    ).await;
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    // Create channel for outgoing messages
-    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+    debug!("🔍 Waiting for authentication message...");
 
-    // Spawn task to handle outgoing messages
+    let tunnel_id = match wait_for_authentication(&mut ws_receiver, &mut ws_sender, &context).await? {
+        Some(info) => info,
+        None => {
+            info!("❌ Authentication failed or connection closed");
+            return Ok(());
+        }
+    };
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+    // Register tunnel
+    {
+        let mut tunnels_guard = context.tunnels.write().await;
+        tunnels_guard.insert(tunnel_id.clone(), tx);
+    }
+    debug!("✅ Authentication successful for tunnel '{}'", tunnel_id);
+
     let outgoing_task = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
             match message.to_bincode() {
@@ -57,10 +72,7 @@ pub async fn handle_tunnel_management_connection(
         info!("✅ WebSocket closed gracefully");
     });
 
-    let mut tunnel_id: Option<String> = None;
-    debug!("🔍 Server: Starting WebSocket message processing loop");
     let mut message_count = 0;
-
     while let Some(message) = ws_receiver.next().await {
         message_count += 1;
         trace!("🔍 Server: Received WebSocket message #{}", message_count);
@@ -74,24 +86,6 @@ pub async fn handle_tunnel_management_connection(
                         trace!("🔍 Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
 
                         match msg {
-                            Message::Auth {
-                                token,
-                                tunnel_id: requested_tunnel_id,
-                                version,
-                            } => {
-                                if let Err(e) = handle_auth_message(
-                                    token,
-                                    requested_tunnel_id,
-                                    version,
-                                    &tx,
-                                    &context,
-                                    &mut tunnel_id,
-                                ).await {
-                                    error!("Auth handling failed: {}", e);
-                                    break;
-                                }
-                            }
-
                             Message::HttpResponseStart {
                                 id,
                                 status,
@@ -162,91 +156,116 @@ pub async fn handle_tunnel_management_connection(
     }
 
     // Clean up tunnel on disconnect
-    if let Some(tunnel_id) = tunnel_id {
-        shutdown_tunnel(context, tunnel_id).await;
-    }
-
+    shutdown_tunnel(context, tunnel_id).await;
     outgoing_task.abort();
+
     Ok(())
 }
 
-/// Handle authentication message from tunnel client
-async fn handle_auth_message(
-    token: String,
-    requested_tunnel_id: String,
-    version: String,
-    tx: &mpsc::UnboundedSender<Message>,
+async fn wait_for_authentication(
+    ws_receiver: &mut  SplitStream<WebSocketStream<TokioIo<Upgraded>>>,
+    ws_sender: &mut SplitSink<WebSocketStream<TokioIo<Upgraded>>, WsMessage>,
     context: &ServiceContext,
-    tunnel_id: &mut Option<String>,
-) -> Result<(), BoxError> {
-    info!("Auth request for tunnel '{}'", requested_tunnel_id);
+) -> Result<Option<String>, BoxError> {
 
-    // Validate tunnel ID
-    if let Err(e) = context.config.validate_tunnel_id(&requested_tunnel_id) {
-        let error_msg = Message::AuthError {
-            error: "invalid_tunnel_id".to_string(),
-            message: format!("Invalid tunnel ID: {}", e),
-        };
-        tx.send(error_msg)?;
-        return Ok(());
-    }
+    // Wait for auth message with timeout
+    let auth_timeout = Duration::from_secs(30);
 
-    // Token validation
-    if !context.config.auth.tokens.contains(&token) {
-        let error_msg = Message::AuthError {
-            error: "invalid_token".to_string(),
-            message: "Invalid authentication token".to_string(),
-        };
-        tx.send(error_msg)?;
-        return Ok(());
-    }
+    match tokio::time::timeout(auth_timeout, ws_receiver.next()).await {
+        Ok(Some(Ok(WsMessage::Binary(bytes)))) => {
+            match Message::from_bincode(&bytes) {
+                Ok(Message::Auth { token, tunnel_id, version }) => {
+                    info!("Auth request for tunnel '{}'", tunnel_id);
 
-    // Check if tunnel_id is already taken
-    {
-        let tunnels_guard = context.tunnels.read().await;
-        if tunnels_guard.contains_key(&requested_tunnel_id) {
-            let error_msg = Message::AuthError {
-                error: "tunnel_id_taken".to_string(),
-                message: format!(
-                    "Tunnel ID '{}' is already in use",
-                    requested_tunnel_id
-                ),
-            };
-            tx.send(error_msg)?;
-            return Ok(());
+                    // Validate tunnel ID
+                    if let Err(e) = context.config.validate_tunnel_id(&tunnel_id) {
+                        let error_msg = WsMessage::Binary(Message::AuthError {
+                            error: "invalid_tunnel_id".to_string(),
+                            message: format!("Invalid tunnel ID: {}", e),
+                        }.to_bincode()?.into());
+                        ws_sender.send(error_msg).await?;
+                        return Ok(None);
+                    }
+
+                    // Token validation
+                    if !context.config.auth.tokens.contains(&token) {
+                        let error_msg = WsMessage::Binary(Message::AuthError {
+                            error: "invalid_token".to_string(),
+                            message: "Invalid authentication token".to_string(),
+                        }.to_bincode()?.into());
+                        ws_sender.send(error_msg).await?;
+                        return Ok(None);
+                    }
+
+                    // Check if tunnel_id is already taken
+                    {
+                        let tunnels_guard = context.tunnels.read().await;
+                        if tunnels_guard.contains_key(&tunnel_id) {
+                            let error_msg = WsMessage::Binary(Message::AuthError {
+                                error: "tunnel_id_taken".to_string(),
+                                message: format!(
+                                    "Tunnel ID '{}' is already in use",
+                                    tunnel_id
+                                ),
+                            }.to_bincode()?.into());
+                            ws_sender.send(error_msg).await?;
+                            return Ok(None);
+                        }
+                    }
+
+                    let our_version = env!("CARGO_PKG_VERSION").to_string();
+                    let compatible = our_version.split('.').zip(version.split('.')).take(2).all(|(a, b)| a == b);
+                    if !compatible {
+                        let error_msg = WsMessage::Binary(Message::AuthError {
+                            error: "incompatible_versions".to_string(),
+                            message: format!(
+                                "Client version '{}' is incompatible with server version '{}'",
+                                version, our_version,
+                            ),
+                        }.to_bincode()?.into());
+                        ws_sender.send(error_msg).await?;
+                        return Ok(None);
+                    }
+
+                    let success_msg = WsMessage::Binary(Message::AuthSuccess {
+                        tunnel_id: tunnel_id.clone(),
+                        public_url: context.config.get_public_url(&tunnel_id),
+                    }.to_bincode()?.into());
+                    ws_sender.send(success_msg).await?;
+
+                    Ok(Some(tunnel_id))
+                }
+                Ok(_) => {
+                    warn!("Expected authentication message, got different message type");
+                    Ok(None)
+                }
+                Err(e) => {
+                    error!("Failed to parse authentication message: {}", e);
+                    Ok(None)
+                }
+            }
+        }
+        Ok(Some(Ok(WsMessage::Close(_)))) => {
+            info!("WebSocket closed before authentication");
+            Ok(None)
+        }
+        Ok(Some(Err(e))) => {
+            error!("WebSocket error during authentication: {}", e);
+            Ok(None)
+        }
+        Ok(None) => {
+            info!("WebSocket stream ended before authentication");
+            Ok(None)
+        }
+        Err(_) => {
+            warn!("Authentication timeout after {}s", auth_timeout.as_secs());
+            Ok(None)
+        }
+        _ => {
+            warn!("Unexpected message type during authentication");
+            Ok(None)
         }
     }
-
-    let our_version = env!("CARGO_PKG_VERSION").to_string();
-    let compatible = our_version.split('.').zip(version.split('.')).take(2).all(|(a, b)| a == b);
-    if !compatible {
-        let error_msg = Message::AuthError {
-            error: "incompatible_versions".to_string(),
-            message: format!(
-                "Client version '{}' is incompatible with server version '{}'",
-                version, our_version,
-            ),
-        };
-        tx.send(error_msg)?;
-        return Ok(());
-    }
-
-    // Register tunnel
-    {
-        let mut tunnels_guard = context.tunnels.write().await;
-        tunnels_guard.insert(requested_tunnel_id.clone(), tx.clone());
-    }
-
-    *tunnel_id = Some(requested_tunnel_id.clone());
-
-    let success_msg = Message::AuthSuccess {
-        tunnel_id: requested_tunnel_id.clone(),
-        public_url: context.config.get_public_url(&requested_tunnel_id),
-    };
-
-    tx.send(success_msg)?;
-    info!("Tunnel '{}' registered successfully", requested_tunnel_id);
-    Ok(())
 }
 
 /// Handle HTTP response start message

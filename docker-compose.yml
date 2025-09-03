@@ -41,6 +41,10 @@ services:
       # Other
       - EXPOSEME_REQUEST_TIMEOUT=${EXPOSEME_REQUEST_TIMEOUT:-120}
 
+    stop_grace_period: 60s
+    init: true
+    restart: unless-stopped
+
     # Security settings
     security_opt:
       - no-new-privileges:true

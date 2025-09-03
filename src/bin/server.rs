@@ -4,8 +4,10 @@ use exposeme::{initialize_tracing, ServerArgs, ServerConfig, SslManager, SslProv
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use futures_util::SinkExt;
 use tokio::sync::{RwLock, broadcast};
 use tokio::signal;
+use tokio_tungstenite::{tungstenite::Message as WsMessage};
 use tracing::{error, info, debug};
 use exposeme::svc::{start_http_server, start_https_server, TunnelMap, ActiveRequests, ActiveWebSockets, BoxError};
 
@@ -175,6 +177,9 @@ async fn main() -> Result<(), BoxError> {
 
     info!("🔄 Graceful shutdown initiated...");
 
+    // Clean up
+    graceful_shutdown(tunnels, active_requests, active_websockets, Duration::from_secs(30)).await;
+
     // Cancel remaining tasks
     signal_handle.abort();
     http_handle.abort();
@@ -184,9 +189,6 @@ async fn main() -> Result<(), BoxError> {
     if let Some(handle) = renew_handle {
         handle.abort();
     }
-
-    // Clean up
-    graceful_shutdown(tunnels, active_requests, active_websockets, Duration::from_secs(30)).await;
 
     info!("🛑 ExposeME server shutdown complete");
     Ok(())
@@ -232,8 +234,7 @@ async fn graceful_shutdown(
     active_websockets: ActiveWebSockets,
     timeout: Duration,
 ) {
-    let start = tokio::time::Instant::now();
-    
+    tokio::time::sleep(Duration::from_millis(500)).await;
     // Close all tunnel WebSocket connections
     {
         let mut tunnels = tunnels.write().await;
@@ -241,9 +242,35 @@ async fn graceful_shutdown(
         info!("🔌 Dropping {} tunnel connections...", tunnel_count);
         tunnels.clear(); // This drops all UnboundedSenders
     }
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+
+    // Force close all WebSocket connections
+    {
+        let websockets = active_websockets.write().await;
+        let ws_count = websockets.len();
+
+        if ws_count > 0 {
+            info!("🔌 Force closing {} WebSocket connections...", ws_count);
+
+            for (_connection_id, connection) in websockets.iter() {
+                if let Some(ws_tx) = &connection.ws_tx {
+                    let close_msg = WsMessage::Close(Some(
+                        tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                            code: 1001u16.into(), // Going Away
+                            reason: "Server shutting down".into(),
+                        },
+                    ));
+                    let _ = ws_tx.send(close_msg);
+                }
+            }
+            info!("✅ Close frames sent to all WebSocket connections");
+        }
+    }
     tokio::time::sleep(Duration::from_millis(500)).await;
-    
+
     // Wait for active requests to complete
+    let start = tokio::time::Instant::now();
     loop {
         let active_count = {
             let requests = active_requests.read().await;

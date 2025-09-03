@@ -1,5 +1,6 @@
 // src/client/mod.rs - Main client implementation
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
@@ -79,6 +80,10 @@ impl ExposeMeClient {
         let active_websockets: ActiveWebSockets = Arc::new(RwLock::new(std::collections::HashMap::new()));
         let outgoing_requests: OutgoingRequests = Arc::new(RwLock::new(std::collections::HashMap::new()));
 
+        // Create shared state for coordinated shutdown
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+        let outgoing_shutdown_flag = shutdown_flag.clone();
+
         // Create channel for sending messages back to server
         let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<Message>();
 
@@ -113,13 +118,34 @@ impl ExposeMeClient {
                     Ok(bytes) => {
                         trace!("🔍 Sending message #{} ({} bytes)", message_count, bytes.len());
                         let mut sender = ws_sender_for_task.lock().await;
+                        if outgoing_shutdown_flag.load(Ordering::Relaxed) {
+                            debug!("🔄 Shutdown flag set, stopping outgoing message handler");
+                            break;
+                        }
                         match sender.send(WsMessage::Binary(bytes.into())).await {
                             Ok(_) => {
                                 trace!("✅ Message #{} sent successfully", message_count);
                             }
                             Err(e) => {
-                                error!("❌ FAILED to send message #{}: {}", message_count, e);
-                                break;
+                                match e {
+                                    tokio_tungstenite::tungstenite::Error::ConnectionClosed |
+                                    tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
+                                        debug!("🔄 WebSocket closed, stopping outgoing messages");
+                                        break;
+                                    }
+                                    tokio_tungstenite::tungstenite::Error::Protocol(_) => {
+                                        debug!("🔄 WebSocket protocol error, stopping outgoing messages");
+                                        break;
+                                    }
+                                    tokio_tungstenite::tungstenite::Error::Io(_) => {
+                                        debug!("🔄 IO error, stopping outgoing messages");
+                                        break;
+                                    }
+                                    _ => {
+                                        error!("❌ Failed to send message: {}", e);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -143,10 +169,10 @@ impl ExposeMeClient {
                 // Handle shutdown signal
                 _ = shutdown_rx.recv() => {
                     info!("🔄 Client shutdown requested, closing WebSocket connection...");
-                    
+                    shutdown_flag.store(true, Ordering::Relaxed);
                     {
                         let mut sender = ws_sender_shared.lock().await;
-                        let _ = sender.close().await;  // Send WebSocket close frame directly
+                        let _ = sender.close().await;
                     }
                     
                     break;
@@ -180,9 +206,20 @@ impl ExposeMeClient {
 
                                 if frame.code == CloseCode::Away {
                                     info!("Server shutdown detected - exiting without reconnection");
+                                    shutdown_flag.store(true, Ordering::Relaxed);
+                                    drop(to_server_tx);
                                 } else {
                                     need_reconnect = true;
                                 }
+                                let mut sender = ws_sender_shared.lock().await;
+                                let close_response = WsMessage::Close(Some(
+                                    tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                                        code: frame.code,
+                                        reason: "Acknowledged".into(),
+                                    }
+                                ));
+                                let _ = sender.send(close_response).await;
+                                let _ = sender.close().await;
                             } else {
                                 info!("WebSocket closed by server");
                                 need_reconnect = true;
@@ -217,6 +254,7 @@ impl ExposeMeClient {
                         }
                         None => {
                             info!("WebSocket stream ended");
+                            shutdown_flag.store(true, Ordering::Relaxed);
                             break;
                         }
                         _ => {}
@@ -284,7 +322,11 @@ impl ExposeMeClient {
         }
 
         info!("Client connection ended");
-        if need_reconnect {Err("Network error".into())} else {Ok(())}
+        if need_reconnect && !shutdown_flag.load(Ordering::Relaxed) {
+            Err("Network error".into())
+        } else {
+            Ok(())
+        }
     }
 
     async fn handle_message(

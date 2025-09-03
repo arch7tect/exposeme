@@ -100,6 +100,7 @@ impl ExposeMeClient {
             to_server_tx.clone(),
             active_websockets.clone(),
             self.config.clone(),
+            shutdown_flag.clone(),
         );
 
         // Split WebSocket sender for shared access

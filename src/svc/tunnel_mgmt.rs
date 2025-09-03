@@ -107,7 +107,7 @@ pub async fn handle_tunnel_management_connection(
                                 status,
                                 headers: _,
                             } => {
-                                info!(
+                                debug!(
                                     "📡 WebSocket upgrade response: {} (status: {})",
                                     connection_id, status
                                 );

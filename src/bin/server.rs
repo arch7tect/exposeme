@@ -4,7 +4,6 @@ use exposeme::{initialize_tracing, ServerArgs, ServerConfig, SslManager, SslProv
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use futures_util::SinkExt;
 use tokio::sync::{RwLock, broadcast};
 use tokio::signal;
 use tokio_tungstenite::{tungstenite::Message as WsMessage};

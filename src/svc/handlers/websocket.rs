@@ -192,10 +192,7 @@ async fn handle_websocket_proxy_connection(
     connection_id: String,
     context: ServiceContext,
 ) -> Result<(), BoxError> {
-    info!(
-        "🔌 Starting WebSocket proxy for connection {}",
-        connection_id
-    );
+    debug!("🔌 Starting WebSocket proxy for connection {}", connection_id);
 
     // Create channels for communication with tunnel client
     let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsMessage>();

@@ -1,5 +1,7 @@
 // src/client/websocket_handler.rs - WebSocket upgrade and data handling
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{mpsc};
@@ -15,6 +17,7 @@ pub struct WebSocketHandler {
     to_server_tx: mpsc::UnboundedSender<Message>,
     active_websockets: ActiveWebSockets,
     config: ClientConfig,
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl WebSocketHandler {
@@ -23,12 +26,14 @@ impl WebSocketHandler {
         to_server_tx: mpsc::UnboundedSender<Message>,
         active_websockets: ActiveWebSockets,
         config: ClientConfig,
+        shutdown_flag: Arc<AtomicBool>,
     ) -> Self {
         Self {
             local_target,
             to_server_tx,
             active_websockets,
             config,
+            shutdown_flag,
         }
     }
 
@@ -45,6 +50,7 @@ impl WebSocketHandler {
         let to_server_tx = self.to_server_tx.clone();
         let active_websockets = self.active_websockets.clone();
         let config = self.config.clone();
+        let shutdown_flag = self.shutdown_flag.clone();
 
         tokio::spawn(async move {
             handle_websocket_upgrade(
@@ -56,6 +62,7 @@ impl WebSocketHandler {
                 path,
                 headers,
                 &config,
+                shutdown_flag
             ).await;
         });
     }
@@ -80,6 +87,7 @@ async fn handle_websocket_upgrade(
     path: String,
     headers: HashMap<String, String>,
     config: &ClientConfig,
+    shutdown_flag: Arc<AtomicBool>,
 ) {
     info!("🔌 Processing WebSocket upgrade for connection {}", connection_id);
     info!("📋 Request: {} {} (headers: {})", method, path, headers.len());
@@ -184,9 +192,13 @@ async fn handle_websocket_upgrade(
                 let connection_id = connection_id_clone.clone();
 
                 tokio::spawn(async move {
-                    info!("🔌 WebSocket {}: Started local-to-server forwarding task", connection.connection_id);
+                    debug!("🔌 WebSocket {}: Started local-to-server forwarding task", connection.connection_id);
 
                     while let Some(msg) = local_stream.next().await {
+                        if shutdown_flag.load(Ordering::Relaxed) {
+                            debug!("🔄 Shutdown detected, stopping message forwarding for {}", connection.connection_id);
+                            break;
+                        }
                         match msg {
                             Ok(WsMessage::Text(text)) => {
                                 trace!("🔌 WebSocket {}: 📤 Forwarding text to server: {} chars", connection.connection_id, text.len());
@@ -256,7 +268,7 @@ async fn handle_websocket_upgrade(
                 let connection = connection_clone.clone();
 
                 tokio::spawn(async move {
-                    info!("🔌 WebSocket {}: Started server-to-local forwarding task", connection.connection_id);
+                    debug!("🔌 WebSocket {}: Started server-to-local forwarding task", connection.connection_id);
 
                     while let Some(data) = local_rx.recv().await {
                         let ws_message = if let Ok(text) = String::from_utf8(data.clone()) {

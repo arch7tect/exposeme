@@ -14,12 +14,12 @@
 #    docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
 #
 # Your service will be accessible at:
-#    https://<tunnel_id>.exposeme.arch7tect.org/
+#    https://<tunnel_id>.exposeme.org/
 
 [client]
 # Do not change unless told to
-server_url = "wss://exposeme.arch7tect.org/tunnel-ws"
-auth_token = "uoINplvTSD3z8nOuzcDC5JDq41sf4GGELoLELBymXTY"
+server_url = "wss://exposeme.org/tunnel-ws"
+auth_token = "uoINplvTSD3z8nOuzcDC5JDq41sf4GGELoLELBymXTY="
 auto_reconnect = true
 reconnect_delay_secs = 5
 
@@ -28,4 +28,3 @@ tunnel_id = "my-tunnel"
 
 # Change only the port if needed (keep host.docker.internal)
 local_target = "http://host.docker.internal:3000"
-

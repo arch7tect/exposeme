@@ -109,6 +109,32 @@ ExposeME can create its own certificate for local development. Browsers will sho
 
 ## Quick Start
 
+### Option 1: Try the Test Server (No Setup Required)
+
+Want to test ExposeME quickly without setting up your own server? Use our public test server:
+
+```bash
+# Download the pre-configured client template
+curl -O https://raw.githubusercontent.com/arch7tect/exposeme/master/config/client.toml.template
+mv client.toml.template client.toml
+
+# Edit only these two lines in client.toml:
+# tunnel_id = "my-unique-name"     # Choose a unique tunnel name
+# local_target = "http://host.docker.internal:3000"  # Your local service port
+
+# Run the client
+docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
+```
+
+Your service will be accessible at: `https://your-tunnel-id.exposeme.arch7tect.org/`
+
+**⚠️ Test Server Limitations:**
+- **No uptime guarantee** - service may be unavailable
+- **Testing only** - not suitable for production use
+- **No support** - use at your own risk
+
+### Option 2: Set Up Your Own Server (Recommended for Production)
+
 ### DNS Setup
 
 Configure DNS records for your domain:

@@ -1,21 +1,31 @@
 # client.toml - ExposeME Client Configuration
-# docker run -it --rm -v ./config/client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
+# https://github.com/arch7tect/exposeme
+
+# Purpose:
+# Expose a local service (e.g. on port 3000) to the internet over HTTPS
+# via your team's ExposeME server with valid Let's Encrypt certificates.
+
+# Instructions:
+# 1. Save this file in your project folder.
+# 2. Edit only the two lines below:
+#    - tunnel_id: set a unique name for your tunnel (used in public URL)
+#    - local_target: change only the port if your app runs on a different one
+# 3. Run the client using Docker:
+#    docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
+#
+# Your service will be accessible at:
+#    https://<tunnel_id>.exposeme.arch7tect.org/
 
 [client]
-# Server WebSocket URL
+# Do not change unless told to
 server_url = "wss://exposeme.arch7tect.org/tunnel-ws"
-
-# Authentication token (must match server config)
 auth_token = "AvoiQ6lrQ5avjoDc"
+auto_reconnect = true
+reconnect_delay_secs = 5
 
-# Tunnel identifier (choose unique name)
+# Set a unique name for your tunnel
 tunnel_id = "my-tunnel"
 
-# Local service to forward requests to
+# Change only the port if needed (keep host.docker.internal)
 local_target = "http://host.docker.internal:3000"
 
-# Auto-reconnect on connection loss
-auto_reconnect = true
-
-# Delay between reconnection attempts (seconds)
-reconnect_delay_secs = 5

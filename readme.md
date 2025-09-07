@@ -435,6 +435,13 @@ ExposeME uses a binary protocol for communication between client and server. Bot
 - **Patch versions are compatible** within the same major.minor release
 - **Protocol changes** require both client and server updates
 
+## New in v1.4
+
+**Enhanced Connection Management & Network Reliability**
+- Native WebSocket ping/pong for faster network error detection (60s vs 90s timeout)
+- Improved tunnel cleanup and resource management
+- **Important**: Requires both server and client to be v1.4+
+
 ## New in v1.3
 
 **Binary Protocol Implementation**
@@ -459,7 +466,7 @@ ExposeME uses a binary protocol for communication between client and server. Bot
 
 ### Upgrading from Previous Versions
 
-**Protocol Breaking Change**: Version 1.3 includes binary protocol implementation that requires both server and client to be updated together.
+**Protocol Breaking Change**: Version 1.4 includes connection management improvements that require both server and client to be updated together.
 
 ```bash
 # Update server
@@ -467,7 +474,7 @@ docker compose pull
 docker compose down
 docker compose up -d
 
-# Update client - arch7tect/exposeme-client:1.3 == arch7tect/exposeme-client:latest
+# Update client - arch7tect/exposeme-client:1.4 == arch7tect/exposeme-client:latest
 docker run -it --rm \
   -v ./client.toml:/etc/exposeme/client.toml \
   arch7tect/exposeme-client:latest

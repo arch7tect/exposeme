@@ -78,6 +78,7 @@ pub enum Message {
         reason: Option<String>,
     },
 
+
     /// Error message
     Error {
         message: String,

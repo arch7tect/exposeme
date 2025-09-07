@@ -88,7 +88,7 @@ pub async fn handle_websocket_upgrade_request(
     );
 
     // Check if tunnel exists
-    let tunnel_sender = context.tunnels.read().await.get(&tunnel_id).cloned();
+    let tunnel_sender = context.tunnels.read().await.get(&tunnel_id).map(|conn| conn.sender.clone());
     let tunnel_sender = match tunnel_sender {
         Some(sender) => sender,
         None => {
@@ -380,14 +380,14 @@ pub async fn send_to_tunnel(
     // Send to correct tunnel
     {
         let tunnels_guard = context.tunnels.read().await;
-        match tunnels_guard.get(&tunnel_id) {
+        match tunnels_guard.get(&tunnel_id).map(|conn| conn.sender.clone()) {
             Some(tunnel_sender) => {
                 tunnel_sender
                     .send(message)
                     .map_err(|e| format!("Failed to send: {}", e))?;
             }
             None => {
-                // Tunnel disconnected, connection cleanup in progress
+                // Tunnel disconnected
                 debug!("Tunnel {} disconnected, ignoring message for connection {}", tunnel_id, connection_id);
                 return Ok(());
             }

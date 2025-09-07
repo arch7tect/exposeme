@@ -38,7 +38,7 @@ pub async fn handle_tunnel_request(
     // Get tunnel sender
     let tunnel_sender = {
         let tunnels_guard = context.tunnels.read().await;
-        tunnels_guard.get(&tunnel_id).cloned()
+        tunnels_guard.get(&tunnel_id).map(|conn| conn.sender.clone())
     };
 
     let tunnel_sender = match tunnel_sender {
@@ -117,12 +117,19 @@ pub async fn handle_tunnel_request(
         }
 
         // Stream request body if present
-        tokio::spawn(stream_request_body(
-            req.into_body(),
-            request_id.clone(),
-            tunnel_sender,
-            Arc::new(AtomicBool::new(false)),
-        ));
+        let client_disconnected_flag = {
+            let active_requests = context.active_requests.read().await;
+            active_requests.get(&request_id).map(|req| req.client_disconnected.clone())
+        };
+        
+        if let Some(client_disconnected) = client_disconnected_flag {
+            tokio::spawn(stream_request_body(
+                req.into_body(),
+                request_id.clone(),
+                tunnel_sender,
+                client_disconnected,
+            ));
+        }
 
     } else {
         // Handle as complete request

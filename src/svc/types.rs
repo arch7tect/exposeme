@@ -8,14 +8,59 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::{RwLock, mpsc};
+use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use crate::ServerConfig;
 
-// Type aliases for shared state
-pub type TunnelMap = Arc<RwLock<HashMap<String, mpsc::UnboundedSender<Message>>>>;
+pub type TunnelMap = Arc<RwLock<HashMap<String, Arc<TunnelConnection>>>>;
 pub type ActiveRequests = Arc<RwLock<HashMap<String, ActiveRequest>>>;
 pub type ActiveWebSockets = Arc<RwLock<HashMap<String, WebSocketConnection>>>;
 pub type ResponseBody = BoxBody<Bytes, super::BoxError>;
+
+// Type aliases for shared state
+#[derive(Debug)]
+pub struct TunnelConnection {
+    pub sender: mpsc::UnboundedSender<Message>,
+    pub last_activity: Arc<RwLock<Instant>>,
+    pub last_ping_sent: Arc<RwLock<Option<Instant>>>,
+    pub tunnel_id: String,
+}
+
+impl TunnelConnection {
+    pub fn new(sender: mpsc::UnboundedSender<Message>, tunnel_id: String) -> Self {
+        Self {
+            sender,
+            last_activity: Arc::new(RwLock::new(Instant::now())),
+            last_ping_sent: Arc::new(RwLock::new(None)),
+            tunnel_id,
+        }
+    }
+
+    pub async fn update_activity(&self) {
+        *self.last_activity.write().await = Instant::now();
+    }
+
+    pub async fn is_stale(&self) -> bool {
+        let last_activity = *self.last_activity.read().await;
+        let last_ping_sent = *self.last_ping_sent.read().await;
+        
+        // Check if connection is stale (no activity in 90s)
+        let activity_stale = last_activity.elapsed() > Duration::from_secs(90);
+        
+        // Check if ping was sent but no pong received within 60s
+        let ping_timeout = if let Some(ping_time) = last_ping_sent {
+            ping_time.elapsed() > Duration::from_secs(60) && ping_time > last_activity
+        } else {
+            false
+        };
+        
+        activity_stale || ping_timeout
+    }
+
+    pub async fn record_ping_sent(&self) {
+        *self.last_ping_sent.write().await = Some(Instant::now());
+    }
+}
 
 /// Represents an active HTTP request being processed through a tunnel
 #[derive(Debug)]

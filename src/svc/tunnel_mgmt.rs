@@ -7,9 +7,11 @@ use futures_util::{SinkExt, StreamExt};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 use futures_util::stream::{SplitSink, SplitStream};
 use tokio::sync::mpsc;
+use tokio::time::interval;
 use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMessage};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -41,41 +43,70 @@ pub async fn handle_tunnel_management_connection(
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     // Register tunnel
+    let tunnel_connection = Arc::new(TunnelConnection::new(tx, tunnel_id.clone()));
+
     {
         let mut tunnels_guard = context.tunnels.write().await;
-        tunnels_guard.insert(tunnel_id.clone(), tx);
+        tunnels_guard.insert(tunnel_id.clone(), tunnel_connection);
     }
     debug!("✅ Authentication successful for tunnel '{}'", tunnel_id);
 
-    let outgoing_task = tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
-            match message.to_bincode() {
-                Ok(bytes) => {
-                    if let Err(e) = ws_sender.send(WsMessage::Binary(bytes.into())).await {
-                        error!("Failed to send WS message to client: {}", e);
-                        break;
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to serialize message to bincode: {}", e);
-                }
-            }
-        }
-
-        info!("📤 Sending WebSocket close frame to client");
-        let close_frame = tokio_tungstenite::tungstenite::protocol::CloseFrame {
-            code: CloseCode::Away,
-            reason: "Server shutting down".into(),
-        };
-        let _ = ws_sender.send(WsMessage::Close(Some(close_frame))).await;
-        let _ = ws_sender.close().await;
-        info!("✅ WebSocket closed gracefully");
-    });
+    // Create channel for ping requests from ping task to main loop
+    let (ping_tx, mut ping_rx) = mpsc::unbounded_channel::<()>();
+    let ping_handle = start_ping_task(tunnel_id.clone(), context.tunnels.clone(), context.clone(), ping_tx);
 
     let mut message_count = 0;
-    while let Some(message) = ws_receiver.next().await {
-        message_count += 1;
+    loop {
+        tokio::select! {
+            // Handle ping requests from ping task
+            _ = ping_rx.recv() => {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let ping_payload = timestamp.to_be_bytes().to_vec();
+                
+                if let Err(e) = ws_sender.send(WsMessage::Ping(ping_payload.into())).await {
+                    error!("❌ Failed to send ping to tunnel '{}': {}", tunnel_id, e);
+                    break;
+                }
+                
+                // Record ping sent time for timeout detection
+                if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
+                    connection.record_ping_sent().await;
+                }
+                debug!("📡 Sent native WebSocket ping to tunnel '{}'", tunnel_id);
+            }
+            
+            // Handle outgoing messages to client
+            message = rx.recv() => {
+                let Some(message) = message else {
+                    break;
+                };
+                match message.to_bincode() {
+                    Ok(bytes) => {
+                        if let Err(e) = ws_sender.send(WsMessage::Binary(bytes.into())).await {
+                            error!("Failed to send WS message to client: {}", e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to serialize message to bincode: {}", e);
+                    }
+                }
+            }
+            
+            // Handle incoming WebSocket messages
+            message = ws_receiver.next() => {
+                let Some(message) = message else {
+                    break;
+                };
+                message_count += 1;
         trace!("🔍 Server: Received WebSocket message #{}", message_count);
+
+        if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
+            connection.update_activity().await;
+        }
 
         match message {
             Ok(WsMessage::Binary(bytes)) => {
@@ -129,6 +160,7 @@ pub async fn handle_tunnel_management_connection(
                                 handle_websocket_close(connection_id, code, reason, &context).await;
                             }
 
+
                             _ => {
                                 warn!("Unexpected message type from tunnel client");
                             }
@@ -143,6 +175,13 @@ pub async fn handle_tunnel_management_connection(
                 error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
                 error!("❌ Please ensure both client and server are using the same protocol version");
             }
+            Ok(WsMessage::Pong(_)) => {
+                debug!("🏓 Received native WebSocket pong from tunnel '{}'", tunnel_id);
+                // Update activity to mark connection as alive
+                if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
+                    connection.update_activity().await;
+                }
+            }
             Ok(WsMessage::Close(_)) => {
                 info!("Tunnel management WebSocket closed");
                 break;
@@ -152,15 +191,71 @@ pub async fn handle_tunnel_management_connection(
                 break;
             }
             _ => {}
+                }
+            }
         }
     }
 
     // Clean up tunnel on disconnect
+    info!("📤 Sending WebSocket close frame to client");
+    let close_frame = tokio_tungstenite::tungstenite::protocol::CloseFrame {
+        code: CloseCode::Away,
+        reason: "Server shutting down".into(),
+    };
+    let _ = ws_sender.send(WsMessage::Close(Some(close_frame))).await;
+    let _ = ws_sender.close().await;
+    info!("✅ WebSocket closed gracefully");
+    
     shutdown_tunnel(context, tunnel_id).await;
-    outgoing_task.abort();
+    ping_handle.abort();
 
     Ok(())
 }
+
+fn start_ping_task(
+    tunnel_id: String,
+    tunnels: TunnelMap,
+    context: ServiceContext,
+    ping_tx: mpsc::UnboundedSender<()>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = interval(Duration::from_secs(30));
+        interval.tick().await; // Skip first tick
+
+        loop {
+            interval.tick().await;
+
+            let connection = {
+                let tunnels_guard = tunnels.read().await;
+                tunnels_guard.get(&tunnel_id).cloned()
+            };
+
+            match connection {
+                Some(conn) => {
+                    // Check if connection is stale
+                    if conn.is_stale().await {
+                        warn!("🔄 Tunnel '{}' is stale, removing immediately", tunnel_id);
+                        shutdown_tunnel(context.clone(), tunnel_id.clone()).await;
+                        break;
+                    }
+
+                    // Request main loop to send a ping
+                    if ping_tx.send(()).is_err() {
+                        warn!("❌ Failed to request ping for tunnel '{}', main loop closed", tunnel_id);
+                        break;
+                    }
+                }
+                None => {
+                    debug!("🔄 Tunnel '{}' no longer exists, stopping ping", tunnel_id);
+                    break;
+                }
+            }
+        }
+
+        info!("💔 Ping task ended for tunnel '{}'", tunnel_id);
+    })
+}
+
 
 async fn wait_for_authentication(
     ws_receiver: &mut  SplitStream<WebSocketStream<TokioIo<Upgraded>>>,

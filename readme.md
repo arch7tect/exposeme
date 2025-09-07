@@ -126,7 +126,7 @@ mv client.toml.template client.toml
 docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
 ```
 
-Your service will be accessible at: `https://your-tunnel-id.exposeme.arch7tect.org/`
+Your service will be accessible at: `https://your-tunnel-id.exposeme.org/`
 
 **⚠️ Test Server Limitations:**
 - **No uptime guarantee** - service may be unavailable

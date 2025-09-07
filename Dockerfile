@@ -44,7 +44,8 @@ EXPOSE 80 443 8081
 USER exposeme
 
 # Start server
-CMD ["exposeme-server", "--config", "/etc/exposeme/server.toml"]
+ENTRYPOINT ["exposeme-server"]
+CMD ["--config", "/etc/exposeme/server.toml"]
 
 # Final client image
 FROM debian:bookworm-slim AS client
@@ -68,4 +69,5 @@ RUN mkdir -p /etc/exposeme && \
 USER exposeme
 
 # Start client
-CMD ["exposeme-client", "--config", "/etc/exposeme/client.toml"]
+ENTRYPOINT ["exposeme-client"]
+CMD ["--config", "/etc/exposeme/client.toml"]

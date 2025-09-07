@@ -117,7 +117,6 @@ Want to test ExposeME quickly without setting up your own server? Use our public
 
 ```bash
 docker run -it --rm arch7tect/exposeme-client:latest \
-  exposeme-client \
   --server-url "wss://exposeme.org/tunnel-ws" \
   --token "uoINplvTSD3z8nOuzcDC5JDq41sf4GGELoLELBymXTY=" \
   --tunnel-id "my-tunnel" \
@@ -202,7 +201,6 @@ docker compose logs -f
 
 ```bash
 docker run -it --rm arch7tect/exposeme-client:latest \
-  exposeme-client \
   --server-url "wss://example.com/tunnel-ws" \
   --token "your_secure_auth_token" \
   --tunnel-id "my-app" \

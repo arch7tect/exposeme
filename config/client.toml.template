@@ -19,7 +19,7 @@
 [client]
 # Do not change unless told to
 server_url = "wss://exposeme.arch7tect.org/tunnel-ws"
-auth_token = "AvoiQ6lrQ5avjoDc"
+auth_token = "uoINplvTSD3z8nOuzcDC5JDq41sf4GGELoLELBymXTY"
 auto_reconnect = true
 reconnect_delay_secs = 5
 

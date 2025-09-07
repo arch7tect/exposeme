@@ -225,6 +225,12 @@ pub struct ClientArgs {
     pub verbose: bool,
     #[arg(long, help = "Skip TLS certificate verification (INSECURE: development only)")]
     pub insecure: bool,
+    #[arg(long, help = "Enable automatic reconnection on disconnect")]
+    pub auto_reconnect: Option<bool>,
+    #[arg(long, help = "Disable automatic reconnection on disconnect")]
+    pub no_auto_reconnect: bool,
+    #[arg(long, help = "Delay in seconds before reconnection attempts")]
+    pub reconnect_delay_secs: Option<u64>,
     #[arg(long, help = "WebSocket cleanup check interval in seconds")]
     pub websocket_cleanup_interval: Option<u64>,
     #[arg(long, help = "WebSocket connection timeout in seconds")]
@@ -506,9 +512,18 @@ impl ServerConfig {
 
 impl ClientConfig {
     pub fn load(args: &ClientArgs) -> Result<Self, Box<dyn std::error::Error>> {
+        // Check if all required params are provided via CLI to skip config file requirement
+        let can_skip_config = args.server_url.is_some() && 
+                              args.token.is_some() && 
+                              args.tunnel_id.is_some() && 
+                              args.local_target.is_some();
+
         let mut config = if args.config.exists() {
             let content = fs::read_to_string(&args.config)?;
             toml::from_str(&content)?
+        } else if can_skip_config {
+            tracing::info!("All required parameters provided via CLI, skipping config file");
+            Self::default()
         } else {
             tracing::info!("Config file {:?} not found, using defaults", args.config);
             Self::default()
@@ -529,6 +544,15 @@ impl ClientConfig {
         if args.insecure {
             config.client.insecure = true;
         }
+        if let Some(auto_reconnect) = args.auto_reconnect {
+            config.client.auto_reconnect = auto_reconnect;
+        }
+        if args.no_auto_reconnect {
+            config.client.auto_reconnect = false;
+        }
+        if let Some(delay) = args.reconnect_delay_secs {
+            config.client.reconnect_delay_secs = delay;
+        }
         if let Some(interval) = args.websocket_cleanup_interval {
             config.client.websocket_cleanup_interval_secs = interval;
         }
@@ -540,6 +564,20 @@ impl ClientConfig {
         }
         if let Some(monitoring) = args.websocket_monitoring_interval {
             config.client.websocket_monitoring_interval_secs = monitoring;
+        }
+
+        // Validate that all required fields are set
+        if config.client.server_url.is_empty() {
+            return Err("server_url is required (use --server-url or set in config file)".into());
+        }
+        if config.client.auth_token.is_empty() {
+            return Err("auth_token is required (use --token or set in config file)".into());
+        }
+        if config.client.tunnel_id.is_empty() {
+            return Err("tunnel_id is required (use --tunnel-id or set in config file)".into());
+        }
+        if config.client.local_target.is_empty() {
+            return Err("local_target is required (use --local-target or set in config file)".into());
         }
 
         Ok(config)

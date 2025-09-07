@@ -113,20 +113,33 @@ ExposeME can create its own certificate for local development. Browsers will sho
 
 Want to test ExposeME quickly without setting up your own server? Use our public test server:
 
+**No config file needed - just run with CLI args:**
+
+```bash
+docker run -it --rm arch7tect/exposeme-client:latest \
+  exposeme-client \
+  --server-url "wss://exposeme.org/tunnel-ws" \
+  --token "uoINplvTSD3z8nOuzcDC5JDq41sf4GGELoLELBymXTY=" \
+  --tunnel-id "my-tunnel" \
+  --local-target "http://host.docker.internal:3000"
+```
+
+**Or use the config file approach:**
+
 ```bash
 # Download the pre-configured client template
 curl -O https://raw.githubusercontent.com/arch7tect/exposeme/master/config/client.toml.template
 mv client.toml.template client.toml
 
 # Edit only these two lines in client.toml:
-# tunnel_id = "my-unique-name"     # Choose a unique tunnel name
+# tunnel_id = "my-tunnel"     # Choose a unique tunnel name  
 # local_target = "http://host.docker.internal:3000"  # Your local service port
 
 # Run the client
 docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
 ```
 
-Your service will be accessible at: `https://your-tunnel-id.exposeme.org/`
+Your service will be accessible at: `https://my-tunnel.exposeme.org/`
 
 **⚠️ Test Server Limitations:**
 - **No uptime guarantee** - service may be unavailable
@@ -184,6 +197,19 @@ docker compose logs -f
 ```
 
 ### Client Setup
+
+**Option A: Using command line only (no config file needed):**
+
+```bash
+docker run -it --rm arch7tect/exposeme-client:latest \
+  exposeme-client \
+  --server-url "wss://example.com/tunnel-ws" \
+  --token "your_secure_auth_token" \
+  --tunnel-id "my-app" \
+  --local-target "http://host.docker.internal:3000"
+```
+
+**Option B: Using config file:**
 
 1. **Create client configuration:**
 
@@ -317,11 +343,16 @@ OPTIONS:
     -v, --verbose                 Enable verbose logging
     -h, --help                    Print help information
         
+    # Connection Management
+        --auto-reconnect              Enable automatic reconnection on disconnect
+        --no-auto-reconnect           Disable automatic reconnection on disconnect
+        --reconnect-delay-secs <SECS> Delay before reconnection attempts [default: 5]
+        
     # WebSocket Configuration
-        --websocket-cleanup-interval <SECS>    Cleanup check interval
-        --websocket-connection-timeout <SECS>  Connection timeout
-        --websocket-max-idle <SECS>            Maximum idle time
-        --websocket-monitoring-interval <SECS> Monitoring interval
+        --websocket-cleanup-interval <SECS>    Cleanup check interval [default: 60]
+        --websocket-connection-timeout <SECS>  Connection timeout [default: 10]
+        --websocket-max-idle <SECS>            Maximum idle time [default: 600]
+        --websocket-monitoring-interval <SECS> Monitoring interval [default: 30]
 ```
 
 ### Server Configuration

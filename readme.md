@@ -492,9 +492,12 @@ ExposeME uses a binary protocol for communication between client and server. Bot
 
 ## New in v1.4
 
-**Enhanced Connection Management & Network Reliability**
-- Native WebSocket ping/pong for faster network error detection (60s vs 90s timeout)
-- Improved tunnel cleanup and resource management
+**CLI-First Experience & Enhanced Reliability**
+- **No config files required** - run with command line arguments only
+- **Public test server** - try ExposeME instantly without setup (exposeme.org)
+- **Faster network detection** - 60s ping timeout detects connection issues sooner
+- **Better resource cleanup** - improved tunnel and connection management
+- **Enhanced streaming** - fixed client disconnection handling for large uploads
 - **Important**: Requires both server and client to be v1.4+
 
 ## New in v1.3

@@ -1,20 +1,20 @@
 // src/svc/tunnel_mgmt.rs - Tunnel client connection management
 
-use crate::svc::{BoxError, ServiceContext};
-use crate::svc::types::*;
 use crate::Message;
+use crate::svc::types::*;
+use crate::svc::{BoxError, ServiceContext};
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
-use futures_util::stream::{SplitSink, SplitStream};
 use tokio::sync::mpsc;
 use tokio::time::interval;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMessage};
-use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tracing::{debug, error, info, trace, warn};
 
 /// Handle a tunnel management connection from an exposeme-client
@@ -27,19 +27,21 @@ pub async fn handle_tunnel_management_connection(
         TokioIo::new(upgraded),
         Role::Server,
         Some(WebSocketConfig::default()),
-    ).await;
+    )
+    .await;
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
     debug!("🔍 Waiting for authentication message...");
 
-    let tunnel_id = match wait_for_authentication(&mut ws_receiver, &mut ws_sender, &context).await? {
-        Some(info) => info,
-        None => {
-            info!("❌ Authentication failed or connection closed");
-            return Ok(());
-        }
-    };
+    let tunnel_id =
+        match wait_for_authentication(&mut ws_receiver, &mut ws_sender, &context).await? {
+            Some(info) => info,
+            None => {
+                info!("❌ Authentication failed or connection closed");
+                return Ok(());
+            }
+        };
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     // Register tunnel
@@ -53,7 +55,12 @@ pub async fn handle_tunnel_management_connection(
 
     // Create channel for ping requests from ping task to main loop
     let (ping_tx, mut ping_rx) = mpsc::unbounded_channel::<()>();
-    let ping_handle = start_ping_task(tunnel_id.clone(), context.tunnels.clone(), context.clone(), ping_tx);
+    let ping_handle = start_ping_task(
+        tunnel_id.clone(),
+        context.tunnels.clone(),
+        context.clone(),
+        ping_tx,
+    );
 
     let mut message_count = 0;
     loop {
@@ -65,19 +72,19 @@ pub async fn handle_tunnel_management_connection(
                     .unwrap_or_default()
                     .as_secs();
                 let ping_payload = timestamp.to_be_bytes().to_vec();
-                
+
                 if let Err(e) = ws_sender.send(WsMessage::Ping(ping_payload.into())).await {
                     error!("❌ Failed to send ping to tunnel '{}': {}", tunnel_id, e);
                     break;
                 }
-                
+
                 // Record ping sent time for timeout detection
                 if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
                     connection.record_ping_sent().await;
                 }
                 debug!("📡 Sent native WebSocket ping to tunnel '{}'", tunnel_id);
             }
-            
+
             // Handle outgoing messages to client
             message = rx.recv() => {
                 let Some(message) = message else {
@@ -95,102 +102,102 @@ pub async fn handle_tunnel_management_connection(
                     }
                 }
             }
-            
+
             // Handle incoming WebSocket messages
             message = ws_receiver.next() => {
                 let Some(message) = message else {
                     break;
                 };
                 message_count += 1;
-        trace!("🔍 Server: Received WebSocket message #{}", message_count);
+                trace!("🔍 Server: Received WebSocket message #{}", message_count);
 
-        if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
-            connection.update_activity().await;
-        }
-
-        match message {
-            Ok(WsMessage::Binary(bytes)) => {
-                trace!("🔍 Server: Processing binary message #{} ({} bytes)", message_count, bytes.len());
-
-                match Message::from_bincode(&bytes) {
-                    Ok(msg) => {
-                        trace!("🔍 Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
-
-                        match msg {
-                            Message::HttpResponseStart {
-                                id,
-                                status,
-                                headers,
-                                initial_data,
-                                is_complete,
-                            } => {
-                                handle_http_response_start(
-                                    id, status, headers, initial_data, is_complete, &context
-                                ).await;
-                            }
-
-                            Message::DataChunk { id, data, is_final } => {
-                                handle_data_chunk(id, data, is_final, &context).await;
-                            }
-
-                            Message::WebSocketUpgradeResponse {
-                                connection_id,
-                                status,
-                                headers: _,
-                            } => {
-                                debug!(
-                                    "📡 WebSocket upgrade response: {} (status: {})",
-                                    connection_id, status
-                                );
-                                // Nothing to do here as we've already upgraded incoming connection.
-                            }
-
-                            Message::WebSocketData {
-                                connection_id,
-                                data,
-                            } => {
-                                handle_websocket_data(connection_id, data, &context).await;
-                            }
-
-                            Message::WebSocketClose {
-                                connection_id,
-                                code,
-                                reason,
-                            } => {
-                                handle_websocket_close(connection_id, code, reason, &context).await;
-                            }
-
-
-                            _ => {
-                                warn!("Unexpected message type from tunnel client");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("❌ Failed to parse bincode message: {}", e);
-                    }
-                }
-            }
-            Ok(WsMessage::Text(text)) => {
-                error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
-                error!("❌ Please ensure both client and server are using the same protocol version");
-            }
-            Ok(WsMessage::Pong(_)) => {
-                debug!("🏓 Received native WebSocket pong from tunnel '{}'", tunnel_id);
-                // Update activity to mark connection as alive
                 if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
                     connection.update_activity().await;
                 }
-            }
-            Ok(WsMessage::Close(_)) => {
-                info!("Tunnel management WebSocket closed");
-                break;
-            }
-            Err(e) => {
-                error!("Tunnel management WebSocket error: {}", e);
-                break;
-            }
-            _ => {}
+
+                match message {
+                    Ok(WsMessage::Binary(bytes)) => {
+                        trace!("🔍 Server: Processing binary message #{} ({} bytes)", message_count, bytes.len());
+
+                        match Message::from_bincode(&bytes) {
+                            Ok(msg) => {
+                                trace!("🔍 Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
+
+                                match msg {
+                                    Message::HttpResponseStart {
+                                        id,
+                                        status,
+                                        headers,
+                                        initial_data,
+                                        is_complete,
+                                    } => {
+                                        handle_http_response_start(
+                                            id, status, headers, initial_data, is_complete, &context
+                                        ).await;
+                                    }
+
+                                    Message::DataChunk { id, data, is_final } => {
+                                        handle_data_chunk(id, data, is_final, &context).await;
+                                    }
+
+                                    Message::WebSocketUpgradeResponse {
+                                        connection_id,
+                                        status,
+                                        headers: _,
+                                    } => {
+                                        debug!(
+                                            "📡 WebSocket upgrade response: {} (status: {})",
+                                            connection_id, status
+                                        );
+                                        // Nothing to do here as we've already upgraded incoming connection.
+                                    }
+
+                                    Message::WebSocketData {
+                                        connection_id,
+                                        data,
+                                    } => {
+                                        handle_websocket_data(connection_id, data, &context).await;
+                                    }
+
+                                    Message::WebSocketClose {
+                                        connection_id,
+                                        code,
+                                        reason,
+                                    } => {
+                                        handle_websocket_close(connection_id, code, reason, &context).await;
+                                    }
+
+
+                                    _ => {
+                                        warn!("Unexpected message type from tunnel client");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("❌ Failed to parse bincode message: {}", e);
+                            }
+                        }
+                    }
+                    Ok(WsMessage::Text(text)) => {
+                        error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
+                        error!("❌ Please ensure both client and server are using the same protocol version");
+                    }
+                    Ok(WsMessage::Pong(_)) => {
+                        debug!("🏓 Received native WebSocket pong from tunnel '{}'", tunnel_id);
+                        // Update activity to mark connection as alive
+                        if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
+                            connection.update_activity().await;
+                        }
+                    }
+                    Ok(WsMessage::Close(_)) => {
+                        info!("Tunnel management WebSocket closed");
+                        break;
+                    }
+                    Err(e) => {
+                        error!("Tunnel management WebSocket error: {}", e);
+                        break;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -205,7 +212,7 @@ pub async fn handle_tunnel_management_connection(
     let _ = ws_sender.send(WsMessage::Close(Some(close_frame))).await;
     let _ = ws_sender.close().await;
     info!("✅ WebSocket closed gracefully");
-    
+
     shutdown_tunnel(context, tunnel_id).await;
     ping_handle.abort();
 
@@ -241,7 +248,10 @@ fn start_ping_task(
 
                     // Request main loop to send a ping
                     if ping_tx.send(()).is_err() {
-                        warn!("❌ Failed to request ping for tunnel '{}', main loop closed", tunnel_id);
+                        warn!(
+                            "❌ Failed to request ping for tunnel '{}', main loop closed",
+                            tunnel_id
+                        );
                         break;
                     }
                 }
@@ -256,38 +266,48 @@ fn start_ping_task(
     })
 }
 
-
 async fn wait_for_authentication(
-    ws_receiver: &mut  SplitStream<WebSocketStream<TokioIo<Upgraded>>>,
+    ws_receiver: &mut SplitStream<WebSocketStream<TokioIo<Upgraded>>>,
     ws_sender: &mut SplitSink<WebSocketStream<TokioIo<Upgraded>>, WsMessage>,
     context: &ServiceContext,
 ) -> Result<Option<String>, BoxError> {
-
     // Wait for auth message with timeout
     let auth_timeout = Duration::from_secs(30);
 
     match tokio::time::timeout(auth_timeout, ws_receiver.next()).await {
         Ok(Some(Ok(WsMessage::Binary(bytes)))) => {
             match Message::from_bincode(&bytes) {
-                Ok(Message::Auth { token, tunnel_id, version }) => {
+                Ok(Message::Auth {
+                    token,
+                    tunnel_id,
+                    version,
+                }) => {
                     info!("Auth request for tunnel '{}'", tunnel_id);
 
                     // Validate tunnel ID
                     if let Err(e) = context.config.validate_tunnel_id(&tunnel_id) {
-                        let error_msg = WsMessage::Binary(Message::AuthError {
-                            error: "invalid_tunnel_id".to_string(),
-                            message: format!("Invalid tunnel ID: {}", e),
-                        }.to_bincode()?.into());
+                        let error_msg = WsMessage::Binary(
+                            Message::AuthError {
+                                error: "invalid_tunnel_id".to_string(),
+                                message: format!("Invalid tunnel ID: {}", e),
+                            }
+                            .to_bincode()?
+                            .into(),
+                        );
                         ws_sender.send(error_msg).await?;
                         return Ok(None);
                     }
 
                     // Token validation
                     if !context.config.auth.tokens.contains(&token) {
-                        let error_msg = WsMessage::Binary(Message::AuthError {
-                            error: "invalid_token".to_string(),
-                            message: "Invalid authentication token".to_string(),
-                        }.to_bincode()?.into());
+                        let error_msg = WsMessage::Binary(
+                            Message::AuthError {
+                                error: "invalid_token".to_string(),
+                                message: "Invalid authentication token".to_string(),
+                            }
+                            .to_bincode()?
+                            .into(),
+                        );
                         ws_sender.send(error_msg).await?;
                         return Ok(None);
                     }
@@ -296,36 +316,49 @@ async fn wait_for_authentication(
                     {
                         let tunnels_guard = context.tunnels.read().await;
                         if tunnels_guard.contains_key(&tunnel_id) {
-                            let error_msg = WsMessage::Binary(Message::AuthError {
-                                error: "tunnel_id_taken".to_string(),
-                                message: format!(
-                                    "Tunnel ID '{}' is already in use",
-                                    tunnel_id
-                                ),
-                            }.to_bincode()?.into());
+                            let error_msg = WsMessage::Binary(
+                                Message::AuthError {
+                                    error: "tunnel_id_taken".to_string(),
+                                    message: format!("Tunnel ID '{}' is already in use", tunnel_id),
+                                }
+                                .to_bincode()?
+                                .into(),
+                            );
                             ws_sender.send(error_msg).await?;
                             return Ok(None);
                         }
                     }
 
                     let our_version = env!("CARGO_PKG_VERSION").to_string();
-                    let compatible = our_version.split('.').zip(version.split('.')).take(2).all(|(a, b)| a == b);
+                    let compatible = our_version
+                        .split('.')
+                        .zip(version.split('.'))
+                        .take(2)
+                        .all(|(a, b)| a == b);
                     if !compatible {
-                        let error_msg = WsMessage::Binary(Message::AuthError {
-                            error: "incompatible_versions".to_string(),
-                            message: format!(
-                                "Client version '{}' is incompatible with server version '{}'",
-                                version, our_version,
-                            ),
-                        }.to_bincode()?.into());
+                        let error_msg = WsMessage::Binary(
+                            Message::AuthError {
+                                error: "incompatible_versions".to_string(),
+                                message: format!(
+                                    "Client version '{}' is incompatible with server version '{}'",
+                                    version, our_version,
+                                ),
+                            }
+                            .to_bincode()?
+                            .into(),
+                        );
                         ws_sender.send(error_msg).await?;
                         return Ok(None);
                     }
 
-                    let success_msg = WsMessage::Binary(Message::AuthSuccess {
-                        tunnel_id: tunnel_id.clone(),
-                        public_url: context.config.get_public_url(&tunnel_id),
-                    }.to_bincode()?.into());
+                    let success_msg = WsMessage::Binary(
+                        Message::AuthSuccess {
+                            tunnel_id: tunnel_id.clone(),
+                            public_url: context.config.get_public_url(&tunnel_id),
+                        }
+                        .to_bincode()?
+                        .into(),
+                    );
                     ws_sender.send(success_msg).await?;
 
                     Ok(Some(tunnel_id))
@@ -372,8 +405,13 @@ async fn handle_http_response_start(
     is_complete: bool,
     context: &ServiceContext,
 ) {
-    debug!("📥 Response: {} (id: {}, complete: {:?}, {} bytes)",
-           status, id, is_complete, initial_data.len());
+    debug!(
+        "📥 Response: {} (id: {}, complete: {:?}, {} bytes)",
+        status,
+        id,
+        is_complete,
+        initial_data.len()
+    );
 
     if let Some(request) = context.active_requests.read().await.get(&id) {
         if is_complete == true {
@@ -406,19 +444,20 @@ async fn handle_http_response_start(
 }
 
 /// Handle data chunk message
-async fn handle_data_chunk(
-    id: String,
-    data: Vec<u8>,
-    is_final: bool,
-    context: &ServiceContext,
-) {
-    debug!("📥 DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
+async fn handle_data_chunk(id: String, data: Vec<u8>, is_final: bool, context: &ServiceContext) {
+    debug!(
+        "📥 DataChunk: {} bytes, final={} (id: {})",
+        data.len(),
+        is_final,
+        id
+    );
 
     if let Some(request) = context.active_requests.read().await.get(&id) {
         if !data.is_empty() {
-            let _ = request.response_tx.send(
-                ResponseEvent::StreamChunk(data.into())
-            ).await;
+            let _ = request
+                .response_tx
+                .send(ResponseEvent::StreamChunk(data.into()))
+                .await;
         }
 
         if is_final {
@@ -431,11 +470,7 @@ async fn handle_data_chunk(
 }
 
 /// Handle WebSocket data from tunnel client - Binary data, no base64 needed
-async fn handle_websocket_data(
-    connection_id: String,
-    data: Vec<u8>,
-    context: &ServiceContext,
-) {
+async fn handle_websocket_data(connection_id: String, data: Vec<u8>, context: &ServiceContext) {
     // Handle WebSocket data from tunnel client
     if let Some(connection) = context.active_websockets.read().await.get(&connection_id) {
         debug!(
@@ -474,7 +509,12 @@ async fn handle_websocket_close(
     context: &ServiceContext,
 ) {
     // Handle WebSocket close from tunnel client
-    if let Some(connection) = context.active_websockets.write().await.remove(&connection_id) {
+    if let Some(connection) = context
+        .active_websockets
+        .write()
+        .await
+        .remove(&connection_id)
+    {
         info!(
             "📡 Close for {}: code={:?}, reason={:?}, final_status={}",
             connection_id,
@@ -493,10 +533,7 @@ async fn handle_websocket_close(
             };
 
             if let Err(e) = ws_tx.send(WsMessage::Close(close_frame)) {
-                error!(
-                    "Failed to send close frame for {}: {:?}",
-                    connection_id, e
-                );
+                error!("Failed to send close frame for {}: {:?}", connection_id, e);
             };
         }
         info!("✅ Cleaned up WebSocket connection {}", connection_id);
@@ -550,7 +587,12 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) {
             websocket_connections_to_cleanup.len()
         );
         for connection_id in websocket_connections_to_cleanup {
-            if let Some(connection) = context.active_websockets.write().await.remove(&connection_id) {
+            if let Some(connection) = context
+                .active_websockets
+                .write()
+                .await
+                .remove(&connection_id)
+            {
                 debug!("🗑️  Cleaned up WebSocket connection: {}", connection_id);
                 // Close the browser WebSocket connection gracefully
                 if let Some(ws_tx) = &connection.ws_tx {

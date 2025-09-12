@@ -405,14 +405,18 @@ OPTIONS:
 
 ## API Endpoints
 
-### Health Check
+ExposeME provides REST API endpoints for health monitoring, certificate management, and observability.
+
+### Public API Endpoints (No Authentication)
+
+**Health Check** - `GET /api/health`
 ```bash
-curl http://your-domain.com/api/health
+curl https://your-domain.com/api/health
 ```
 
-### Certificate Status
+**Certificate Status** - `GET /api/certificates`
 ```bash
-curl http://your-domain.com/api/certificates/status
+curl https://your-domain.com/api/certificates
 ```
 
 Response:
@@ -426,6 +430,77 @@ Response:
    "auto_renewal": true,
    "wildcard": true
 }
+```
+
+**View Metrics** - `GET /api/metrics`
+```bash
+curl https://your-domain.com/api/metrics
+```
+
+Returns comprehensive server and per-tunnel statistics:
+```json
+{
+  "server": {
+    "uptime_seconds": 3600,
+    "active_tunnels": 2,
+    "total_requests": 1250,
+    "total_bytes_in": 450000,
+    "total_bytes_out": 890000, 
+    "websocket_connections": 3,
+    "websocket_bytes_in": 12000,
+    "websocket_bytes_out": 8500,
+    "error_count": 5
+  },
+  "tunnels": [
+    {
+      "tunnel_id": "my-app",
+      "last_activity": 1699123456,
+      "requests_count": 850,
+      "bytes_in": 300000,
+      "bytes_out": 600000,
+      "websocket_connections": 2,
+      "websocket_bytes_in": 8000,
+      "websocket_bytes_out": 5000,
+      "error_count": 2
+    }
+  ]
+}
+```
+
+**Stream Metrics (SSE)** - `GET /api/metrics/stream`
+```bash
+curl https://your-domain.com/api/metrics/stream
+```
+
+Streams the same metrics data in real-time via Server-Sent Events.
+
+### Admin Endpoints (Bearer Token Required)
+
+Set the admin token via environment variable or TOML config:
+
+**Environment variable:**
+```bash
+export EXPOSEME_ADMIN_TOKEN="your-secure-admin-token"
+```
+
+**Or in server.toml:**
+```toml
+[auth]
+admin_token = "your-secure-admin-token"
+```
+
+**Force Disconnect Tunnel** - `DELETE /admin/tunnels/<tunnel-id>`  
+```bash
+curl -X DELETE \
+  -H "Authorization: Bearer your-secure-admin-token" \
+  https://your-domain.com/admin/tunnels/my-app
+```
+
+**Renew SSL Certificate** - `POST /admin/ssl/renew`
+```bash  
+curl -X POST \
+  -H "Authorization: Bearer your-secure-admin-token" \
+  https://your-domain.com/admin/ssl/renew
 ```
 
 ## Building from Source
@@ -483,88 +558,6 @@ insecure = true  # Skip TLS verification for self-signed certificates
 ```
 
 **Security Warning**: The `insecure` option should only be used for development with self-signed certificates as it disables TLS certificate verification.
-
-## Admin & Observability API
-
-ExposeME includes built-in metrics collection and admin endpoints for monitoring and management. All admin endpoints require Bearer token authentication.
-
-### Configuration
-
-Set the admin token via environment variable or TOML config:
-
-**Environment variable:**
-```bash
-export EXPOSEME_ADMIN_TOKEN="your-secure-admin-token"
-```
-
-**Or in server.toml:**
-```toml
-[auth]
-admin_token = "your-secure-admin-token"
-```
-
-### Endpoints
-
-**View Metrics** - `GET /admin/metrics`
-```bash
-curl -H "Authorization: Bearer your-secure-admin-token" \
-  https://your-domain.com/admin/metrics
-```
-
-**Stream Metrics (SSE)** - `GET /admin/metrics/stream`
-```bash
-curl -H "Authorization: Bearer your-secure-admin-token" \
-  https://your-domain.com/admin/metrics/stream
-```
-
-**Force Disconnect Tunnel** - `DELETE /admin/tunnels/<tunnel-id>`  
-```bash
-curl -X DELETE \
-  -H "Authorization: Bearer your-secure-admin-token" \
-  https://your-domain.com/admin/tunnels/my-app
-```
-
-**Renew SSL Certificate** - `POST /admin/ssl/renew`
-```bash  
-curl -X POST \
-  -H "Authorization: Bearer your-secure-admin-token" \
-  https://your-domain.com/admin/ssl/renew
-```
-
-### Metrics Data
-
-The metrics endpoint returns comprehensive server and per-tunnel statistics:
-
-```json
-{
-  "server": {
-    "uptime_seconds": 3600,
-    "active_tunnels": 2,
-    "total_requests": 1250,
-    "total_bytes_in": 450000,
-    "total_bytes_out": 890000, 
-    "websocket_connections": 3,
-    "websocket_bytes_in": 12000,
-    "websocket_bytes_out": 8500,
-    "error_count": 5
-  },
-  "tunnels": [
-    {
-      "tunnel_id": "my-app",
-      "last_activity": 1699123456,
-      "requests_count": 850,
-      "bytes_in": 300000,
-      "bytes_out": 600000,
-      "websocket_connections": 2,
-      "websocket_bytes_in": 8000,
-      "websocket_bytes_out": 5000,
-      "error_count": 2
-    }
-  ]
-}
-```
-
-**Traffic Separation**: HTTP traffic (`bytes_in/out`) and WebSocket traffic (`websocket_bytes_in/out`) are tracked separately for accurate bandwidth analysis.
 
 ## Version Compatibility
 

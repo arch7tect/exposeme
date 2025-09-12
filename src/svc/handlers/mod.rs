@@ -68,7 +68,7 @@ async fn route_request(
 
     // Internal API and admin endpoints
     if path.starts_with("/api/") {
-        if let Some(resp) = api::handle_api(&req, &context.ssl_manager, &context.config).await? {
+        if let Some(resp) = api::handle_api(&req, &context.ssl_manager, &context.config, Some(&context)).await? {
             return Ok(resp);
         }
     }

@@ -1,29 +1,30 @@
 // src/svc/handlers/api.rs - Certificate and management API endpoints
 
-use crate::svc::{BoxError, SslManager};
+use crate::svc::{BoxError, SslManager, ServiceContext};
 use crate::svc::types::ResponseBody;
 use crate::svc::utils::boxed_body;
 use crate::{ServerConfig, SslProvider};
-use hyper::{Request, Response, StatusCode, body::Incoming};
+use hyper::{Request, Response, StatusCode, body::Incoming, body::Frame};
+use http_body_util::BodyExt;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Handle certificate management API requests
+/// Handle certificate management and metrics API requests
 pub async fn handle_api(
     req: &Request<Incoming>,
     ssl_manager: &Arc<RwLock<SslManager>>,
     config: &ServerConfig,
+    context: Option<&ServiceContext>,
 ) -> Result<Option<Response<ResponseBody>>, BoxError> {
     let path = req.uri().path();
     let method = req.method();
 
     match (method, path) {
-        // GET /api/certificates/status - Get certificate status
-        (&hyper::Method::GET, "/api/certificates/status") => {
+        // GET /api/certificates - Get certificate status
+        (&hyper::Method::GET, "/api/certificates") => {
             handle_certificate_status(ssl_manager, config).await.map(|resp| Some(resp))
         }
-
 
         // GET /api/certificates/info - Get detailed certificate information
         (&hyper::Method::GET, "/api/certificates/info") => {
@@ -33,6 +34,30 @@ pub async fn handle_api(
         // GET /api/health - Extended health check with certificate info
         (&hyper::Method::GET, "/api/health") => {
             handle_extended_health_check(ssl_manager, config).await.map(|resp| Some(resp))
+        }
+
+        // GET /api/metrics - Get metrics data (unprotected)
+        (&hyper::Method::GET, "/api/metrics") => {
+            if let Some(ctx) = context {
+                handle_metrics_endpoint(ctx).await.map(|resp| Some(resp))
+            } else {
+                Ok(Some(Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .body(boxed_body("Metrics not available"))
+                    .unwrap()))
+            }
+        }
+
+        // GET /api/metrics/stream - Get metrics stream (unprotected)
+        (&hyper::Method::GET, "/api/metrics/stream") => {
+            if let Some(ctx) = context {
+                handle_metrics_stream_endpoint(ctx.clone()).await.map(|resp| Some(resp))
+            } else {
+                Ok(Some(Response::builder()
+                    .status(StatusCode::SERVICE_UNAVAILABLE)
+                    .body(boxed_body("Metrics not available"))
+                    .unwrap()))
+            }
         }
 
         _ => {
@@ -200,5 +225,123 @@ async fn handle_extended_health_check(
         .status(status_code)
         .header("Content-Type", "application/json")
         .body(boxed_body(response.to_string()))
+        .unwrap())
+}
+
+async fn handle_metrics_endpoint(context: &ServiceContext) -> Result<Response<ResponseBody>, BoxError> {
+    if let Some(metrics) = &context.metrics {
+        let server_metrics = metrics.get_server_metrics();
+        let tunnel_metrics = metrics.get_tunnel_metrics().read().unwrap();
+        
+        let uptime = metrics.get_uptime_seconds();
+        
+        let mut tunnels_data = Vec::new();
+        for (tunnel_id, tunnel) in tunnel_metrics.iter() {
+            tunnels_data.push(serde_json::json!({
+                "tunnel_id": tunnel_id,
+                "last_activity": tunnel.last_activity.load(std::sync::atomic::Ordering::Relaxed),
+                "requests_count": tunnel.requests_count.load(std::sync::atomic::Ordering::Relaxed),
+                "bytes_in": tunnel.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                "bytes_out": tunnel.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                "websocket_connections": tunnel.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
+                "websocket_bytes_in": tunnel.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                "websocket_bytes_out": tunnel.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                "error_count": tunnel.error_count.load(std::sync::atomic::Ordering::Relaxed)
+            }));
+        }
+
+        let response_json = serde_json::json!({
+            "server": {
+                "uptime_seconds": uptime,
+                "active_tunnels": server_metrics.active_tunnels.load(std::sync::atomic::Ordering::Relaxed),
+                "total_requests": server_metrics.total_requests.load(std::sync::atomic::Ordering::Relaxed),
+                "total_bytes_in": server_metrics.total_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                "total_bytes_out": server_metrics.total_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                "websocket_connections": server_metrics.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
+                "websocket_bytes_in": server_metrics.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                "websocket_bytes_out": server_metrics.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                "error_count": server_metrics.error_count.load(std::sync::atomic::Ordering::Relaxed)
+            },
+            "tunnels": tunnels_data
+        });
+
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(boxed_body(serde_json::to_string(&response_json).unwrap()))
+            .unwrap());
+    }
+    
+    Ok(Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .body(boxed_body("Metrics not available"))
+        .unwrap())
+}
+
+async fn handle_metrics_stream_endpoint(context: ServiceContext) -> Result<Response<ResponseBody>, BoxError> {
+    if let Some(metrics) = &context.metrics {
+        use tokio_stream::{wrappers::IntervalStream, StreamExt};
+        use tokio::time::{interval, Duration};
+        
+        let metrics = metrics.clone();
+        let interval = interval(Duration::from_secs(5));
+        let stream = IntervalStream::new(interval)
+            .map(move |_| {
+                let server_metrics = metrics.get_server_metrics();
+                let tunnel_metrics = metrics.get_tunnel_metrics().read().unwrap();
+                
+                let uptime = metrics.get_uptime_seconds();
+                
+                let mut tunnels_data = Vec::new();
+                for (tunnel_id, tunnel) in tunnel_metrics.iter() {
+                    tunnels_data.push(serde_json::json!({
+                        "tunnel_id": tunnel_id,
+                        "last_activity": tunnel.last_activity.load(std::sync::atomic::Ordering::Relaxed),
+                        "requests_count": tunnel.requests_count.load(std::sync::atomic::Ordering::Relaxed),
+                        "bytes_in": tunnel.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                        "bytes_out": tunnel.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                        "websocket_connections": tunnel.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
+                        "websocket_bytes_in": tunnel.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                        "websocket_bytes_out": tunnel.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                        "error_count": tunnel.error_count.load(std::sync::atomic::Ordering::Relaxed)
+                    }));
+                }
+
+                let response_json = serde_json::json!({
+                    "server": {
+                        "uptime_seconds": uptime,
+                        "active_tunnels": server_metrics.active_tunnels.load(std::sync::atomic::Ordering::Relaxed),
+                        "total_requests": server_metrics.total_requests.load(std::sync::atomic::Ordering::Relaxed),
+                        "total_bytes_in": server_metrics.total_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                        "total_bytes_out": server_metrics.total_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                        "websocket_connections": server_metrics.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
+                        "websocket_bytes_in": server_metrics.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                        "websocket_bytes_out": server_metrics.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                        "error_count": server_metrics.error_count.load(std::sync::atomic::Ordering::Relaxed)
+                    },
+                    "tunnels": tunnels_data
+                });
+
+                format!("data: {}\n\n", response_json)
+            })
+            .map(|data| Ok::<_, std::convert::Infallible>(Frame::data(bytes::Bytes::from(data))));
+
+        let body = http_body_util::StreamBody::new(stream)
+            .map_err(|e: std::convert::Infallible| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
+            .boxed();
+
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+            .header("Connection", "keep-alive") 
+            .header("Access-Control-Allow-Origin", "*")
+            .body(body)
+            .unwrap());
+    }
+    
+    Ok(Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .body(boxed_body("Metrics not available"))
         .unwrap())
 }

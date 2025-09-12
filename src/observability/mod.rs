@@ -21,6 +21,8 @@ pub struct ServerMetrics {
     pub total_bytes_in: AtomicU64,
     pub total_bytes_out: AtomicU64,
     pub websocket_connections: AtomicU64,
+    pub websocket_bytes_in: AtomicU64,
+    pub websocket_bytes_out: AtomicU64,
     pub error_count: AtomicU64,
 }
 
@@ -34,6 +36,8 @@ pub struct TunnelMetrics {
     pub bytes_in: AtomicU64,
     pub bytes_out: AtomicU64,
     pub websocket_connections: AtomicU64,
+    pub websocket_bytes_in: AtomicU64,
+    pub websocket_bytes_out: AtomicU64,
     pub error_count: AtomicU64,
 }
 
@@ -58,6 +62,8 @@ impl MetricsCollector {
             bytes_in: AtomicU64::new(0),
             bytes_out: AtomicU64::new(0),
             websocket_connections: AtomicU64::new(0),
+            websocket_bytes_in: AtomicU64::new(0),
+            websocket_bytes_out: AtomicU64::new(0),
             error_count: AtomicU64::new(0),
         });
     }
@@ -99,6 +105,19 @@ impl MetricsCollector {
             if tunnel.websocket_connections.load(Ordering::Relaxed) > 0 {
                 tunnel.websocket_connections.fetch_sub(1, Ordering::Relaxed);
             }
+        }
+    }
+    
+    pub fn record_websocket_traffic(&self, tunnel_id: &str, bytes_in: u64, bytes_out: u64) {
+        // Server totals
+        self.server_metrics.websocket_bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
+        self.server_metrics.websocket_bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
+        
+        // Tunnel specific
+        if let Some(tunnel) = self.tunnel_metrics.read().unwrap().get(tunnel_id) {
+            tunnel.websocket_bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
+            tunnel.websocket_bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
+            tunnel.last_activity.store(timestamp_now(), Ordering::Relaxed);
         }
     }
     

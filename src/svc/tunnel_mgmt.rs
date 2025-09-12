@@ -507,6 +507,11 @@ async fn handle_websocket_data(connection_id: String, data: Vec<u8>, context: &S
             connection.age_info(),
             data.len()
         );
+        
+        // Record WebSocket traffic (tunnel -> server -> client)
+        if let Some(metrics) = &context.metrics {
+            metrics.record_websocket_traffic(&connection.tunnel_id, 0, data.len() as u64);
+        }
         if let Some(ws_tx) = &connection.ws_tx {
             let ws_message = if let Ok(text) = String::from_utf8(data.clone()) {
                 WsMessage::Text(text.into())

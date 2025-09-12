@@ -97,10 +97,7 @@ pub async fn handle_tunnel_request(
         },
     );
 
-    // Record request in metrics (will be updated with bytes when complete)
-    if let Some(metrics) = &context.metrics {
-        metrics.record_request(&tunnel_id, 0, 0);
-    }
+    let mut request_size = 0u64;
 
     if is_streaming_request {
         // Handle as streaming request (including SSE)
@@ -151,6 +148,7 @@ pub async fn handle_tunnel_request(
                     .unwrap());
             }
         };
+        request_size = body_bytes.len() as u64;
 
         let complete_request = Message::HttpRequestStart {
             id: request_id.clone(),
@@ -171,7 +169,7 @@ pub async fn handle_tunnel_request(
     }
 
     // Build response (handles both complete and streaming)
-    build_response(request_id, response_rx, context.active_requests).await
+    build_response(request_id, response_rx, context.active_requests, context.metrics.as_ref(), &tunnel_id, request_size).await
 }
 
 /// Response builder that adds SSE-specific headers when needed
@@ -179,12 +177,20 @@ async fn build_response(
     request_id: String,
     mut response_rx: mpsc::Receiver<ResponseEvent>,
     active_requests: ActiveRequests,
+    metrics: Option<&Arc<crate::observability::MetricsCollector>>,
+    tunnel_id: &str,
+    request_size: u64,
 ) -> Result<Response<ResponseBody>, BoxError> {
     // Only match on the FIRST event to determine response type
     match response_rx.recv().await {
         Some(ResponseEvent::Complete { status, headers, body }) => {
             info!("✅ Complete response: {} ({} bytes)", status, body.len());
             active_requests.write().await.remove(&request_id);
+            
+            // Record actual request/response bytes in metrics
+            if let Some(metrics) = metrics {
+                metrics.record_request(tunnel_id, request_size, body.len() as u64);
+            }
 
             // Check if this is an SSE response that should have been streamed
             if headers.get("content-type")
@@ -209,6 +215,11 @@ async fn build_response(
 
             let response_type = if is_sse_response { "SSE" } else { "streaming" };
             info!("🔄 {} response: {} (initial: {} bytes)", response_type, status, initial_data.len());
+            
+            // Record streaming request in metrics (initial bytes only, as total is unknown)
+            if let Some(metrics) = metrics {
+                metrics.record_request(tunnel_id, request_size, initial_data.len() as u64);
+            }
 
             if is_sse_response {
                 debug!("✨ Adding SSE-specific response headers");

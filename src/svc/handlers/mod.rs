@@ -109,6 +109,8 @@ async fn route_request(
                     "bytes_in": tunnel.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
                     "bytes_out": tunnel.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
                     "websocket_connections": tunnel.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
+                    "websocket_bytes_in": tunnel.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                    "websocket_bytes_out": tunnel.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
                     "error_count": tunnel.error_count.load(std::sync::atomic::Ordering::Relaxed)
                 }));
             }
@@ -121,6 +123,8 @@ async fn route_request(
                     "total_bytes_in": server_metrics.total_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
                     "total_bytes_out": server_metrics.total_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
                     "websocket_connections": server_metrics.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
+                    "websocket_bytes_in": server_metrics.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                    "websocket_bytes_out": server_metrics.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
                     "error_count": server_metrics.error_count.load(std::sync::atomic::Ordering::Relaxed)
                 },
                 "tunnels": tunnels_data

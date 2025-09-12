@@ -244,10 +244,19 @@ async fn handle_websocket_proxy_connection(
         while let Some(msg) = original_stream.next().await {
             match msg {
                 Ok(WsMessage::Text(text)) => {
+                    let data = text.as_bytes().to_vec();
                     let message = Message::WebSocketData {
                         connection_id: connection_id_clone.clone(),
-                        data: text.as_bytes().to_vec(),
+                        data: data.clone(),
                     };
+
+                    // Record WebSocket traffic (client -> server -> tunnel)
+                    if let Some(metrics) = &context_clone.metrics {
+                        if let Some(tunnel_id) = context_clone.active_websockets.read().await
+                            .get(&connection_id_clone).map(|conn| conn.tunnel_id.clone()) {
+                            metrics.record_websocket_traffic(&tunnel_id, data.len() as u64, 0);
+                        }
+                    }
 
                     // Send to tunnel client
                     if let Err(e) = send_to_tunnel(
@@ -261,10 +270,19 @@ async fn handle_websocket_proxy_connection(
                     }
                 }
                 Ok(WsMessage::Binary(bytes)) => {
+                    let data = bytes.to_vec();
                     let message = Message::WebSocketData {
                         connection_id: connection_id_clone.clone(),
-                        data: bytes.to_vec(),
+                        data: data.clone(),
                     };
+
+                    // Record WebSocket traffic (client -> server -> tunnel)
+                    if let Some(metrics) = &context_clone.metrics {
+                        if let Some(tunnel_id) = context_clone.active_websockets.read().await
+                            .get(&connection_id_clone).map(|conn| conn.tunnel_id.clone()) {
+                            metrics.record_websocket_traffic(&tunnel_id, data.len() as u64, 0);
+                        }
+                    }
 
                     // Send to tunnel client
                     if let Err(e) = send_to_tunnel(

@@ -14,6 +14,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tower::Service;
 use tracing::{debug, info};
+use crate::svc::tunnel_mgmt::shutdown_tunnel;
 
 /// Unified service that routes requests to appropriate handlers
 #[derive(Clone)]
@@ -142,16 +143,8 @@ async fn route_request(
             let tunnel_id = path.strip_prefix("/admin/tunnels/").unwrap_or("");
             if !tunnel_id.is_empty() {
                 // Force disconnect the tunnel
-                let result = {
-                    let mut tunnels = context.tunnels.write().await;
-                    tunnels.remove(tunnel_id).is_some()
-                };
+                let result = shutdown_tunnel(context.clone(), tunnel_id.to_owned()).await;
                 
-                // Record disconnection in metrics
-                if let Some(metrics) = &context.metrics {
-                    metrics.tunnel_disconnected(tunnel_id);
-                }
-
                 let response_json = if result {
                     serde_json::json!({
                         "success": true,

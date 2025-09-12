@@ -44,6 +44,10 @@ tokens = [
     "AvoiQ6lrQ5avjoDc"
 ]
 
+# Admin token for observability API
+# Will be overridden by EXPOSEME_ADMIN_TOKEN environment variable
+admin_token = "your-secure-admin-token-here"
+
 [limits]
 max_tunnels = 100
 request_timeout_secs = 120

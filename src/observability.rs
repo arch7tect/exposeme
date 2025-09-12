@@ -4,8 +4,6 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use serde::Serialize;
 
-pub mod api;
-
 #[derive(Default)]
 pub struct MetricsCollector {
     server_metrics: Arc<ServerMetrics>,

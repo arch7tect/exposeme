@@ -80,6 +80,9 @@ pub async fn handle_tunnel_management_connection(
 
                 if let Err(e) = ws_sender.send(WsMessage::Ping(ping_payload.into())).await {
                     error!("❌ Failed to send ping to tunnel '{}': {}", tunnel_id, e);
+                    if let Some(metrics) = &context.metrics {
+                        metrics.record_error(Some(&tunnel_id));
+                    }
                     break;
                 }
 
@@ -99,11 +102,17 @@ pub async fn handle_tunnel_management_connection(
                     Ok(bytes) => {
                         if let Err(e) = ws_sender.send(WsMessage::Binary(bytes.into())).await {
                             error!("Failed to send WS message to client: {}", e);
+                            if let Some(metrics) = &context.metrics {
+                                metrics.record_error(Some(&tunnel_id));
+                            }
                             break;
                         }
                     }
                     Err(e) => {
                         error!("Failed to serialize message to bincode: {}", e);
+                        if let Some(metrics) = &context.metrics {
+                            metrics.record_error(Some(&tunnel_id));
+                        }
                     }
                 }
             }
@@ -180,12 +189,18 @@ pub async fn handle_tunnel_management_connection(
                             }
                             Err(e) => {
                                 error!("❌ Failed to parse bincode message: {}", e);
+                                if let Some(metrics) = &context.metrics {
+                                    metrics.record_error(Some(&tunnel_id));
+                                }
                             }
                         }
                     }
                     Ok(WsMessage::Text(text)) => {
                         error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
                         error!("❌ Please ensure both client and server are using the same protocol version");
+                        if let Some(metrics) = &context.metrics {
+                            metrics.record_error(Some(&tunnel_id));
+                        }
                     }
                     Ok(WsMessage::Pong(_)) => {
                         debug!("🏓 Received native WebSocket pong from tunnel '{}'", tunnel_id);
@@ -200,6 +215,9 @@ pub async fn handle_tunnel_management_connection(
                     }
                     Err(e) => {
                         error!("Tunnel management WebSocket error: {}", e);
+                        if let Some(metrics) = &context.metrics {
+                            metrics.record_error(Some(&tunnel_id));
+                        }
                         break;
                     }
                     _ => {}

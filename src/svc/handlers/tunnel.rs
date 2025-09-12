@@ -45,6 +45,9 @@ pub async fn handle_tunnel_request(
         Some(sender) => sender,
         None => {
             warn!("Tunnel '{}' not found", tunnel_id);
+            if let Some(metrics) = &context.metrics {
+                metrics.record_error(Some(&tunnel_id));
+            }
             return Ok(Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
                 .body(boxed_body("Tunnel not available"))

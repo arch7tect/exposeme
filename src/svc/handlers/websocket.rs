@@ -93,6 +93,9 @@ pub async fn handle_websocket_upgrade_request(
         Some(sender) => sender,
         None => {
             warn!("Tunnel '{}' not found for WebSocket upgrade", tunnel_id);
+            if let Some(metrics) = &context.metrics {
+                metrics.record_error(Some(&tunnel_id));
+            }
             return Ok(Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
                 .body(boxed_body("Tunnel not available"))
@@ -394,13 +397,19 @@ pub async fn send_to_tunnel(
         let tunnels_guard = context.tunnels.read().await;
         match tunnels_guard.get(&tunnel_id).map(|conn| conn.sender.clone()) {
             Some(tunnel_sender) => {
-                tunnel_sender
-                    .send(message)
-                    .map_err(|e| format!("Failed to send: {}", e))?;
+                if let Err(e) = tunnel_sender.send(message) {
+                    if let Some(metrics) = &context.metrics {
+                        metrics.record_error(Some(&tunnel_id));
+                    }
+                    return Err(format!("Failed to send: {}", e).into());
+                }
             }
             None => {
                 // Tunnel disconnected
                 debug!("Tunnel {} disconnected, ignoring message for connection {}", tunnel_id, connection_id);
+                if let Some(metrics) = &context.metrics {
+                    metrics.record_error(Some(&tunnel_id));
+                }
                 return Ok(());
             }
         }

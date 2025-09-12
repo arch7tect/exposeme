@@ -1,7 +1,6 @@
 // src/bin/server.rs
 use clap::Parser;
-use exposeme::{initialize_tracing, ServerArgs, ServerConfig, SslManager, SslProvider};
-use exposeme::observability::MetricsCollector;
+use exposeme::{initialize_tracing, ServerArgs, ServerConfig, SslManager, SslProvider, MetricsCollector};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;

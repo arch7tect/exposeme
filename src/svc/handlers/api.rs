@@ -9,6 +9,8 @@ use http_body_util::BodyExt;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio::time::{interval, Duration};
+use tokio_stream::{wrappers::IntervalStream, StreamExt};
 
 /// Handle certificate management and metrics API requests
 pub async fn handle_api(
@@ -280,9 +282,6 @@ async fn handle_metrics_endpoint(context: &ServiceContext) -> Result<Response<Re
 
 async fn handle_metrics_stream_endpoint(context: ServiceContext) -> Result<Response<ResponseBody>, BoxError> {
     if let Some(metrics) = &context.metrics {
-        use tokio_stream::{wrappers::IntervalStream, StreamExt};
-        use tokio::time::{interval, Duration};
-        
         let metrics = metrics.clone();
         let interval = interval(Duration::from_secs(5));
         let stream = IntervalStream::new(interval)

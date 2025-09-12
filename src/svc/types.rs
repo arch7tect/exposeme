@@ -1,7 +1,6 @@
 // src/svc/types.rs - Core types and data structures
 
-use crate::{ChallengeStore, Message, SslManager};
-use crate::observability::MetricsCollector;
+use crate::{ChallengeStore, Message, SslManager, MetricsCollector};
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
 use std::collections::HashMap;

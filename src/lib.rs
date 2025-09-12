@@ -13,6 +13,7 @@ use tracing_subscriber::EnvFilter;
 pub use protocol::*;
 pub use config::*;
 pub use ssl::*;
+pub use observability::*;
 
 pub fn initialize_tracing(verbose: bool) {
     let filter = if let Ok(filter) = std::env::var("RUST_LOG") {

@@ -3,8 +3,7 @@
 use crate::svc::{BoxError, ServiceContext};
 use crate::svc::handlers::UnifiedService;
 use crate::svc::types::*;
-use crate::{ChallengeStore, ServerConfig, SslManager};
-use crate::observability::MetricsCollector;
+use crate::{ChallengeStore, ServerConfig, SslManager, MetricsCollector};
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;

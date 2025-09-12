@@ -1,6 +1,7 @@
 // src/dns/mod.rs - Keep original interface, improve internals
 
 use async_trait::async_trait;
+use hickory_resolver::TokioResolver;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, warn};
@@ -238,8 +239,6 @@ pub trait DnsProvider: Send + Sync {
         name: &str,
         expected_value: &str,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        use hickory_resolver::TokioResolver;
-
         let resolver = TokioResolver::builder_tokio()?.build();
         let fqdn = format!("{}.{}", name, domain);
 

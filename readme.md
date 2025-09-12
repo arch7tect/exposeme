@@ -571,7 +571,7 @@ ExposeME uses a binary protocol for communication between client and server. Bot
 
 **Observability & Admin Features**
 - Built-in metrics collection (server stats, per-tunnel analytics)
-- Admin API with Bearer token authentication (`/admin/metrics`, `/admin/tunnels/<id>`, `/admin/ssl/renew`)
+- Admin API with Bearer token authentication (`/admin/tunnels/<id>`, `/admin/ssl/renew`)
 
 ## New in v1.4
 

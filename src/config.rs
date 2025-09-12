@@ -24,8 +24,8 @@ impl Default for ServerConfig {
                 email: "admin@example.com".to_string(),
                 staging: true,
                 cert_cache_dir: "/etc/exposeme/certs".to_string(),
-                wildcard: false, // Set to true for subdomain support
-                dns_provider: None, // Required for wildcard certificates
+                wildcard: false,
+                dns_provider: None,
             },
             auth: AuthSettings {
                 tokens: vec!["dev".to_string()],
@@ -56,7 +56,7 @@ impl Default for ServerSettings {
             http_bind: "0.0.0.0".to_string(),
             http_port: 80,
             https_port: 443,
-            tunnel_path: "/tunnel-ws".to_string(),  // ← This is what was missing!
+            tunnel_path: "/tunnel-ws".to_string(),
             domain: "localhost".to_string(),
             routing_mode: RoutingMode::Path,
         }

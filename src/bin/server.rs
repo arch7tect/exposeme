@@ -54,7 +54,7 @@ async fn main() -> Result<(), BoxError> {
     let active_requests: ActiveRequests = Arc::new(RwLock::new(HashMap::new()));
     let active_websockets: ActiveWebSockets = Arc::new(RwLock::new(HashMap::new()));
     
-    // Initialize metrics collector (always enabled)
+    // Initialize metrics collector
     let metrics = Arc::new(MetricsCollector::new());
     metrics.server_started();
 

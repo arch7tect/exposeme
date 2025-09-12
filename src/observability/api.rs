@@ -1,4 +1,4 @@
-// Simple helper functions for admin API (not using axum directly)
+// Helper functions for admin API
 
 pub fn is_admin_authenticated(auth_header: Option<&str>, admin_token: &Option<String>) -> bool {
     let Some(admin_token) = admin_token else {

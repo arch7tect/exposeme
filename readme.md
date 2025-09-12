@@ -511,6 +511,12 @@ curl -H "Authorization: Bearer your-secure-admin-token" \
   https://your-domain.com/admin/metrics
 ```
 
+**Stream Metrics (SSE)** - `GET /admin/metrics/stream`
+```bash
+curl -H "Authorization: Bearer your-secure-admin-token" \
+  https://your-domain.com/admin/metrics/stream
+```
+
 **Force Disconnect Tunnel** - `DELETE /admin/tunnels/<tunnel-id>`  
 ```bash
 curl -X DELETE \

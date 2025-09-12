@@ -4,6 +4,7 @@ pub mod tunnel;
 pub mod websocket;
 pub mod acme;
 pub mod api;
+pub mod admin;
 
 use crate::svc::{BoxError, ServiceContext};
 use crate::svc::types::*;
@@ -14,7 +15,6 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tower::Service;
 use tracing::{debug, info};
-use crate::svc::tunnel_mgmt::shutdown_tunnel;
 
 /// Unified service that routes requests to appropriate handlers
 #[derive(Clone)]
@@ -75,119 +75,8 @@ async fn route_request(
 
     // Admin observability endpoints
     if path.starts_with("/admin/") && context.metrics.is_some() {
-        // Simple authentication check
-        let is_admin = if let Some(admin_token) = &context.config.auth.admin_token {
-            req.headers().get("authorization")
-                .and_then(|h| h.to_str().ok())
-                .and_then(|h| h.strip_prefix("Bearer "))
-                .map(|token| token == admin_token)
-                .unwrap_or(false)
-        } else {
-            false
-        };
-
-        if !is_admin {
-            return Ok(Response::builder()
-                .status(StatusCode::UNAUTHORIZED)
-                .body(boxed_body("Unauthorized: Admin token required"))
-                .unwrap());
-        }
-
-        // Handle metrics endpoint
-        if path == "/admin/metrics" {
-            let metrics = context.metrics.as_ref().unwrap();
-            let server_metrics = metrics.get_server_metrics();
-            let tunnel_metrics = metrics.get_tunnel_metrics().read().unwrap();
-            
-            let uptime = metrics.get_uptime_seconds();
-            
-            let mut tunnels_data = Vec::new();
-            for (tunnel_id, tunnel) in tunnel_metrics.iter() {
-                tunnels_data.push(serde_json::json!({
-                    "tunnel_id": tunnel_id,
-                    "last_activity": tunnel.last_activity.load(std::sync::atomic::Ordering::Relaxed),
-                    "requests_count": tunnel.requests_count.load(std::sync::atomic::Ordering::Relaxed),
-                    "bytes_in": tunnel.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
-                    "bytes_out": tunnel.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
-                    "websocket_connections": tunnel.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
-                    "websocket_bytes_in": tunnel.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
-                    "websocket_bytes_out": tunnel.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
-                    "error_count": tunnel.error_count.load(std::sync::atomic::Ordering::Relaxed)
-                }));
-            }
-
-            let response_json = serde_json::json!({
-                "server": {
-                    "uptime_seconds": uptime,
-                    "active_tunnels": server_metrics.active_tunnels.load(std::sync::atomic::Ordering::Relaxed),
-                    "total_requests": server_metrics.total_requests.load(std::sync::atomic::Ordering::Relaxed),
-                    "total_bytes_in": server_metrics.total_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
-                    "total_bytes_out": server_metrics.total_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
-                    "websocket_connections": server_metrics.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
-                    "websocket_bytes_in": server_metrics.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
-                    "websocket_bytes_out": server_metrics.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
-                    "error_count": server_metrics.error_count.load(std::sync::atomic::Ordering::Relaxed)
-                },
-                "tunnels": tunnels_data
-            });
-
-            return Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(boxed_body(serde_json::to_string(&response_json).unwrap()))
-                .unwrap());
-        }
-
-        // Handle tunnel deletion endpoint
-        if path.starts_with("/admin/tunnels/") && method == "DELETE" {
-            let tunnel_id = path.strip_prefix("/admin/tunnels/").unwrap_or("");
-            if !tunnel_id.is_empty() {
-                // Force disconnect the tunnel
-                let result = shutdown_tunnel(context.clone(), tunnel_id.to_owned()).await;
-                
-                let response_json = if result {
-                    serde_json::json!({
-                        "success": true,
-                        "message": format!("Tunnel '{}' has been disconnected", tunnel_id)
-                    })
-                } else {
-                    serde_json::json!({
-                        "success": false,
-                        "message": format!("Tunnel '{}' not found or already disconnected", tunnel_id)
-                    })
-                };
-
-                return Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/json")
-                    .body(boxed_body(serde_json::to_string(&response_json).unwrap()))
-                    .unwrap());
-            }
-        }
-
-        // Handle SSL renewal endpoint
-        if path == "/admin/ssl/renew" && method == "POST" {
-            let result = {
-                let mut ssl_manager = context.ssl_manager.write().await;
-                ssl_manager.force_renewal().await
-            };
-            
-            let response_json = match result {
-                Ok(_) => serde_json::json!({
-                    "success": true,
-                    "message": "SSL certificate renewal initiated successfully"
-                }),
-                Err(e) => serde_json::json!({
-                    "success": false,
-                    "message": format!("SSL certificate renewal failed: {}", e)
-                })
-            };
-
-            return Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(boxed_body(serde_json::to_string(&response_json).unwrap()))
-                .unwrap());
+        if let Some(response) = admin::handle_admin_request(&req, context.clone(), path).await? {
+            return Ok(response);
         }
     }
 

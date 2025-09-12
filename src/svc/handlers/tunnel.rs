@@ -94,6 +94,11 @@ pub async fn handle_tunnel_request(
         },
     );
 
+    // Record request in metrics (will be updated with bytes when complete)
+    if let Some(metrics) = &context.metrics {
+        metrics.record_request(&tunnel_id, 0, 0);
+    }
+
     if is_streaming_request {
         // Handle as streaming request (including SSE)
         debug!("🔄 Processing {} request: {} {}", request_type, method, forwarded_path);

@@ -1,6 +1,7 @@
 // src/svc/types.rs - Core types and data structures
 
 use crate::{ChallengeStore, Message, SslManager};
+use crate::observability::MetricsCollector;
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
 use std::collections::HashMap;
@@ -142,4 +143,5 @@ pub struct ServiceContext {
     pub challenge_store: ChallengeStore,
     pub ssl_manager: Arc<RwLock<SslManager>>,
     pub is_https: bool,
+    pub metrics: Option<Arc<MetricsCollector>>,
 }

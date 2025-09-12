@@ -53,6 +53,11 @@ pub async fn handle_tunnel_management_connection(
     }
     debug!("✅ Authentication successful for tunnel '{}'", tunnel_id);
 
+    // Record tunnel connection in metrics
+    if let Some(metrics) = &context.metrics {
+        metrics.tunnel_connected(&tunnel_id);
+    }
+
     // Create channel for ping requests from ping task to main loop
     let (ping_tx, mut ping_rx) = mpsc::unbounded_channel::<()>();
     let ping_handle = start_ping_task(
@@ -213,8 +218,13 @@ pub async fn handle_tunnel_management_connection(
     let _ = ws_sender.close().await;
     info!("✅ WebSocket closed gracefully");
 
-    shutdown_tunnel(context, tunnel_id).await;
+    shutdown_tunnel(context.clone(), tunnel_id.clone()).await;
     ping_handle.abort();
+
+    // Record tunnel disconnection in metrics
+    if let Some(metrics) = &context.metrics {
+        metrics.tunnel_disconnected(&tunnel_id);
+    }
 
     Ok(())
 }

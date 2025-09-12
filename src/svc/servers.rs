@@ -4,6 +4,7 @@ use crate::svc::{BoxError, ServiceContext};
 use crate::svc::handlers::UnifiedService;
 use crate::svc::types::*;
 use crate::{ChallengeStore, ServerConfig, SslManager};
+use crate::observability::MetricsCollector;
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
@@ -22,6 +23,7 @@ pub async fn start_http_server(
     active_websockets: ActiveWebSockets,
     challenge_store: ChallengeStore,
     ssl_manager: Arc<RwLock<SslManager>>,
+    metrics: Option<Arc<MetricsCollector>>,
     mut shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<(), BoxError> {
     let addr: std::net::SocketAddr = config.http_addr().parse()?;
@@ -49,6 +51,7 @@ pub async fn start_http_server(
                     challenge_store: challenge_store.clone(),
                     ssl_manager: ssl_manager.clone(),
                     is_https: false,
+                    metrics: metrics.clone(),
                 };
 
                 let service = UnifiedService::new(context);
@@ -76,6 +79,7 @@ pub async fn start_https_server(
     active_websockets: ActiveWebSockets,
     ssl_manager: Arc<RwLock<SslManager>>,
     tls_config: Arc<RustlsConfig>,
+    metrics: Option<Arc<MetricsCollector>>,
     mut shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<(), BoxError> {
     let tls_acceptor = TlsAcceptor::from(tls_config);
@@ -105,6 +109,7 @@ pub async fn start_https_server(
                     challenge_store: Arc::new(RwLock::new(HashMap::new())),
                     ssl_manager,
                     is_https: true,
+                    metrics: metrics.clone(),
                 };
 
                 tokio::spawn(async move {

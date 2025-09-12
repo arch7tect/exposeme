@@ -7,6 +7,7 @@ pub mod svc;
 pub mod insecure_cert;
 pub mod client;
 mod streaming;
+pub mod observability;
 
 use tracing_subscriber::EnvFilter;
 pub use protocol::*;

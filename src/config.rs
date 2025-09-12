@@ -29,6 +29,7 @@ impl Default for ServerConfig {
             },
             auth: AuthSettings {
                 tokens: vec!["dev".to_string()],
+                admin_token: None,
             },
             limits: LimitSettings {
                 max_tunnels: 50,
@@ -111,6 +112,7 @@ impl Default for SslProvider {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthSettings {
     pub tokens: Vec<String>,
+    pub admin_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -398,6 +400,12 @@ impl ServerConfig {
         if let Ok(token) = std::env::var("EXPOSEME_AUTH_TOKEN") {
             config.auth.tokens = vec![token];
             tracing::info!("Authentication token set from EXPOSEME_AUTH_TOKEN");
+        }
+
+        // Admin token from environment  
+        if let Ok(admin_token) = std::env::var("EXPOSEME_ADMIN_TOKEN") {
+            config.auth.admin_token = Some(admin_token);
+            tracing::info!("Admin token set from EXPOSEME_ADMIN_TOKEN");
         }
 
         // Request timeout from environment

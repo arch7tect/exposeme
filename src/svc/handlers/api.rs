@@ -8,7 +8,6 @@ use hyper::{Request, Response, StatusCode, body::Incoming};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::info;
 
 /// Handle certificate management API requests
 pub async fn handle_api(
@@ -25,10 +24,6 @@ pub async fn handle_api(
             handle_certificate_status(ssl_manager, config).await.map(|resp| Some(resp))
         }
 
-        // POST /api/certificates/renew - Force certificate renewal
-        (&hyper::Method::POST, "/api/certificates/renew") => {
-            handle_certificate_renewal(ssl_manager, config).await.map(|resp| Some(resp))
-        }
 
         // GET /api/certificates/info - Get detailed certificate information
         (&hyper::Method::GET, "/api/certificates/info") => {
@@ -87,63 +82,6 @@ async fn handle_certificate_status(
     }
 }
 
-/// Force certificate renewal
-async fn handle_certificate_renewal(
-    ssl_manager: &Arc<RwLock<SslManager>>,
-    config: &ServerConfig,
-) -> Result<Response<ResponseBody>, BoxError> {
-    info!("🔄 Manual certificate renewal requested via API");
-
-    // Check if renewal is supported for this provider
-    if config.ssl.provider == SslProvider::Manual {
-        let response = json!({
-            "success": false,
-            "error": "Manual renewal not supported for manual certificate provider",
-            "domain": config.server.domain,
-            "provider": "Manual"
-        });
-
-        return Ok(Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .header("Content-Type", "application/json")
-            .body(boxed_body(response.to_string()))
-            .unwrap());
-    }
-
-    let mut manager = ssl_manager.write().await;
-    match manager.force_renewal().await {
-        Ok(_) => {
-            let response = json!({
-                "success": true,
-                "message": "Certificate renewed successfully",
-                "domain": config.server.domain,
-                "provider": format!("{:?}", config.ssl.provider),
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-            });
-
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(boxed_body(response.to_string()))
-                .unwrap())
-        }
-        Err(e) => {
-            let response = json!({
-                "success": false,
-                "error": format!("Certificate renewal failed: {}", e),
-                "domain": config.server.domain,
-                "provider": format!("{:?}", config.ssl.provider),
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-            });
-
-            Ok(Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header("Content-Type", "application/json")
-                .body(boxed_body(response.to_string()))
-                .unwrap())
-        }
-    }
-}
 
 /// Get detailed certificate information
 async fn handle_certificate_info(

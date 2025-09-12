@@ -138,6 +138,11 @@ pub async fn handle_websocket_upgrade_request(
         );
     }
 
+    // Record WebSocket connection in metrics
+    if let Some(metrics) = &context.metrics {
+        metrics.websocket_connected(&tunnel_id);
+    }
+
     // Send upgrade request to tunnel client
     let upgrade_message = Message::WebSocketUpgrade {
         connection_id: connection_id.clone(),
@@ -346,9 +351,16 @@ async fn handle_websocket_proxy_connection(
     }
 
     // Final cleanup
-    {
+    let tunnel_id = {
         let mut websockets = context.active_websockets.write().await;
+        let tunnel_id = websockets.get(&connection_id).map(|conn| conn.tunnel_id.clone());
         websockets.remove(&connection_id);
+        tunnel_id
+    };
+
+    // Record WebSocket disconnection in metrics
+    if let (Some(metrics), Some(tunnel_id)) = (&context.metrics, tunnel_id) {
+        metrics.websocket_disconnected(&tunnel_id);
     }
 
     info!(

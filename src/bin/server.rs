@@ -1,6 +1,7 @@
 // src/bin/server.rs
 use clap::Parser;
 use exposeme::{initialize_tracing, ServerArgs, ServerConfig, SslManager, SslProvider};
+use exposeme::observability::MetricsCollector;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,6 +53,10 @@ async fn main() -> Result<(), BoxError> {
     let tunnels: TunnelMap = Arc::new(RwLock::new(HashMap::new()));
     let active_requests: ActiveRequests = Arc::new(RwLock::new(HashMap::new()));
     let active_websockets: ActiveWebSockets = Arc::new(RwLock::new(HashMap::new()));
+    
+    // Initialize metrics collector (always enabled)
+    let metrics = Arc::new(MetricsCollector::new());
+    metrics.server_started();
 
     // Shutdown signal handling
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
@@ -89,6 +94,7 @@ async fn main() -> Result<(), BoxError> {
     let config_http = config.clone();
     let challenge_store_http = challenge_store.clone();
     let ssl_manager_http = ssl_manager.clone();
+    let metrics_http = Some(metrics.clone());
 
     // Start HTTP server (for redirects and ACME challenges)
     let http_handle = tokio::spawn(async move {
@@ -99,6 +105,7 @@ async fn main() -> Result<(), BoxError> {
             active_websockets_http,
             challenge_store_http,
             ssl_manager_http,
+            metrics_http,
             shutdown_tx_http.subscribe(),
         ).await {
             error!("❌ HTTP server error: {}", e);
@@ -118,6 +125,7 @@ async fn main() -> Result<(), BoxError> {
         let config_https = config.clone();
         let ssl_config_for_https = ssl_manager.read().await.get_rustls_config().unwrap();
         let ssl_manager_https = ssl_manager.clone();
+        let metrics_https = Some(metrics.clone());
 
         Some(tokio::spawn(async move {
             if let Err(e) = start_https_server(
@@ -127,6 +135,7 @@ async fn main() -> Result<(), BoxError> {
                 active_websockets_https,
                 ssl_manager_https,
                 ssl_config_for_https,
+                metrics_https,
                 shutdown_tx_https.subscribe(),
             ).await {
                 error!("❌ HTTPS server error: {}", e);

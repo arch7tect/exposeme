@@ -490,6 +490,12 @@ ExposeME uses a binary protocol for communication between client and server. Bot
 - **Patch versions are compatible** within the same major.minor release
 - **Protocol changes** require both client and server updates
 
+## New in v1.4.9
+
+**Observability & Admin Features**
+- Built-in metrics collection (server stats, per-tunnel analytics)
+- Admin API with Bearer token authentication (`/admin/metrics`, `/admin/tunnels/<id>`, `/admin/ssl/renew`)
+
 ## New in v1.4
 
 **CLI-First Experience & Enhanced Reliability**

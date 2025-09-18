@@ -625,6 +625,12 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
                     .remove(&connection_id)
                 {
                     debug!("🗑️  Cleaned up WebSocket connection: {}", connection_id);
+
+                    // Record WebSocket disconnection in metrics
+                    if let Some(metrics) = &context.metrics {
+                        metrics.websocket_disconnected(&tunnel_id);
+                    }
+
                     // Close the browser WebSocket connection gracefully
                     if let Some(ws_tx) = &connection.ws_tx {
                         let close_msg = WsMessage::Close(Some(

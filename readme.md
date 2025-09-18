@@ -21,6 +21,21 @@ ExposeME lets you share your local development server with the outside world by 
 - **Flexible SSL** - Let's Encrypt (auto), bring your own certificates, or self-signed for development
 - **Multi-client Support** - Multiple tunnels with unique identifiers
 
+## Web UI Dashboard
+
+ExposeME includes a web dashboard for real-time monitoring and management.
+
+### Features
+
+- **Real-time Metrics** - Live server statistics and tunnel monitoring
+- **Server Status** - Uptime, version, and health information
+- **SSL Certificate Management** - Status, expiration dates, and renewal warnings
+- **Responsive Design** - Clean interface for desktop and tablet
+
+### Access
+
+Visit `https://yourdomain.com/` when no tunnel routes match. Build with `--features ui` to enable.
+
 ## Architecture
 
 ExposeME creates secure HTTP tunnels to expose local services:
@@ -508,6 +523,7 @@ curl -X POST \
 ### Prerequisites
 - Rust 1.88+
 - Docker (optional)
+- cargo-leptos (for UI builds)
 
 ### Build
 
@@ -516,17 +532,36 @@ curl -X POST \
 git clone https://github.com/arch7tect/exposeme.git
 cd exposeme
 
-# Build
+# Basic build (no UI)
 cargo build --release
+
+# Build with Web UI Dashboard
+./scripts/build-with-ui.sh
+# OR manually:
+# cargo install cargo-leptos
+# cargo leptos build --project ui --release  
+# cargo build --release --features ui
 ```
 
 ### Docker Build
 
 ```bash
-# Build images
+# Build images with UI included
 docker build -t exposeme-server --target server .
 docker build -t exposeme-client --target client .
+
+# Or use the build script
+./scripts/build-and-push.sh [version]
 ```
+
+### Web UI Dashboard
+
+When built with UI support (`--features ui`), the server includes a web dashboard:
+
+- **Access**: Visit `https://yourdomain.com/` when no tunnels match the path
+- **Features**: Real-time metrics, server status, SSL certificate monitoring
+- **Technology**: Leptos WASM for <300KB bundle size
+- **API**: Uses existing `/api/health`, `/api/metrics`, `/api/metrics/stream` endpoints
 
 ## Troubleshooting
 

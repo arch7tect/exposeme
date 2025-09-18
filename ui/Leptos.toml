@@ -1,0 +1,12 @@
+[build]
+target = "web"
+features = ["csr"]
+release = true
+
+[site]
+site-root = "target/site"
+site-pkg-dir = "pkg"
+assets-dir = "assets"
+
+[server]
+port = 3000

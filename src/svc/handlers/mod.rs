@@ -9,6 +9,7 @@ pub mod admin;
 use crate::svc::{BoxError, ServiceContext};
 use crate::svc::types::*;
 use crate::svc::utils::{is_websocket_upgrade, boxed_body};
+use crate::ui_assets::UIAssets;
 use hyper::{Request, Response, StatusCode, body::Incoming};
 use std::future::Future;
 use std::pin::Pin;
@@ -93,15 +94,38 @@ async fn route_request(
         };
     }
 
-    // HTTP/HTTPS differentiation
+    // UI assets - only serve on main domain for HTTPS
+    if context.is_https && UIAssets::is_ui_asset(path) {
+        // Check if this is the main domain (not a tunnel subdomain)
+        let host = req.headers()
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        let host_without_port = host.split(':').next().unwrap_or(host);
+
+        // Only serve UI assets on the main domain
+        if host_without_port == context.config.server.domain {
+            if let Some(response) = UIAssets::serve_asset(path) {
+                debug!("📋 Serving UI asset on main domain: {}", path);
+                return Ok(response);
+            }
+        }
+    }
+
+    // HTTP/HTTPS tunnel requests
     if context.is_https {
-        tunnel::handle_tunnel_request(req, context).await
+        tunnel::handle_tunnel_request(req, context.clone()).await
     } else {
         if context.config.ssl.enabled {
-            // Redirect to HTTPS
+            // Redirect to HTTPS using the actual host from the request
+            let host = req.headers()
+                .get("host")
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or(&context.config.server.domain);
+
             let https_url = format!(
                 "https://{}{}",
-                context.config.server.domain,
+                host,
                 req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("")
             );
 

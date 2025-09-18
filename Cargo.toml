@@ -1,7 +1,34 @@
+[workspace]
+members = [".", "ui"]
+resolver = "2"
+
+[workspace.dependencies]
+# Leptos dependencies for UI
+leptos = { version = "0.8", features = ["csr"] }
+leptos_meta = { version = "0.8" }
+leptos_router = { version = "0.8" }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "console",
+    "EventSource", 
+    "MessageEvent",
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "Location",
+] }
+js-sys = "0.3"
+serde-wasm-bindgen = "0.6"
+# Shared dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+
 [package]
 name = "exposeme"
-version = "1.4.9"
-edition = "2024"
+version = "1.4.18"
+edition = "2021"
 authors = ["Oleg Orlov <arch7tect@gmail.com>"]
 description = "Secure HTTP tunneling service"
 license = "MIT"
@@ -72,5 +99,24 @@ sha1 = "0.10"
 # Streaming support
 async-stream = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
+
+# Static asset embedding
+rust-embed = { version = "8.7", features = ["debug-embed", "include-exclude"] }
+
+[features]
+default = []
+ui = []
+
+[[workspace.metadata.leptos]]
+name = "ui"
+bin-package = "exposeme-ui" 
+lib-package = "exposeme-ui"
+lib-features = ["hydrate"]
+bin-features = ["csr"]
+lib-default-features = false
+bin-default-features = false
+site-root = "target/site"
+site-pkg-dir = "pkg"
+assets-dir = "assets"
 
 [dev-dependencies]

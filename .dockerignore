@@ -1,0 +1,45 @@
+# Ignore build artifacts and temporary files
+target/
+ui/target/
+# ui/dist/ - Allow Docker to use pre-built UI assets
+
+# Ignore version control
+.git/
+.gitignore
+
+# Ignore development files
+.env
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Ignore documentation that's not needed in container
+*.md
+docs/
+examples/
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.iml
+
+# Ignore logs
+*.log
+logs/
+
+# Ignore test artifacts
+coverage/
+test-results/
+
+# Keep only essential files for building
+!Cargo.toml
+!Cargo.lock
+!build.rs
+!src/
+!ui/src/
+!ui/Cargo.toml
+!ui/Leptos.toml
+!ui/Trunk.toml
+!ui/index.html
+!ui/assets/

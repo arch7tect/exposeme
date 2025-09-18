@@ -8,6 +8,7 @@ pub mod insecure_cert;
 pub mod client;
 mod streaming;
 pub mod observability;
+pub mod ui_assets;
 
 use tracing_subscriber::EnvFilter;
 pub use protocol::*;

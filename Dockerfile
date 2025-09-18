@@ -1,24 +1,70 @@
-# Dockerfile
-FROM rust:1.88-slim AS builder
+# Optimized Dockerfile with better layer caching
+FROM rust:1.88-bookworm AS builder
 
-# Install build dependencies
+# Install system dependencies (cached layer)
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    curl \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Create working directory
+# Install Rust tools once (cached layer)
+RUN rustup target add wasm32-unknown-unknown
+
+# Install Trunk conditionally (cached layer if UI build)
+ARG BUILD_UI=false
+RUN if [ "$BUILD_UI" = "true" ]; then \
+        cargo install trunk --locked; \
+    fi
+
 WORKDIR /app
 
-# Copy project files
+# Copy dependency files first (for better caching)
 COPY Cargo.toml Cargo.lock ./
+COPY ui/Cargo.toml ./ui/
+
+# Create dummy source structure to build dependencies (cached layer)
+RUN mkdir -p src/bin && echo "fn main() {}" > src/bin/server.rs
+RUN mkdir -p src/bin && echo "fn main() {}" > src/bin/client.rs
+RUN echo "fn main() {}" > src/main.rs
+RUN mkdir -p ui/src && echo "fn main() {}" > ui/src/main.rs && echo "" > ui/src/lib.rs
+
+# Build dependencies only (this layer will be cached until Cargo.toml changes)
+RUN cargo build --release --bin exposeme-server --bin exposeme-client
+RUN if [ "$BUILD_UI" = "true" ]; then \
+        cargo build --release --target wasm32-unknown-unknown -p exposeme-ui; \
+    fi
+
+# Remove dummy source files
+RUN rm -rf src ui/src
+
+# Copy actual source code (this layer changes with code changes)
+COPY build.rs ./
 COPY src/ ./src/
-COPY examples/ ./examples/
+COPY ui/ ./ui/
 
-# Build project in release mode
-RUN cargo build --release
+# Build UI first if needed (cached if UI code unchanged)
+RUN if [ "$BUILD_UI" = "true" ]; then \
+        if [ ! -d "ui/dist" ]; then \
+            echo "No pre-built UI assets found, building with trunk..."; \
+            cd ui && trunk build --release && cd ..; \
+        else \
+            echo "Using pre-built UI assets from host..."; \
+            echo "Files in ui/dist:"; \
+            ls -la ui/dist/; \
+            echo "Preserving pre-built assets, skipping trunk build"; \
+        fi \
+    fi
 
-# Final server image
+# Build the final application (dependencies already built above)
+RUN if [ "$BUILD_UI" = "true" ]; then \
+        cargo build --release --features ui --bin exposeme-server --bin exposeme-client; \
+    else \
+        cargo build --release --bin exposeme-server --bin exposeme-client; \
+    fi
+
+# Runtime stage
 FROM debian:bookworm-slim AS server
 
 # Install runtime dependencies
@@ -47,7 +93,7 @@ USER exposeme
 ENTRYPOINT ["exposeme-server"]
 CMD ["--config", "/etc/exposeme/server.toml"]
 
-# Final client image
+# Client stage
 FROM debian:bookworm-slim AS client
 
 # Install runtime dependencies

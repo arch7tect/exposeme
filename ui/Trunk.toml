@@ -1,0 +1,20 @@
+[build]
+# The public URL from which assets are served
+public_url = "/"
+# The index HTML file to drive the bundling process
+target = "index.html"
+# Output directory
+dist = "dist"
+
+[serve]
+# The IP address to serve on
+address = "127.0.0.1"
+# The port to serve on  
+port = 8080
+# Auto-reload when files change
+watch = []
+
+[clean]
+# Whether to clean output dir before building
+dist_dir = true
+cargo = false

@@ -174,12 +174,20 @@ pub fn LiveMetrics(metrics: ReadSignal<Option<MetricsResponse>>) -> impl IntoVie
                                 <span class="value">{format_number(m.server.total_requests)}</span>
                             </div>
                             <div class="metric-row">
-                                <span class="label">"Data In:"</span>
-                                <span class="value">{format_bytes(m.server.total_bytes_in)}</span>
+                                <span class="label">"Total Data In:"</span>
+                                <span class="value">{format_bytes(m.server.total_bytes_in + m.server.websocket_bytes_in)}</span>
                             </div>
                             <div class="metric-row">
-                                <span class="label">"Data Out:"</span>
-                                <span class="value">{format_bytes(m.server.total_bytes_out)}</span>
+                                <span class="label">"Total Data Out:"</span>
+                                <span class="value">{format_bytes(m.server.total_bytes_out + m.server.websocket_bytes_out)}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="label">"HTTP Traffic:"</span>
+                                <span class="value">{format_bytes(m.server.total_bytes_in + m.server.total_bytes_out)}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="label">"WebSocket Traffic:"</span>
+                                <span class="value">{format_bytes(m.server.websocket_bytes_in + m.server.websocket_bytes_out)}</span>
                             </div>
                             <div class="metric-row">
                                 <span class="label">"WebSocket Connections:"</span>
@@ -194,6 +202,10 @@ pub fn LiveMetrics(metrics: ReadSignal<Option<MetricsResponse>>) -> impl IntoVie
                             <div class="metric-row">
                                 <span class="label"></span>
                                 <span class="value">"Loading..."</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="label"></span>
+                                <span class="value"></span>
                             </div>
                             <div class="metric-row">
                                 <span class="label"></span>

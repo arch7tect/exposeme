@@ -234,27 +234,48 @@ async fn build_response(
             // Handle streaming with Frame<Bytes>
             let active_requests_for_stream = active_requests.clone();
             let request_id_for_stream = request_id.clone();
+            let metrics_for_stream = metrics.cloned();
+            let tunnel_id_for_stream = tunnel_id.to_string();
 
             let body_stream = stream! {
+                let mut total_streaming_bytes = 0u64;
+                let initial_data_len = initial_data.len() as u64;
+
                 // Send initial data if present
                 if !initial_data.is_empty() {
+                    total_streaming_bytes += initial_data_len;
                     yield Ok(Frame::data(Bytes::from(initial_data)));
                 }
-        
+
                 // Stream the rest - this handles StreamChunk and StreamEnd
                 while let Some(event) = response_rx.recv().await {
                     match event {
                         ResponseEvent::StreamChunk(chunk) => {
+                            total_streaming_bytes += chunk.len() as u64;
                             yield Ok(Frame::data(chunk));
                         }
                         ResponseEvent::StreamEnd => {
-                            debug!("✅ Stream ended {}", request_id_for_stream);
+                            debug!("✅ Stream ended {} (total: {} bytes)", request_id_for_stream, total_streaming_bytes);
+                            // Record total streaming bytes in metrics (subtract initial data since it was already counted)
+                            if let Some(ref metrics) = metrics_for_stream {
+                                let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
+                                if additional_bytes > 0 {
+                                    metrics.record_request(&tunnel_id_for_stream, 0, additional_bytes);
+                                }
+                            }
                             // Clean up the request when stream ends
                             active_requests_for_stream.write().await.remove(&request_id_for_stream);
                             break;
                         }
                         ResponseEvent::Error(e) => {
-                            error!("Stream error {}: {}", request_id_for_stream, e);
+                            error!("Stream error {} (streamed: {} bytes): {}", request_id_for_stream, total_streaming_bytes, e);
+                            // Record partial streaming bytes even on error
+                            if let Some(ref metrics) = metrics_for_stream {
+                                let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
+                                if additional_bytes > 0 {
+                                    metrics.record_request(&tunnel_id_for_stream, 0, additional_bytes);
+                                }
+                            }
                             // Clean up on error
                             active_requests_for_stream.write().await.remove(&request_id_for_stream);
                             yield Err(e.into());
@@ -263,10 +284,17 @@ async fn build_response(
                         _ => break, // Ignore other events in streaming context
                     }
                 }
-                
+
                 // Final cleanup in case we exit the loop without StreamEnd/Error
                 if active_requests_for_stream.write().await.remove(&request_id_for_stream).is_some() {
-                    debug!("🧹 Final cleanup for streaming request {}", request_id_for_stream);
+                    debug!("🧹 Final cleanup for streaming request {} (streamed: {} bytes)", request_id_for_stream, total_streaming_bytes);
+                    // Record final bytes if we didn't hit StreamEnd/Error
+                    if let Some(ref metrics) = metrics_for_stream {
+                        let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
+                        if additional_bytes > 0 {
+                            metrics.record_request(&tunnel_id_for_stream, 0, additional_bytes);
+                        }
+                    }
                 }
             };
 

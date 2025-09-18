@@ -20,6 +20,8 @@ pub struct ServerMetrics {
     pub total_bytes_in: u64,
     pub total_bytes_out: u64,
     pub websocket_connections: usize,
+    pub websocket_bytes_in: u64,
+    pub websocket_bytes_out: u64,
     pub uptime_seconds: u64,
 }
 

@@ -9,16 +9,14 @@ description = "ExposeME Web UI - WASM Dashboard"
 crate-type = ["cdylib"]
 
 [features]
-hydrate = ["leptos/hydrate"]
 csr = ["leptos/csr"]
 
 [dependencies]
 leptos = { workspace = true }
-leptos_meta = { workspace = true }
+leptos_meta = { workspace = true, features = [] }
 leptos_router = { workspace = true }
 wasm-bindgen = "0.2.101"
 js-sys = "0.3"
-serde-wasm-bindgen = "0.6"
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

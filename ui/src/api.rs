@@ -1,6 +1,5 @@
-// Remove unused import
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
+use leptos::prelude::*;
+use wasm_bindgen::{prelude::*, JsCast};
 use web_sys::{EventSource, MessageEvent};
 use crate::types::*;
 
@@ -50,19 +49,67 @@ pub fn create_metrics_stream() -> Result<EventSource, String> {
         .map_err(|e| format!("Failed to create EventSource: {:?}", e))
 }
 
-/// Setup SSE listener with callback
-pub fn setup_sse_listener<F>(event_source: &EventSource, callback: F) 
-where 
-    F: Fn(MetricsResponse) + 'static,
-{
-    let callback = Closure::wrap(Box::new(move |event: MessageEvent| {
-        if let Some(data) = event.data().as_string() {
-            if let Ok(metrics) = serde_json::from_str::<MetricsResponse>(&data) {
-                callback(metrics);
+/// Set up an EventSource listener that forwards each decoded message to a
+/// `leptos::Callback`. The callback is *owned* by the component that calls this
+/// function, so it can be dropped (or cloned) at will.
+///
+/// The returned `Closure` is **not** forgotten – you are responsible for
+/// calling `on_cleanup` (or otherwise dropping it) when you no longer need the
+/// listener.
+///
+/// # Example
+/// ```ignore
+/// let es = EventSource::new("/api/metrics/stream").unwrap();
+/// let cb = Callback::new(move |msg: MetricsResponse| {
+///     // Update a signal with the metrics
+///     set_metrics.set(Some(msg));
+/// });
+/// let listener = setup_sse_listener(&es, cb);
+/// on_cleanup(move || {
+///     // This automatically unregisters the JS handler and drops the Closure
+///     drop(listener);
+/// });
+/// ```
+pub fn setup_sse_listener(
+    event_source: &EventSource,
+    callback: Callback<MetricsResponse>,
+) -> Closure<dyn Fn(MessageEvent)> {
+    // Clone the callback into the closure that will be called from JS.
+    // `Callback` is cheap to clone because it internally holds an Arc.
+    let cb = callback.clone();
+
+    // Build the actual JS closure.
+    let closure = Closure::wrap(Box::new(move |event: MessageEvent| {
+        // 1️⃣ Extract the raw string payload.
+        let payload = match event.data().as_string() {
+            Some(s) => s,
+            None => {
+                // If the server sent a Blob or something else we ignore it.
+                // In a real app you might want to log this.
+                web_sys::console::error_1(&"SSE: non‑string payload".into());
+                return;
+            }
+        };
+
+        // 2️⃣ Deserialize JSON → MetricsResponse.
+        match serde_json::from_str::<MetricsResponse>(&payload) {
+            Ok(metrics) => {
+                // 3️⃣ Forward the data to the Leptos callback.
+                // The callback runs on the main JS thread, which is fine for UI
+                // updates. If you need heavy work, spawn a local async task.
+                cb.run(metrics);
+            }
+            Err(err) => {
+                // Log JSON errors – they are often a sign of a server bug.
+                let msg = format!("SSE: failed to parse JSON – {err}");
+                web_sys::console::error_1(&msg.into());
             }
         }
-    }) as Box<dyn Fn(_)>);
+    }) as Box<dyn Fn(MessageEvent)>);
 
-    event_source.set_onmessage(Some(callback.as_ref().unchecked_ref()));
-    callback.forget(); // Keep the closure alive
+    // Register the handler with the EventSource.
+    event_source.set_onmessage(Some(closure.as_ref().unchecked_ref()));
+
+    // Return the Closure so the caller can keep it alive and later drop it.
+    closure
 }

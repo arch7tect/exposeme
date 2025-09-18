@@ -19,7 +19,6 @@ web-sys = { version = "0.3", features = [
     "Location",
 ] }
 js-sys = "0.3"
-serde-wasm-bindgen = "0.6"
 # Shared dependencies
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -111,7 +110,7 @@ ui = []
 name = "ui"
 bin-package = "exposeme-ui" 
 lib-package = "exposeme-ui"
-lib-features = ["hydrate"]
+lib-features = []
 bin-features = ["csr"]
 lib-default-features = false
 bin-default-features = false

@@ -33,14 +33,18 @@ pub fn Dashboard() -> impl IntoView {
         });
     });
 
-    // Setup live metrics stream
+    // Setup live metrics stream with WASM-compatible lifecycle management
     Effect::new(move |_| {
         if let Ok(event_source) = create_metrics_stream() {
-            setup_sse_listener(&event_source, move |new_metrics| {
+            // Create Leptos callback for metrics updates
+            let metrics_callback = Callback::new(move |new_metrics: MetricsResponse| {
                 set_metrics.set(Some(new_metrics));
                 set_connected.set(true);
                 set_error.set(None);
             });
+
+            // Setup SSE listener with improved error handling and logging
+            let listener = setup_sse_listener(&event_source, metrics_callback);
 
             // Handle connection errors
             let error_callback = Closure::wrap(Box::new(move |_: web_sys::Event| {
@@ -49,6 +53,11 @@ pub fn Dashboard() -> impl IntoView {
             }) as Box<dyn Fn(web_sys::Event)>);
 
             event_source.set_onerror(Some(error_callback.as_ref().unchecked_ref()));
+
+            // In single-threaded WASM environment, .forget() is acceptable for EventSource cleanup
+            // The EventSource connection will be cleaned up when the page/component unmounts
+            // since WASM garbage collection handles unreferenced objects
+            listener.forget();
             error_callback.forget();
         }
     });

@@ -1,12 +1,16 @@
 use leptos::prelude::*;
 use leptos_meta::*;
+use leptos_router::components::*;
+use leptos_router::StaticSegment;
 use wasm_bindgen::prelude::wasm_bindgen;
 
-mod dashboard;
+mod pages;
+mod components;
 mod api;
 mod types;
 
-use dashboard::Dashboard;
+use pages::*;
+use components::*;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -16,10 +20,20 @@ pub fn App() -> impl IntoView {
         <Title text="ExposeME Dashboard"/>
         <Meta name="description" content="ExposeME Tunneling Server Dashboard"/>
         <Meta name="viewport" content="width=device-width, initial-scale=1"/>
-        
-        <main class="app">
-            <Dashboard/>
-        </main>
+
+        <Router>
+            <div class="app">
+                <Navigation/>
+                <main class="app-content">
+                    <Routes fallback=|| "Page not found.".into_view()>
+                        <Route path=StaticSegment("") view=Dashboard/>
+                        <Route path=StaticSegment("tunnels") view=TunnelsPage/>
+                        <Route path=StaticSegment("certificates") view=CertificatesPage/>
+                        <Route path=StaticSegment("settings") view=SettingsPage/>
+                    </Routes>
+                </main>
+            </div>
+        </Router>
     }
 }
 

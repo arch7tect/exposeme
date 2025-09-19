@@ -26,7 +26,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 [package]
 name = "exposeme"
-version = "1.4.18"
+version = "1.4.19"
 edition = "2021"
 authors = ["Oleg Orlov <arch7tect@gmail.com>"]
 description = "Secure HTTP tunneling service"

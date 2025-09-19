@@ -46,9 +46,42 @@ pub struct MetricsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertificateInfo {
-    pub valid: bool,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub issuer: Option<String>,
-    pub subject: Option<String>,
+    pub domain: String,
+    pub ssl_config: SslConfig,
+    pub certificate: Option<CertificateDetails>,
+    pub dns_provider: Option<DnsProviderInfo>,
+    pub server_config: ServerConfigInfo,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SslConfig {
+    pub enabled: bool,
+    pub provider: String,
+    pub staging: bool,
+    pub wildcard: bool,
+    pub email: String,
+    pub cert_cache_dir: String,
+    pub auto_renewal: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertificateDetails {
+    pub exists: bool,
+    pub expiry_date: Option<String>,
     pub days_until_expiry: Option<i64>,
+    pub needs_renewal: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsProviderInfo {
+    pub provider: String,
+    pub configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfigInfo {
+    pub http_port: u16,
+    pub https_port: u16,
+    pub routing_mode: String,
 }

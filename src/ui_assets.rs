@@ -61,10 +61,10 @@ impl UIAssets {
                     .body(boxed_body(file_data))
                     .unwrap();
 
-                println!("🎨 DEBUG: Serving asset: {} -> {}", path, lookup_path);
+                debug!("🎨 Serving asset: {} -> {}", path, lookup_path);
                 Some(response)
             } else {
-                println!("❌ DEBUG: Asset not found: {} -> {}", path, lookup_path);
+                debug!("❌ Asset not found: {} -> {}", path, lookup_path);
                 None
             }
         }
@@ -153,13 +153,13 @@ impl UIAssets {
 
             // Debug logging to see what's happening
             if !result {
-                println!("❌ DEBUG: Asset not found: {} -> {}", path, lookup_path);
-                println!("📁 DEBUG: Available assets:");
+                debug!("❌ Asset not found: {} -> {}", path, lookup_path);
+                debug!("📁 Available assets:");
                 for file in UIAssets::iter() {
-                    println!("   - {}", file.as_ref());
+                    debug!("   - {}", file.as_ref());
                 }
             } else {
-                println!("✅ DEBUG: Asset found: {} -> {}", path, lookup_path);
+                debug!("✅ Asset found: {} -> {}", path, lookup_path);
             }
 
             result

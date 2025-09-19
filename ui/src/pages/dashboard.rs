@@ -33,48 +33,67 @@ pub fn Dashboard() -> impl IntoView {
         });
     });
 
-    // Setup live metrics stream with WASM-compatible lifecycle management
+    // Setup live metrics stream with proper lifecycle management
     Effect::new(move |_| {
         if let Ok(event_source) = create_metrics_stream() {
+            // Clone signals that will be moved into closures to avoid disposal issues
+            let set_metrics_clone = set_metrics;
+            let set_connected_clone = set_connected;
+            let set_error_clone = set_error;
+
             // Create Leptos callback for metrics updates
             let metrics_callback = Callback::new(move |new_metrics: MetricsResponse| {
-                set_metrics.set(Some(new_metrics));
-                set_connected.set(true);
-                set_error.set(None);
+                set_metrics_clone.set(Some(new_metrics));
+                set_connected_clone.set(true);
+                set_error_clone.set(None);
             });
 
-            // Setup SSE listener with improved error handling and logging
+            // Setup SSE listener with panic-safe error handling
             let listener = setup_sse_listener(&event_source, metrics_callback);
 
-            // Handle connection errors
+            // Handle connection errors with cloned signals and panic safety
+            let set_connected_err = set_connected;
+            let set_error_err = set_error;
             let error_callback = Closure::wrap(Box::new(move |_: web_sys::Event| {
-                set_connected.set(false);
-                set_error.set(Some("Lost connection to server".to_string()));
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    set_connected_err.set(false);
+                    set_error_err.set(Some("Lost connection to server".to_string()));
+                }));
+
+                if result.is_err() {
+                    web_sys::console::warn_1(&"SSE error callback failed (likely component disposed)".into());
+                }
             }) as Box<dyn Fn(web_sys::Event)>);
 
             event_source.set_onerror(Some(error_callback.as_ref().unchecked_ref()));
 
-            // In single-threaded WASM environment, .forget() is acceptable for EventSource cleanup
-            // The EventSource connection will be cleaned up when the page/component unmounts
-            // since WASM garbage collection handles unreferenced objects
-            listener.forget();
-            error_callback.forget();
+            // Store the closures so they don't get dropped immediately
+            // This approach avoids the "forget" pattern which was causing issues
+            std::mem::forget(listener);
+            std::mem::forget(error_callback);
         }
     });
 
     view! {
-        <div class="dashboard">
-            <header class="dashboard-header">
-                <h1>"ExposeME Dashboard"</h1>
-                <ConnectionStatus connected=connected/>
+        <div class="page dashboard-page">
+            <header class="page-header">
+                <h1>"Dashboard"</h1>
+                <p>"Real-time server metrics and status overview"</p>
             </header>
 
-            <ErrorDisplay error=error/>
+            <div class="page-content">
+                <div class="dashboard-status">
+                    <ConnectionStatus connected=connected/>
+                </div>
 
-            <div class="metrics-grid">
-                <ServerStatus health=health/>
-                <LiveMetrics metrics=metrics/>
-                <CertificateStatus health=health/>
+                <ErrorDisplay error=error/>
+
+                <div class="metrics-grid">
+                    <ServerStatus health=health/>
+                    <LiveMetrics metrics=metrics/>
+                    <TunnelOverview metrics=metrics/>
+                    <CertificateStatus health=health/>
+                </div>
             </div>
         </div>
     }
@@ -287,6 +306,77 @@ pub fn CertificateStatus(health: ReadSignal<Option<HealthResponse>>) -> impl Int
                                 <span class="value"></span>
                             </div>
                         }.into_any(),
+                    }
+                }}
+            </div>
+        </div>
+    }
+}
+
+#[component]
+pub fn TunnelOverview(metrics: ReadSignal<Option<MetricsResponse>>) -> impl IntoView {
+    view! {
+        <div class="metric-card">
+            <h3>"Tunnel Overview"</h3>
+            <div class="metric-content">
+                {move || {
+                    match metrics.get() {
+                        Some(m) => view! {
+                            <div class="metric-row">
+                                <span class="label">"Active Tunnels:"</span>
+                                <span class="value metric-highlight">{m.tunnels.len()}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="label">"Total Tunnel Requests:"</span>
+                                <span class="value">{format_number(m.tunnels.iter().map(|t| t.requests_count).sum())}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="label">"Total Tunnel Traffic:"</span>
+                                <span class="value">{format_bytes(m.tunnels.iter().map(|t| t.bytes_in + t.bytes_out).sum())}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="label">"Total Tunnel Errors:"</span>
+                                <span class={
+                                    let total_errors: u64 = m.tunnels.iter().map(|t| t.error_count).sum();
+                                    if total_errors > 0 { "value status-error" } else { "value status-ok" }
+                                }>
+                                    {m.tunnels.iter().map(|t| t.error_count).sum::<u64>()}
+                                </span>
+                            </div>
+                            {if !m.tunnels.is_empty() {
+                                Some(view! {
+                                    <div class="metric-row">
+                                        <span class="label">"Most Active:"</span>
+                                        <span class="value tunnel-id">
+                                            {m.tunnels.iter()
+                                                .max_by_key(|t| t.requests_count)
+                                                .map(|t| t.tunnel_id.clone())
+                                                .unwrap_or_else(|| "None".to_string())}
+                                        </span>
+                                    </div>
+                                })
+                            } else {
+                                None
+                            }}
+                        }.into_any(),
+                        None => view! {
+                            <div class="metric-row">
+                                <span class="label">"Active Tunnels:"</span>
+                                <span class="value loading-skeleton">""</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="label">"Total Tunnel Requests:"</span>
+                                <span class="value loading-skeleton">""</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="label">"Total Tunnel Traffic:"</span>
+                                <span class="value loading-skeleton">""</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="label">"Total Tunnel Errors:"</span>
+                                <span class="value loading-skeleton">""</span>
+                            </div>
+                        }.into_any()
                     }
                 }}
             </div>

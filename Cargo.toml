@@ -26,7 +26,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 [package]
 name = "exposeme"
-version = "1.4.19"
+version = "1.4.20"
 edition = "2021"
 authors = ["Oleg Orlov <arch7tect@gmail.com>"]
 description = "Secure HTTP tunneling service"
@@ -57,7 +57,7 @@ tokio-tungstenite = { version = "0.27", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # HTTP server/client
-hyper = { version = "1.6", features = ["full"] }
+hyper = { version = "1.7", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
@@ -84,7 +84,7 @@ hickory-resolver = { version = "0.25", features = ["tokio"] }
 bincode = { version = "2.0", features = ["serde"] }
 
 # Utilities
-uuid = { version = "1.17", features = ["v4"] }
+uuid = { version = "1.18", features = ["v4"] }
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

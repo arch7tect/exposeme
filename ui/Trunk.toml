@@ -7,9 +7,9 @@ target = "index.html"
 dist = "dist"
 
 [serve]
-# The IP address to serve on
-address = "127.0.0.1"
-# The port to serve on  
+# The IP addresses to serve on (new plural format)
+addresses = ["127.0.0.1"]
+# The port to serve on
 port = 8080
 # Auto-reload when files change
 watch = []

@@ -48,7 +48,7 @@ pub fn SettingsPage() -> impl IntoView {
                 <ErrorDisplay error=error/>
 
                 <div class="settings-grid">
-                    <ServerConfiguration health=health/>
+                    <ServerConfiguration health=health certificate_info=certificate_info/>
                     <SystemInformation health=health metrics=metrics/>
                     <ApiEndpoints/>
                 </div>
@@ -58,14 +58,100 @@ pub fn SettingsPage() -> impl IntoView {
 }
 
 #[component]
-pub fn ServerConfiguration(health: ReadSignal<Option<HealthResponse>>) -> impl IntoView {
+pub fn ServerConfiguration(
+    health: ReadSignal<Option<HealthResponse>>,
+    certificate_info: ReadSignal<Option<CertificateInfo>>
+) -> impl IntoView {
     view! {
         <div class="settings-card">
             <h3>"Server Configuration"</h3>
             <div class="settings-content">
                 {move || {
-                    match health.get() {
-                        Some(h) => {
+                    match (health.get(), certificate_info.get()) {
+                        (Some(h), Some(cert)) => {
+                            let domain = h.domain.clone();
+                            let ssl_enabled = h.ssl_enabled;
+                            let version = h.version.clone();
+                            let status = h.status.clone();
+                            let routing_mode = cert.server_config.routing_mode.clone();
+                            let is_wildcard = cert.ssl_config.wildcard;
+
+                            view! {
+                                <div class="config-section">
+                                    <h4>"Basic Settings"</h4>
+                                    <div class="config-row">
+                                        <span class="label">"Server Version:"</span>
+                                        <span class="value">{version}</span>
+                                    </div>
+                                    <div class="config-row">
+                                        <span class="label">"Domain:"</span>
+                                        <span class="value">{domain.clone()}</span>
+                                    </div>
+                                    <div class="config-row">
+                                        <span class="label">"SSL Enabled:"</span>
+                                        <span class={if ssl_enabled { "value status-ok" } else { "value status-error" }}>
+                                            {if ssl_enabled { "✓ Enabled" } else { "✗ Disabled" }}
+                                        </span>
+                                    </div>
+                                    <div class="config-row">
+                                        <span class="label">"Server Status:"</span>
+                                        <span class="value status-ok">{status}</span>
+                                    </div>
+                                </div>
+
+                                <div class="config-section">
+                                    <h4>"Routing Configuration"</h4>
+                                    <div class="config-row">
+                                        <span class="label">"Current Mode:"</span>
+                                        <span class="value status-ok">{routing_mode.clone()}</span>
+                                    </div>
+                                    <div class="config-row">
+                                        <span class="label">"Wildcard Certificate:"</span>
+                                        <span class={if is_wildcard { "value status-ok" } else { "value status-warning" }}>
+                                            {if is_wildcard { "✓ Enabled" } else { "✗ Not configured" }}
+                                        </span>
+                                    </div>
+                                    <div class="config-row">
+                                        <span class="label">"Example URL:"</span>
+                                        <span class="value">
+                                            {
+                                                let protocol = if ssl_enabled { "https" } else { "http" };
+                                                match routing_mode.as_str() {
+                                                    "subdomain" => format!("{}://tunnel-id.{}/path", protocol, domain),
+                                                    "both" => format!("{}://tunnel-id.{}/path OR {}/tunnel-id/path", protocol, domain, domain),
+                                                    _ => format!("{}://{}/tunnel-id/path", protocol, domain)
+                                                }
+                                            }
+                                        </span>
+                                    </div>
+                                    <div class="config-info">
+                                        <p><strong>"Routing Mode Details:"</strong></p>
+                                        <ul>
+                                            <li><strong>"path:"</strong> " Uses single domain certificate - tunnels accessed via paths"</li>
+                                            <li><strong>"subdomain:"</strong> " Uses wildcard certificate - each tunnel gets own subdomain"</li>
+                                            <li><strong>"both:"</strong> " Supports both modes with wildcard certificate"</li>
+                                        </ul>
+                                        {if !is_wildcard && routing_mode != "path" {
+                                            Some(view! {
+                                                <div class="config-note">
+                                                    "⚠️ Subdomain routing is configured but wildcard certificate is not enabled. Only path-based routing will work."
+                                                </div>
+                                            })
+                                        } else if is_wildcard && routing_mode == "path" {
+                                            Some(view! {
+                                                <div class="config-note">
+                                                    "💡 Wildcard certificate is available. You can enable subdomain routing in server configuration."
+                                                </div>
+                                            })
+                                        } else {
+                                            None
+                                        }}
+                                    </div>
+                                </div>
+                            }.into_any()
+                        },
+                        (Some(h), None) => {
+                            // Fallback when certificate info is not available
                             let domain = h.domain.clone();
                             let ssl_enabled = h.ssl_enabled;
                             let version = h.version.clone();
@@ -98,29 +184,15 @@ pub fn ServerConfiguration(health: ReadSignal<Option<HealthResponse>>) -> impl I
                                     <h4>"Routing Configuration"</h4>
                                     <div class="config-row">
                                         <span class="label">"Current Mode:"</span>
-                                        <span class="value">
-                                            {if ssl_enabled {
-                                                format!("Path-based (https://{}/tunnel-id/path)", domain)
-                                            } else {
-                                                format!("Path-based (http://{}/tunnel-id/path)", domain)
-                                            }}
-                                        </span>
+                                        <span class="value">Loading...</span>
                                     </div>
                                     <div class="config-info">
-                                        <p><strong>"Available routing modes:"</strong></p>
-                                        <ul>
-                                            <li><strong>"Path-based:"</strong> " Uses single domain certificate - tunnels accessed via paths"</li>
-                                            <li><strong>"Subdomain:"</strong> " Requires wildcard certificate - each tunnel gets own subdomain"</li>
-                                            <li><strong>"Both:"</strong> " Supports both modes with wildcard certificate"</li>
-                                        </ul>
-                                        <div class="config-note">
-                                            "To enable subdomain routing, configure a wildcard SSL certificate (*.domain.com) on the server."
-                                        </div>
+                                        <p>"Loading routing configuration details..."</p>
                                     </div>
                                 </div>
                             }.into_any()
                         },
-                        None => view! {
+                        _ => view! {
                             <div class="config-section">
                                 <h4>"Basic Settings"</h4>
                                 <div class="config-row">

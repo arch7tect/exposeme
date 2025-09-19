@@ -92,10 +92,10 @@ pub fn CertificatesPage() -> impl IntoView {
                     {move || {
                         match certificate_info.get() {
                             Some(cert) => view! {
-                                <div class="certificate-info">
-                                    <div class="cert-card">
-                                        <h4>"SSL Configuration"</h4>
-                                        <div class="cert-details">
+                                <div class="certificates-grid">
+                                    <div class="certificate-card">
+                                        <h3>"SSL Configuration"</h3>
+                                        <div class="certificate-content">
                                             <div class="cert-row">
                                                 <span class="label">"Domain:"</span>
                                                 <span class="value">{cert.domain.clone()}</span>
@@ -120,9 +120,9 @@ pub fn CertificatesPage() -> impl IntoView {
                                     </div>
 
                                     {cert.certificate.as_ref().map(|cert_details| view! {
-                                        <div class="cert-card">
-                                            <h4>"Certificate Status"</h4>
-                                            <div class="cert-details">
+                                        <div class="certificate-card">
+                                            <h3>"Certificate Status"</h3>
+                                            <div class="certificate-content">
                                                 <div class="cert-row">
                                                     <span class="label">"Certificate Exists:"</span>
                                                     <span class={if cert_details.exists { "value status-ok" } else { "value status-error" }}>
@@ -151,55 +151,86 @@ pub fn CertificatesPage() -> impl IntoView {
                                         </div>
                                     })}
 
-                                    <div class="cert-actions">
-                                        <h4>"Certificate Actions"</h4>
-                                        {move || {
-                                            if admin_token.get().is_empty() {
-                                                view! {
-                                                    <p class="admin-required">"Admin token required for certificate management"</p>
-                                                }.into_any()
-                                            } else {
-                                                view! {
-                                                    <div class="action-buttons">
-                                                        <button
-                                                            class="renew-btn"
-                                                            disabled={move || renewing.get()}
-                                                            on:click=renew_certificate
-                                                        >
-                                                            {move || if renewing.get() { "Renewing..." } else { "Force Certificate Renewal" }}
-                                                        </button>
-                                                    </div>
-                                                }.into_any()
-                                            }
-                                        }}
+                                    <div class="certificate-card certificate-actions-card">
+                                        <h3>"Certificate Actions"</h3>
+                                        <div class="certificate-content">
+                                            {move || {
+                                                if admin_token.get().is_empty() {
+                                                    view! {
+                                                        <p class="admin-required">"Admin token required for certificate management"</p>
+                                                    }.into_any()
+                                                } else {
+                                                    view! {
+                                                        <div class="action-buttons">
+                                                            <button
+                                                                class="renew-btn"
+                                                                disabled={move || renewing.get()}
+                                                                on:click=renew_certificate
+                                                            >
+                                                                {move || if renewing.get() { "Renewing..." } else { "Force Certificate Renewal" }}
+                                                            </button>
+                                                        </div>
+                                                    }.into_any()
+                                                }
+                                            }}
 
-                                        {move || {
-                                            renewal_error.get().map(|err| view! {
-                                                <div class="action-error">
-                                                    <strong>"Error: "</strong>
-                                                    {err}
-                                                </div>
-                                            })
-                                        }}
-
-                                        {move || {
-                                            if renewal_success.get() {
-                                                Some(view! {
-                                                    <div class="action-success">
-                                                        <strong>"Success: "</strong>
-                                                        "Certificate renewal initiated. Check back in a few minutes for updated status."
+                                            {move || {
+                                                renewal_error.get().map(|err| view! {
+                                                    <div class="action-error">
+                                                        <strong>"Error: "</strong>
+                                                        {err}
                                                     </div>
                                                 })
-                                            } else {
-                                                None
-                                            }
-                                        }}
+                                            }}
+
+                                            {move || {
+                                                if renewal_success.get() {
+                                                    Some(view! {
+                                                        <div class="action-success">
+                                                            <strong>"Success: "</strong>
+                                                            "Certificate renewal initiated. Check back in a few minutes for updated status."
+                                                        </div>
+                                                    })
+                                                } else {
+                                                    None
+                                                }
+                                            }}
+                                        </div>
                                     </div>
                                 </div>
                             }.into_any(),
                             None => view! {
-                                <div class="loading-certificate">
-                                    <p>"Loading certificate information..."</p>
+                                <div class="certificates-grid">
+                                    <div class="certificate-card">
+                                        <h3>"SSL Configuration"</h3>
+                                        <div class="certificate-content">
+                                            <div class="cert-row">
+                                                <span class="label">"Domain:"</span>
+                                                <span class="value loading-skeleton">""</span>
+                                            </div>
+                                            <div class="cert-row">
+                                                <span class="label">"SSL Enabled:"</span>
+                                                <span class="value loading-skeleton">""</span>
+                                            </div>
+                                            <div class="cert-row">
+                                                <span class="label">"Provider:"</span>
+                                                <span class="value loading-skeleton">""</span>
+                                            </div>
+                                            <div class="cert-row">
+                                                <span class="label">"Auto Renewal:"</span>
+                                                <span class="value loading-skeleton">""</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="certificate-card">
+                                        <h3>"Certificate Status"</h3>
+                                        <div class="certificate-content">
+                                            <div class="cert-row">
+                                                <span class="label">"Loading certificate information..."</span>
+                                                <span class="value loading-skeleton">""</span>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             }.into_any()
                         }

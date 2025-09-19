@@ -7,6 +7,7 @@ pub fn SettingsPage() -> impl IntoView {
     // Reactive signals for settings data
     let (health, set_health) = signal::<Option<HealthResponse>>(None);
     let (metrics, set_metrics) = signal::<Option<MetricsResponse>>(None);
+    let (certificate_info, set_certificate_info) = signal::<Option<CertificateInfo>>(None);
     let (error, set_error) = signal::<Option<String>>(None);
 
     // Load initial data
@@ -25,6 +26,13 @@ pub fn SettingsPage() -> impl IntoView {
                     set_metrics.set(Some(metrics_data));
                 }
                 Err(e) => set_error.set(Some(format!("Failed to load metrics data: {}", e))),
+            }
+
+            match fetch_certificate_info().await {
+                Ok(cert_data) => {
+                    set_certificate_info.set(Some(cert_data));
+                }
+                Err(e) => set_error.set(Some(format!("Failed to load certificate info: {}", e))),
             }
         });
     });
@@ -57,44 +65,61 @@ pub fn ServerConfiguration(health: ReadSignal<Option<HealthResponse>>) -> impl I
             <div class="settings-content">
                 {move || {
                     match health.get() {
-                        Some(h) => view! {
-                            <div class="config-section">
-                                <h4>"Basic Settings"</h4>
-                                <div class="config-row">
-                                    <span class="label">"Server Version:"</span>
-                                    <span class="value">{h.version}</span>
-                                </div>
-                                <div class="config-row">
-                                    <span class="label">"Domain:"</span>
-                                    <span class="value">{h.domain}</span>
-                                </div>
-                                <div class="config-row">
-                                    <span class="label">"SSL Enabled:"</span>
-                                    <span class={if h.ssl_enabled { "value status-ok" } else { "value status-error" }}>
-                                        {if h.ssl_enabled { "✓ Enabled" } else { "✗ Disabled" }}
-                                    </span>
-                                </div>
-                                <div class="config-row">
-                                    <span class="label">"Server Status:"</span>
-                                    <span class="value status-ok">{h.status}</span>
-                                </div>
-                            </div>
+                        Some(h) => {
+                            let domain = h.domain.clone();
+                            let ssl_enabled = h.ssl_enabled;
+                            let version = h.version.clone();
+                            let status = h.status.clone();
 
-                            <div class="config-section">
-                                <h4>"Routing Configuration"</h4>
-                                <div class="config-info">
-                                    <p>"Routing mode determines how tunnels are accessed:"</p>
-                                    <ul>
-                                        <li><strong>"Path-based:"</strong> " https://domain.com/tunnel-id/path"</li>
-                                        <li><strong>"Subdomain:"</strong> " https://tunnel-id.domain.com/path"</li>
-                                        <li><strong>"Both:"</strong> " Supports both modes simultaneously"</li>
-                                    </ul>
-                                    <div class="config-note">
-                                        "Current routing mode is determined by server configuration and SSL certificate type."
+                            view! {
+                                <div class="config-section">
+                                    <h4>"Basic Settings"</h4>
+                                    <div class="config-row">
+                                        <span class="label">"Server Version:"</span>
+                                        <span class="value">{version}</span>
+                                    </div>
+                                    <div class="config-row">
+                                        <span class="label">"Domain:"</span>
+                                        <span class="value">{domain.clone()}</span>
+                                    </div>
+                                    <div class="config-row">
+                                        <span class="label">"SSL Enabled:"</span>
+                                        <span class={if ssl_enabled { "value status-ok" } else { "value status-error" }}>
+                                            {if ssl_enabled { "✓ Enabled" } else { "✗ Disabled" }}
+                                        </span>
+                                    </div>
+                                    <div class="config-row">
+                                        <span class="label">"Server Status:"</span>
+                                        <span class="value status-ok">{status}</span>
                                     </div>
                                 </div>
-                            </div>
-                        }.into_any(),
+
+                                <div class="config-section">
+                                    <h4>"Routing Configuration"</h4>
+                                    <div class="config-row">
+                                        <span class="label">"Current Mode:"</span>
+                                        <span class="value">
+                                            {if ssl_enabled {
+                                                format!("Path-based (https://{}/tunnel-id/path)", domain)
+                                            } else {
+                                                format!("Path-based (http://{}/tunnel-id/path)", domain)
+                                            }}
+                                        </span>
+                                    </div>
+                                    <div class="config-info">
+                                        <p><strong>"Available routing modes:"</strong></p>
+                                        <ul>
+                                            <li><strong>"Path-based:"</strong> " Uses single domain certificate - tunnels accessed via paths"</li>
+                                            <li><strong>"Subdomain:"</strong> " Requires wildcard certificate - each tunnel gets own subdomain"</li>
+                                            <li><strong>"Both:"</strong> " Supports both modes with wildcard certificate"</li>
+                                        </ul>
+                                        <div class="config-note">
+                                            "To enable subdomain routing, configure a wildcard SSL certificate (*.domain.com) on the server."
+                                        </div>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        },
                         None => view! {
                             <div class="config-section">
                                 <h4>"Basic Settings"</h4>
@@ -294,7 +319,7 @@ pub fn ApiEndpoints() -> impl IntoView {
 
                 <div class="api-section">
                     <h4>"Admin Endpoints"</h4>
-                    <p class="api-note">"Require Authorization: Bearer &lt;token&gt; header"</p>
+                    <p class="api-note">"Require Authorization: Bearer <token> header"</p>
                     <div class="api-list">
                         <div class="api-item">
                             <span class="api-method admin-method">"DELETE"</span>
@@ -313,7 +338,7 @@ pub fn ApiEndpoints() -> impl IntoView {
                     <h4>"Authentication"</h4>
                     <div class="auth-info">
                         <p>"Admin endpoints require a valid authentication token configured on the server."</p>
-                        <p>"Tokens are passed via the Authorization header: <code>Bearer &lt;your-token&gt;</code>"</p>
+                        <p>"Tokens are passed via the Authorization header: <code>Bearer <your-token></code>"</p>
                         <p>"Token configuration is managed in the server configuration file or environment variables."</p>
                     </div>
                 </div>

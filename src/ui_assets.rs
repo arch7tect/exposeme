@@ -3,6 +3,7 @@
 use hyper::{Response, StatusCode, header::{CONTENT_TYPE, CACHE_CONTROL}};
 use crate::svc::types::ResponseBody;
 use crate::svc::utils::boxed_body;
+use tracing::debug;
 
 #[cfg(feature = "ui")]
 use rust_embed::RustEmbed;
@@ -28,7 +29,7 @@ impl UIAssets {
     pub fn serve_asset(path: &str) -> Option<Response<ResponseBody>> {
         #[cfg(feature = "ui")]
         {
-            println!("🎨 DEBUG: UI feature is ENABLED at runtime");
+            debug!("🎨 UI feature is ENABLED at runtime");
 
             // Remove leading slash for rust-embed lookup
             let file_path = path.trim_start_matches('/');
@@ -71,7 +72,7 @@ impl UIAssets {
 
         #[cfg(not(feature = "ui"))]
         {
-            println!("❌ DEBUG: UI feature is DISABLED at runtime");
+            debug!("❌ UI feature is DISABLED at runtime");
 
             // Fallback UI for when UI feature is disabled
             let content = match path {
@@ -145,7 +146,7 @@ impl UIAssets {
 
             // Always serve favicon.ico (we have a fallback)
             if path == "/favicon.ico" {
-                println!("✅ DEBUG: Favicon requested: {}", path);
+                debug!("✅ Favicon requested: {}", path);
                 return true;
             }
 

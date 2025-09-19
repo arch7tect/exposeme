@@ -91,7 +91,6 @@ pub fn Dashboard() -> impl IntoView {
                 <div class="metrics-grid">
                     <ServerStatus health=health/>
                     <LiveMetrics metrics=metrics/>
-                    <TunnelOverview metrics=metrics/>
                     <CertificateStatus health=health/>
                 </div>
             </div>
@@ -313,76 +312,6 @@ pub fn CertificateStatus(health: ReadSignal<Option<HealthResponse>>) -> impl Int
     }
 }
 
-#[component]
-pub fn TunnelOverview(metrics: ReadSignal<Option<MetricsResponse>>) -> impl IntoView {
-    view! {
-        <div class="metric-card">
-            <h3>"Tunnel Overview"</h3>
-            <div class="metric-content">
-                {move || {
-                    match metrics.get() {
-                        Some(m) => view! {
-                            <div class="metric-row">
-                                <span class="label">"Active Tunnels:"</span>
-                                <span class="value metric-highlight">{m.tunnels.len()}</span>
-                            </div>
-                            <div class="metric-row">
-                                <span class="label">"Total Tunnel Requests:"</span>
-                                <span class="value">{format_number(m.tunnels.iter().map(|t| t.requests_count).sum())}</span>
-                            </div>
-                            <div class="metric-row">
-                                <span class="label">"Total Tunnel Traffic:"</span>
-                                <span class="value">{format_bytes(m.tunnels.iter().map(|t| t.bytes_in + t.bytes_out).sum())}</span>
-                            </div>
-                            <div class="metric-row">
-                                <span class="label">"Total Tunnel Errors:"</span>
-                                <span class={
-                                    let total_errors: u64 = m.tunnels.iter().map(|t| t.error_count).sum();
-                                    if total_errors > 0 { "value status-error" } else { "value status-ok" }
-                                }>
-                                    {m.tunnels.iter().map(|t| t.error_count).sum::<u64>()}
-                                </span>
-                            </div>
-                            {if !m.tunnels.is_empty() {
-                                Some(view! {
-                                    <div class="metric-row">
-                                        <span class="label">"Most Active:"</span>
-                                        <span class="value tunnel-id">
-                                            {m.tunnels.iter()
-                                                .max_by_key(|t| t.requests_count)
-                                                .map(|t| t.tunnel_id.clone())
-                                                .unwrap_or_else(|| "None".to_string())}
-                                        </span>
-                                    </div>
-                                })
-                            } else {
-                                None
-                            }}
-                        }.into_any(),
-                        None => view! {
-                            <div class="metric-row">
-                                <span class="label">"Active Tunnels:"</span>
-                                <span class="value loading-skeleton">""</span>
-                            </div>
-                            <div class="metric-row">
-                                <span class="label">"Total Tunnel Requests:"</span>
-                                <span class="value loading-skeleton">""</span>
-                            </div>
-                            <div class="metric-row">
-                                <span class="label">"Total Tunnel Traffic:"</span>
-                                <span class="value loading-skeleton">""</span>
-                            </div>
-                            <div class="metric-row">
-                                <span class="label">"Total Tunnel Errors:"</span>
-                                <span class="value loading-skeleton">""</span>
-                            </div>
-                        }.into_any()
-                    }
-                }}
-            </div>
-        </div>
-    }
-}
 
 // Helper functions
 

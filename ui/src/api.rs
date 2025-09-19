@@ -119,26 +119,6 @@ pub fn setup_sse_listener(
     closure
 }
 
-/// Fetch certificate information
-pub async fn fetch_certificates() -> Result<CertificateInfo, String> {
-    let window = web_sys::window().ok_or("No window object")?;
-    let resp = wasm_bindgen_futures::JsFuture::from(
-        window
-            .fetch_with_str("/api/certificates")
-    )
-    .await
-    .map_err(|e| format!("Fetch error: {:?}", e))?;
-
-    let resp: web_sys::Response = resp.dyn_into().unwrap();
-    let text = wasm_bindgen_futures::JsFuture::from(resp.text().unwrap())
-        .await
-        .map_err(|e| format!("Text error: {:?}", e))?;
-
-    let json_str = text.as_string().unwrap();
-    serde_json::from_str(&json_str)
-        .map_err(|e| format!("JSON parse error: {:?}", e))
-}
-
 /// Fetch detailed certificate information
 pub async fn fetch_certificate_info() -> Result<CertificateInfo, String> {
     let window = web_sys::window().ok_or("No window object")?;

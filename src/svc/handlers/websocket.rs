@@ -141,10 +141,7 @@ pub async fn handle_websocket_upgrade_request(
         );
     }
 
-    // Record WebSocket connection in metrics
-    if let Some(metrics) = &context.metrics {
-        metrics.websocket_connected(&tunnel_id);
-    }
+    // Note: WebSocket connection will be recorded in metrics only after successful proxy establishment
 
     // Send upgrade request to tunnel client
     let upgrade_message = Message::WebSocketUpgrade {
@@ -169,6 +166,7 @@ pub async fn handle_websocket_upgrade_request(
 
     // Start WebSocket proxy task
     let connection_id_clone = connection_id.clone();
+    let context_clone = context.clone();
     tokio::spawn(async move {
         // Get the upgraded connection
         match hyper::upgrade::on(req).await {
@@ -176,16 +174,20 @@ pub async fn handle_websocket_upgrade_request(
                 // Handle upgraded connection
                 if let Err(e) = handle_websocket_proxy_connection(
                     upgraded,
-                    connection_id_clone,
-                    context,
+                    connection_id_clone.clone(),
+                    context_clone.clone(),
                 )
                     .await
                 {
                     error!("WebSocket proxy error: {}", e);
+                    // Clean up connection on proxy error
+                    context_clone.active_websockets.write().await.remove(&connection_id_clone);
                 }
             }
             Err(e) => {
                 error!("Failed to upgrade connection: {}", e);
+                // Clean up connection on upgrade failure
+                context_clone.active_websockets.write().await.remove(&connection_id_clone);
             }
         }
     });
@@ -235,6 +237,15 @@ async fn handle_websocket_proxy_connection(
             .unwrap_or_else(|| "unknown".to_string())
     };
     info!("🔌 WebSocket proxy established: {}", connection_status);
+
+    // Record WebSocket connection in metrics now that proxy is successfully established
+    let tunnel_id_for_metrics = {
+        let websockets = context.active_websockets.read().await;
+        websockets.get(&connection_id).map(|conn| conn.tunnel_id.clone())
+    };
+    if let (Some(metrics), Some(tunnel_id)) = (&context.metrics, tunnel_id_for_metrics) {
+        metrics.websocket_connected(&tunnel_id);
+    }
 
     // Forward messages FROM original client TO tunnel client
     let connection_id_clone = connection_id.clone();

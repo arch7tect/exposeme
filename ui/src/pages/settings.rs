@@ -410,7 +410,7 @@ pub fn ApiEndpoints() -> impl IntoView {
                     <h4>"Authentication"</h4>
                     <div class="auth-info">
                         <p>"Admin endpoints require a valid authentication token configured on the server."</p>
-                        <p>"Tokens are passed via the Authorization header: <code>Bearer <your-token></code>"</p>
+                        <p>"Tokens are passed via the Authorization header: " <code>"Bearer <your-token>"</code></p>
                         <p>"Token configuration is managed in the server configuration file or environment variables."</p>
                     </div>
                 </div>

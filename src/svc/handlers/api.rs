@@ -139,10 +139,25 @@ async fn handle_certificate_info(
             "days_until_expiry": info.days_until_expiry,
             "needs_renewal": info.needs_renewal,
         })),
-        "dns_provider": config.ssl.dns_provider.as_ref().map(|dns| json!({
-            "provider": dns.provider,
-            "configured": !dns.config.is_null(),
-        })),
+        "dns_provider": config.ssl.dns_provider.as_ref().map(|dns| {
+            // Check if DNS provider is configured either via config file or environment variables
+            let is_configured = !dns.config.is_null() || match dns.provider.as_str() {
+                "cloudflare" => std::env::var("EXPOSEME_CLOUDFLARE_TOKEN").is_ok(),
+                "digitalocean" => std::env::var("EXPOSEME_DIGITALOCEAN_TOKEN").is_ok(),
+                "azure" => std::env::var("EXPOSEME_AZURE_CLIENT_ID").is_ok()
+                          && std::env::var("EXPOSEME_AZURE_CLIENT_SECRET").is_ok()
+                          && std::env::var("EXPOSEME_AZURE_TENANT_ID").is_ok()
+                          && std::env::var("EXPOSEME_AZURE_SUBSCRIPTION_ID").is_ok()
+                          && std::env::var("EXPOSEME_AZURE_RESOURCE_GROUP").is_ok(),
+                "hetzner" => std::env::var("EXPOSEME_HETZNER_TOKEN").is_ok(),
+                _ => false,
+            };
+
+            json!({
+                "provider": dns.provider,
+                "configured": is_configured,
+            })
+        }),
         "server_config": {
             "http_port": config.server.http_port,
             "https_port": config.server.https_port,

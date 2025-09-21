@@ -75,23 +75,25 @@ pub fn Dashboard() -> impl IntoView {
     });
 
     view! {
-        <div class="page dashboard-page">
-            <header class="page-header">
-                <h1>"Dashboard"</h1>
-                <p>"Real-time server metrics and status overview"</p>
+        <div class="max-w-7xl mx-auto">
+            <header class="mb-8">
+                <h1 class="text-3xl font-bold text-gray-900">"Dashboard"</h1>
+                <p class="text-gray-600 mt-2">"Real-time server metrics and status overview"</p>
             </header>
 
-            <div class="page-content">
-                <div class="dashboard-status">
-                    <ConnectionStatus connected=connected/>
-                </div>
-
+            <div class="space-y-6">
+                <ConnectionStatus connected=connected/>
                 <ErrorDisplay error=error/>
 
-                <div class="metrics-grid">
-                    <ServerStatus health=health/>
-                    <LiveMetrics metrics=metrics/>
-                    <CertificateStatus health=health/>
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <ServerStatus health=health/>
+                        <LiveMetrics metrics=metrics/>
+                        <CertificateStatus health=health/>
+                    </div>
+
+                    // Add traffic visualization
+                    <crate::components::TrafficChart metrics=metrics/>
                 </div>
             </div>
         </div>

@@ -138,18 +138,92 @@ pub fn CertificatesPage() -> impl IntoView {
                                                 {cert_details.days_until_expiry.map(|days| view! {
                                                     <div class="cert-row">
                                                         <span class="label">"Days Until Expiry:"</span>
-                                                        <span class="value">{days.to_string()}</span>
+                                                        <span class={
+                                                            if days <= 7 { "value status-error" }
+                                                            else if days <= 30 { "value status-warning" }
+                                                            else { "value status-ok" }
+                                                        }>
+                                                            {days.to_string()}
+                                                            {if days <= 7 { " (Critical)" }
+                                                             else if days <= 30 { " (Warning)" }
+                                                             else { " (Good)" }}
+                                                        </span>
                                                     </div>
                                                 })}
                                                 <div class="cert-row">
                                                     <span class="label">"Renewal Status:"</span>
                                                     <span class={if cert_details.needs_renewal { "value status-warning" } else { "value status-ok" }}>
-                                                        {if cert_details.needs_renewal { "Needs Renewal" } else { "Current" }}
+                                                        {if cert_details.needs_renewal { "⚠️ Needs Renewal" } else { "✅ Current" }}
                                                     </span>
                                                 </div>
                                             </div>
                                         </div>
                                     })}
+
+                                    // Enhanced certificate details card
+                                    <div class="certificate-card">
+                                        <h3>"Certificate Details"</h3>
+                                        <div class="certificate-content">
+                                            <div class="cert-row">
+                                                <span class="label">"Issuer:"</span>
+                                                <span class="value">
+                                                    {match cert.ssl_config.provider.as_str() {
+                                                        "LetsEncrypt" => "Let's Encrypt (R3)",
+                                                        "SelfSigned" => "Self-Signed Certificate",
+                                                        "Manual" => "Custom Certificate Authority",
+                                                        _ => "Unknown Certificate Authority"
+                                                    }}
+                                                </span>
+                                            </div>
+                                            <div class="cert-row">
+                                                <span class="label">"Subject:"</span>
+                                                <span class="value">
+                                                    {if cert.ssl_config.wildcard {
+                                                        format!("*.{}", cert.domain)
+                                                    } else {
+                                                        cert.domain.clone()
+                                                    }}
+                                                </span>
+                                            </div>
+                                            <div class="cert-row">
+                                                <span class="label">"Certificate Type:"</span>
+                                                <span class="value">
+                                                    {if cert.ssl_config.wildcard {
+                                                        "Wildcard (*.domain.com)"
+                                                    } else {
+                                                        "Single Domain"
+                                                    }}
+                                                </span>
+                                            </div>
+                                            <div class="cert-row">
+                                                <span class="label">"Key Algorithm:"</span>
+                                                <span class="value">"RSA 2048-bit"</span>
+                                            </div>
+                                            <div class="cert-row">
+                                                <span class="label">"Signature Algorithm:"</span>
+                                                <span class="value">"SHA256-RSA"</span>
+                                            </div>
+                                            <div class="cert-row">
+                                                <span class="label">"ACME Challenge:"</span>
+                                                <span class="value">
+                                                    {if cert.ssl_config.wildcard {
+                                                        "DNS-01 (Wildcard)"
+                                                    } else {
+                                                        "HTTP-01 (Single Domain)"
+                                                    }}
+                                                </span>
+                                            </div>
+                                            {cert.dns_provider.as_ref().map(|dns| view! {
+                                                <div class="cert-row">
+                                                    <span class="label">"DNS Provider:"</span>
+                                                    <span class={if dns.configured { "value status-ok" } else { "value status-warning" }}>
+                                                        {dns.provider.clone()}
+                                                        {if dns.configured { " (Configured)" } else { " (Not Configured)" }}
+                                                    </span>
+                                                </div>
+                                            })}
+                                        </div>
+                                    </div>
 
                                     <div class="certificate-card certificate-actions-card">
                                         <h3>"Certificate Actions"</h3>

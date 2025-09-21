@@ -135,7 +135,7 @@ impl UIAssets {
             .body(boxed_body(favicon_data))
             .unwrap()
     }
-    
+
     /// Check if path is a UI asset
     pub fn is_ui_asset(path: &str) -> bool {
         #[cfg(feature = "ui")]

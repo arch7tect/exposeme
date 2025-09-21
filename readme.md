@@ -23,18 +23,19 @@ ExposeME lets you share your local development server with the outside world by 
 
 ## Web UI Dashboard
 
-ExposeME includes a web dashboard for real-time monitoring and management.
+ExposeME includes a modern web dashboard built with Leptos (Rust WASM) for real-time monitoring and management.
 
 ### Features
 
-- **Real-time Metrics** - Live server statistics and tunnel monitoring
-- **Server Status** - Uptime, version, and health information
-- **SSL Certificate Management** - Status, expiration dates, and renewal warnings
-- **Responsive Design** - Clean interface for desktop and tablet
+- **Live Metrics** - Real-time server statistics with traffic visualization charts
+- **Tunnel Management** - View active tunnels, disconnect sessions, monitor traffic
+- **Certificate Management** - SSL status, expiration tracking, ACME renewal controls
+- **Server Configuration** - Routing mode detection, DNS provider status
+- **Professional Design** - TailwindCSS styling with responsive mobile layout
 
 ### Access
 
-Visit `https://yourdomain.com/` when no tunnel routes match. Build with `--features ui` to enable.
+Visit `https://yourdomain.com/` when no tunnel routes match. Docker images include UI by default.
 
 ## Architecture
 
@@ -197,6 +198,7 @@ EXPOSEME_EMAIL=<admin@your-domain.com>
 EXPOSEME_DNS_PROVIDER=cloudflare
 EXPOSEME_CLOUDFLARE_TOKEN=<your-cloudflare-token-here>
 EXPOSEME_AUTH_TOKEN=<your-secure-auth-token-here>
+EXPOSEME_ADMIN_TOKEN=<your-secure-admin-token-here>
 RUST_LOG=info
 EOF
 ```

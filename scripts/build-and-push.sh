@@ -10,6 +10,12 @@ VERSION=${1:-"1.4"}
 NO_CACHE=${2:-"false"}
 BUILD_UI=${BUILD_UI:-"false"}
 
+# Check if UI dist exists locally
+UI_DIST_EXISTS="false"
+if [ "$BUILD_UI" = "true" ] && [ -d "ui/dist" ]; then
+    UI_DIST_EXISTS="true"
+fi
+
 # Set cache flag
 CACHE_FLAG=""
 if [ "$NO_CACHE" = "true" ] || [ "$NO_CACHE" = "--no-cache" ]; then
@@ -21,6 +27,7 @@ echo "🚀 Building and publishing ExposeME Docker images"
 echo "👤 Docker Hub user: $DOCKER_HUB_USER"
 echo "🏷️ Version: $VERSION"
 echo "🎨 UI: $( [ "$BUILD_UI" = "true" ] && echo "Enabled (use BUILD_UI=false to disable)" || echo "Disabled (default)" )"
+echo "📁 UI Dist: $( [ "$UI_DIST_EXISTS" = "true" ] && echo "Pre-built assets found" || echo "Will build from source" )"
 echo "🗄️ Cache: $( [ -n "$CACHE_FLAG" ] && echo "Disabled (--no-cache)" || echo "Enabled" )"
 
 # Check Docker Hub authorization
@@ -39,8 +46,8 @@ fi
 echo "🔨 Building images..."
 
 # Build base image with both targets
-docker build $CACHE_FLAG --build-arg BUILD_UI=$BUILD_UI --target server --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme-server:$VERSION .
-docker build $CACHE_FLAG --build-arg BUILD_UI=$BUILD_UI --target client --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme-client:$VERSION .
+docker build $CACHE_FLAG --build-arg BUILD_UI=$BUILD_UI --build-arg UI_DIST_EXISTS=$UI_DIST_EXISTS --target server --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme-server:$VERSION .
+docker build $CACHE_FLAG --build-arg BUILD_UI=$BUILD_UI --build-arg UI_DIST_EXISTS=$UI_DIST_EXISTS --target client --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme-client:$VERSION .
 
 # Tag as latest
 if [ "$VERSION" != "latest" ]; then

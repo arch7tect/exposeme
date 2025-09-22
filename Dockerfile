@@ -1,5 +1,5 @@
-# Optimized Dockerfile with better layer caching
-FROM rust:1.88-bookworm AS builder
+# Base builder stage with Trunk cached
+FROM rust:1.88-bookworm AS trunk-builder
 
 # Install system dependencies (cached layer)
 RUN apt-get update && apt-get install -y \
@@ -12,11 +12,15 @@ RUN apt-get update && apt-get install -y \
 # Install Rust tools once (cached layer)
 RUN rustup target add wasm32-unknown-unknown
 
-# Install Trunk conditionally (cached layer if UI build)
+# Install Trunk unconditionally (cached layer - small overhead if not used)
+RUN cargo install trunk --locked
+
+# Main builder stage
+FROM trunk-builder AS builder
+
+# Build arguments for UI logic
 ARG BUILD_UI=false
-RUN if [ "$BUILD_UI" = "true" ]; then \
-        cargo install trunk --locked; \
-    fi
+ARG UI_DIST_EXISTS=false
 
 WORKDIR /app
 
@@ -32,9 +36,7 @@ RUN mkdir -p ui/src && echo "fn main() {}" > ui/src/main.rs && echo "" > ui/src/
 
 # Build dependencies only (this layer will be cached until Cargo.toml changes)
 RUN cargo build --release --bin exposeme-server --bin exposeme-client
-RUN if [ "$BUILD_UI" = "true" ]; then \
-        cargo build --release --target wasm32-unknown-unknown -p exposeme-ui; \
-    fi
+RUN cargo build --release --target wasm32-unknown-unknown -p exposeme-ui
 
 # Remove dummy source files
 RUN rm -rf src ui/src
@@ -44,10 +46,10 @@ COPY build.rs ./
 COPY src/ ./src/
 COPY ui/ ./ui/
 
-# Build UI first if needed (cached if UI code unchanged)
+# Build UI first if needed (cache-bust if no local dist)
 RUN if [ "$BUILD_UI" = "true" ]; then \
-        if [ ! -d "ui/dist" ]; then \
-            echo "No pre-built UI assets found, building with trunk..."; \
+        if [ "$UI_DIST_EXISTS" = "false" ]; then \
+            echo "No pre-built UI assets found locally, building with trunk..."; \
             cd ui && trunk build --release && cd ..; \
         else \
             echo "Using pre-built UI assets from host..."; \

@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use crate::api::*;
 use crate::types::*;
+use crate::sse::SseGuard;
 
 #[component]
 pub fn TunnelsPage() -> impl IntoView {
@@ -24,32 +25,36 @@ pub fn TunnelsPage() -> impl IntoView {
         });
     });
 
-    // Setup live metrics polling instead of SSE to avoid disposal panics
-    Effect::new(move |_| {
-        // Start a polling interval for metrics updates
-        let set_metrics_clone = set_metrics;
-        let set_connected_clone = set_connected;
-        let set_error_clone = set_error;
+    // Better panic messages in dev
+    #[cfg(debug_assertions)]
+    console_error_panic_hook::set_once();
 
-        leptos::task::spawn_local(async move {
-            loop {
-                // Poll every 5 seconds
-                gloo_timers::future::TimeoutFuture::new(5_000).await;
+    // Store non-Send handles locally in the owner arena
+    let _sse_guard = StoredValue::new_local({
+        let set_metrics = set_metrics;
+        let set_connected = set_connected;
+        let set_error = set_error;
 
-                // Try to fetch metrics
-                match fetch_metrics().await {
-                    Ok(metrics_data) => {
-                        set_metrics_clone.set(Some(metrics_data));
-                        set_connected_clone.set(true);
-                        set_error_clone.set(None);
-                    }
-                    Err(_) => {
-                        set_connected_clone.set(false);
-                        // Don't update error state to avoid noise
-                    }
-                }
+        match SseGuard::new(
+            "/api/metrics/stream",
+            move |payload| {
+                set_metrics.set(Some(payload));
+                set_connected.set(true);
+                set_error.set(None);
+            },
+            move |error_msg| {
+                set_error.set(Some(error_msg));
+            },
+            move |connected| {
+                set_connected.set(connected);
+            },
+        ) {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                set_error.set(Some(e));
+                None
             }
-        });
+        }
     });
 
     view! {

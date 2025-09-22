@@ -7,6 +7,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 mod pages;
 mod components;
 mod api;
+mod sse;
 mod types;
 
 use pages::*;

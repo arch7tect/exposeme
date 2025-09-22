@@ -24,7 +24,7 @@ console_error_panic_hook = "0.1"
 wasm-bindgen-futures = "0.4"
 console_log = "1.0"
 log = "0.4"
-gloo-timers = { version = "0.3", features = ["futures"] }
+gloo = "0.11"
 
 [dependencies.web-sys]
 version = "0.3"

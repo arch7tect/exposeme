@@ -1,6 +1,4 @@
 use leptos::prelude::*;
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 use crate::api::*;
 use crate::types::*;
 
@@ -33,45 +31,30 @@ pub fn Dashboard() -> impl IntoView {
         });
     });
 
-    // Setup live metrics stream with proper lifecycle management
+    // Setup live metrics polling instead of SSE to avoid disposal panics
     Effect::new(move |_| {
-        if let Ok(event_source) = create_metrics_stream() {
-            // Clone signals that will be moved into closures to avoid disposal issues
-            let set_metrics_clone = set_metrics;
-            let set_connected_clone = set_connected;
-            let set_error_clone = set_error;
+        // Start a polling interval for metrics updates
+        let set_metrics_clone = set_metrics;
+        let set_connected_clone = set_connected;
 
-            // Create Leptos callback for metrics updates
-            let metrics_callback = Callback::new(move |new_metrics: MetricsResponse| {
-                set_metrics_clone.set(Some(new_metrics));
-                set_connected_clone.set(true);
-                set_error_clone.set(None);
-            });
+        leptos::task::spawn_local(async move {
+            loop {
+                // Poll every 5 seconds
+                gloo_timers::future::TimeoutFuture::new(5_000).await;
 
-            // Setup SSE listener with panic-safe error handling
-            let listener = setup_sse_listener(&event_source, metrics_callback);
-
-            // Handle connection errors with cloned signals and panic safety
-            let set_connected_err = set_connected;
-            let set_error_err = set_error;
-            let error_callback = Closure::wrap(Box::new(move |_: web_sys::Event| {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    set_connected_err.set(false);
-                    set_error_err.set(Some("Lost connection to server".to_string()));
-                }));
-
-                if result.is_err() {
-                    web_sys::console::warn_1(&"SSE error callback failed (likely component disposed)".into());
+                // Try to fetch metrics
+                match fetch_metrics().await {
+                    Ok(metrics_data) => {
+                        set_metrics_clone.set(Some(metrics_data));
+                        set_connected_clone.set(true);
+                    }
+                    Err(_) => {
+                        set_connected_clone.set(false);
+                        // Don't update error state to avoid noise
+                    }
                 }
-            }) as Box<dyn Fn(web_sys::Event)>);
-
-            event_source.set_onerror(Some(error_callback.as_ref().unchecked_ref()));
-
-            // Store the closures so they don't get dropped immediately
-            // This approach avoids the "forget" pattern which was causing issues
-            std::mem::forget(listener);
-            std::mem::forget(error_callback);
-        }
+            }
+        });
     });
 
     view! {

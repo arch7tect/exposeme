@@ -24,18 +24,32 @@ pub fn TunnelsPage() -> impl IntoView {
         });
     });
 
-    // Setup live metrics stream for real-time updates
+    // Setup live metrics polling instead of SSE to avoid disposal panics
     Effect::new(move |_| {
-        if let Ok(event_source) = create_metrics_stream() {
-            let metrics_callback = Callback::new(move |new_metrics: MetricsResponse| {
-                set_metrics.set(Some(new_metrics));
-                set_connected.set(true);
-                set_error.set(None);
-            });
+        // Start a polling interval for metrics updates
+        let set_metrics_clone = set_metrics;
+        let set_connected_clone = set_connected;
+        let set_error_clone = set_error;
 
-            let listener = setup_sse_listener(&event_source, metrics_callback);
-            listener.forget();
-        }
+        leptos::task::spawn_local(async move {
+            loop {
+                // Poll every 5 seconds
+                gloo_timers::future::TimeoutFuture::new(5_000).await;
+
+                // Try to fetch metrics
+                match fetch_metrics().await {
+                    Ok(metrics_data) => {
+                        set_metrics_clone.set(Some(metrics_data));
+                        set_connected_clone.set(true);
+                        set_error_clone.set(None);
+                    }
+                    Err(_) => {
+                        set_connected_clone.set(false);
+                        // Don't update error state to avoid noise
+                    }
+                }
+            }
+        });
     });
 
     view! {

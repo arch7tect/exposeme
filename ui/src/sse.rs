@@ -2,7 +2,7 @@ use gloo::events::EventListener;
 use wasm_bindgen::JsCast;
 use web_sys::{EventSource, MessageEvent};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-use crate::types::MetricsResponse;
+use serde::de::DeserializeOwned;
 
 /// RAII guard for Server-Sent Events with proper cleanup
 pub struct SseGuard {
@@ -14,9 +14,9 @@ pub struct SseGuard {
 }
 
 impl SseGuard {
-    pub fn new(
+    pub fn new<T: DeserializeOwned + 'static>(
         url: &str,
-        on_msg: impl Fn(MetricsResponse) + 'static,
+        on_msg: impl Fn(T) + 'static,
         on_error: impl Fn(String) + 'static,
         on_connected: impl Fn(bool) + 'static,
     ) -> Result<Self, String> {
@@ -39,7 +39,7 @@ impl SseGuard {
             if let Some(text) = evt.dyn_ref::<MessageEvent>()
                 .and_then(|e| e.data().as_string())
             {
-                match serde_json::from_str::<MetricsResponse>(&text) {
+                match serde_json::from_str::<T>(&text) {
                     Ok(payload) => msg_on_msg(payload),
                     Err(de) => msg_on_error(format!("SSE decode error: {}", de)),
                 }

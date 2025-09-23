@@ -35,7 +35,7 @@ pub fn TunnelsPage() -> impl IntoView {
         let set_connected = set_connected;
         let set_error = set_error;
 
-        match SseGuard::new(
+        match SseGuard::new::<MetricsResponse>(
             "/api/metrics/stream",
             move |payload| {
                 set_metrics.set(Some(payload));

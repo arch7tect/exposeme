@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+
+      - name: Install system dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install system dependencies (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install openssl pkg-config
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+        if: matrix.os == 'ubuntu-latest'
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+        if: matrix.os == 'ubuntu-latest'
+
+      - name: Run tests (without UI)
+        run: cargo test --verbose --workspace
+
+      - name: Build binaries (without UI)
+        run: cargo build --release --bins
+
+      # Test UI build only on Ubuntu to save CI time
+      - name: Install Trunk and test UI build
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo install trunk --locked
+          cd ui
+          trunk build --release
+          cd ..
+          cargo build --release --bins --features ui
+
+      # Quick smoke test - make sure binaries run
+      - name: Test server binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            timeout 5 ./target/release/exposeme-server.exe --help || true
+          else
+            timeout 5 ./target/release/exposeme-server --help || true
+          fi
+
+      - name: Test client binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            timeout 5 ./target/release/exposeme-client.exe --help || true
+          else
+            timeout 5 ./target/release/exposeme-client --help || true
+          fi

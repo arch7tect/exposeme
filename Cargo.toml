@@ -24,13 +24,21 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 
-[package]
+[workspace.package]
 name = "exposeme"
-version = "1.4.29"
+version = "1.4.30"
 edition = "2021"
 authors = ["Oleg Orlov <arch7tect@gmail.com>"]
 description = "Secure HTTP tunneling service"
 license = "MIT"
+
+[package]
+name = "exposeme"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description.workspace = true
 
 [[bin]]
 name = "exposeme-server"

@@ -131,16 +131,8 @@ check_remote_access() {
 update_cargo_version() {
     info "Updating version in Cargo.toml files..."
 
-    # Update root Cargo.toml
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS (BSD sed)
-        sed -i '' "s/^version = .*/version = \"$VERSION\"/" Cargo.toml
-        sed -i '' "s/^version = .*/version = \"$VERSION\"/" ui/Cargo.toml
-    else
-        # Linux (GNU sed)
-        sed -i "s/^version = .*/version = \"$VERSION\"/" Cargo.toml
-        sed -i "s/^version = .*/version = \"$VERSION\"/" ui/Cargo.toml
-    fi
+    # Update workspace version
+    cargo set-version --workspace "$VERSION"
 
     # Verify the changes were made
     local root_version=$(grep "^version = " Cargo.toml | head -1 | cut -d'"' -f2)

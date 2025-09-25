@@ -1,6 +1,6 @@
 [package]
 name = "exposeme-ui"
-version = "1.4.28"
+version = "1.4.29"
 edition = "2021"
 authors = ["Oleg Orlov <arch7tect@gmail.com>"]
 description = "ExposeME Web UI - WASM Dashboard"
@@ -27,7 +27,7 @@ log = "0.4"
 gloo = "0.11"
 
 [dependencies.web-sys]
-version = "1.4.28"
+version = "1.4.29"
 features = [
   "console",
   "EventSource",

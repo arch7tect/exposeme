@@ -9,11 +9,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Build binaries for your target platforms
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -25,7 +25,6 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             name: macos-arm64
-          # Optional: Intel Mac support
           - target: x86_64-apple-darwin
             os: macos-latest
             name: macos-x64
@@ -34,11 +33,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      # Install toolchain for native target (matrix) and add wasm target for Trunk
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          target: ${{ matrix.target }}
-          targets: wasm32-unknown-unknown
+          targets: ${{ matrix.target }},wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            ui -> target
 
       - name: Install system dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -49,46 +55,46 @@ jobs:
       - name: Install system dependencies (macOS)
         if: matrix.os == 'macos-latest'
         run: |
-          brew install openssl pkg-config
+          brew update || true
+          brew install openssl pkg-config || true
 
-      - name: Install Trunk for UI building
+      - name: Install Trunk
         run: cargo install trunk --locked
 
       - name: Build UI assets
-        run: |
-          cd ui
-          trunk build --release
-          cd ..
+        working-directory: ui
+        run: trunk build --release
 
-      - name: Build release binaries with UI
+      - name: Build release binaries with UI feature
         run: cargo build --release --target ${{ matrix.target }} --bins --features ui
 
-      - name: Package binaries
+      # Package artifacts
+      - name: Package binaries (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-files | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/exposeme-server.exe" release-files/
+          Copy-Item "target/${{ matrix.target }}/release/exposeme-client.exe" release-files/
+          Compress-Archive -Path release-files/* -DestinationPath "exposeme-${{ matrix.name }}.zip"
+
+      - name: Package binaries (Unix)
+        if: matrix.os != 'windows-latest'
         shell: bash
         run: |
           mkdir -p release-files
-          
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            # Windows - create zip
-            cp target/${{ matrix.target }}/release/exposeme-server.exe release-files/
-            cp target/${{ matrix.target }}/release/exposeme-client.exe release-files/
-            cd release-files
-            7z a ../exposeme-${{ matrix.name }}.zip *
-          else
-            # Unix - create tar.gz
-            cp target/${{ matrix.target }}/release/exposeme-server release-files/
-            cp target/${{ matrix.target }}/release/exposeme-client release-files/
-            cd release-files
-            tar -czf ../exposeme-${{ matrix.name }}.tar.gz *
-          fi
+          cp "target/${{ matrix.target }}/release/exposeme-server" release-files/
+          cp "target/${{ matrix.target }}/release/exposeme-client" release-files/
+          tar -czf "exposeme-${{ matrix.name }}.tar.gz" -C release-files .
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: exposeme-${{ matrix.name }}
-          path: exposeme-${{ matrix.name }}.*
+          path: |
+            exposeme-${{ matrix.name }}.tar.gz
+            exposeme-${{ matrix.name }}.zip
 
-  # Build and publish Docker images
   docker:
     name: Build Docker Images
     runs-on: ubuntu-latest
@@ -114,7 +120,7 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: Install Rust and Trunk for UI build
+      - name: Install Rust + wasm target + Trunk
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source ~/.cargo/env
@@ -159,7 +165,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Create GitHub Release
   release:
     name: Create Release
     runs-on: ubuntu-latest
@@ -179,7 +184,8 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release-assets
-          find artifacts/ -name "exposeme-*" -type f -exec cp {} release-assets/ \;
+          find artifacts/ -type f -name "exposeme-*.tar.gz" -exec cp {} release-assets/ \;
+          find artifacts/ -type f -name "exposeme-*.zip"    -exec cp {} release-assets/ \;
           ls -la release-assets/
 
       - name: Extract version from tag
@@ -193,41 +199,27 @@ jobs:
           name: ExposeME ${{ steps.version.outputs.version }}
           body: |
             ## 🚀 ExposeME ${{ steps.version.outputs.version }}
-            
-            ### Downloads (All include Web UI Dashboard! 🎨)
-            
-            **Binaries:**
-            - **Linux (x64):** `exposeme-linux-x64.tar.gz`
-            - **Windows (x64):** `exposeme-windows-x64.zip`  
-            - **macOS (Apple Silicon):** `exposeme-macos-arm64.tar.gz`
-            - **macOS (Intel):** `exposeme-macos-x64.tar.gz`
-            
-            **Docker Images:**
+
+            ### Downloads (All include Web UI Dashboard)
+            - Linux (x64): `exposeme-linux-x64.tar.gz`
+            - Windows (x64): `exposeme-windows-x64.zip`
+            - macOS (Apple Silicon): `exposeme-macos-arm64.tar.gz`
+            - macOS (Intel): `exposeme-macos-x64.tar.gz`
+
+            ### Docker Images
             ```bash
             # Server (with Web UI Dashboard)
             docker pull ghcr.io/${{ github.repository }}-server:${{ steps.version.outputs.version }}
-            
-            # Client  
+
+            # Client
             docker pull ghcr.io/${{ github.repository }}-client:${{ steps.version.outputs.version }}
             ```
-            
-            ### Quick Start
-            
-            **Server:**
+
+            ### Quick Start (Server)
             ```bash
             docker run -d -p 80:80 -p 443:443 \
               -e EXPOSEME_DOMAIN=yourdomain.com \
               ghcr.io/${{ github.repository }}-server:${{ steps.version.outputs.version }}
-            # Then visit https://yourdomain.com for the Web Dashboard! 🎨
-            ```
-            
-            **Client:**
-            ```bash
-            ./exposeme-client \
-              --server-url wss://yourdomain.com/tunnel-ws \
-              --token your-token \
-              --tunnel-id my-app \
-              --local-target http://localhost:3000
             ```
           files: release-assets/*
           draft: false

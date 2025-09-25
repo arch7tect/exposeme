@@ -142,10 +142,6 @@ update_cargo_version() {
         error "Failed to update version in root Cargo.toml (got: $root_version, expected: $VERSION)"
     fi
 
-    if [[ "$ui_version" != "$VERSION" ]]; then
-        error "Failed to update version in ui/Cargo.toml (got: $ui_version, expected: $VERSION)"
-    fi
-
     success "Updated Cargo.toml files to version $VERSION"
 }
 

@@ -171,7 +171,6 @@ jobs:
             ghcr.io/${{ github.repository }}-server:latest
             ghcr.io/${{ github.repository }}-server:${{ steps.version.outputs.version }}
           build-args: |
-            BUILD_UI=true
             UI_DIST_EXISTS=true
           cache-from: type=gha,scope=server-${{ github.run_id }}
           cache-to: type=gha,mode=max,scope=server-${{ github.run_id }}
@@ -187,7 +186,7 @@ jobs:
             ghcr.io/${{ github.repository }}-client:latest
             ghcr.io/${{ github.repository }}-client:${{ steps.version.outputs.version }}
           build-args: |
-            BUILD_UI=false
+            UI_DIST_EXISTS=true
           cache-from: type=gha,scope=client-${{ github.run_id }}
           cache-to: type=gha,mode=max,scope=client-${{ github.run_id }}
 

@@ -9,18 +9,20 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust tools once (cached layer)
-RUN rustup target add wasm32-unknown-unknown
+# Install Rust tools conditionally based on UI build requirements
+ARG UI_DIST_EXISTS=false
 
-# Install Trunk unconditionally (cached layer - small overhead if not used)
-RUN cargo install trunk --locked
+# Only install WASM + Trunk if we don't have pre-built UI assets
+RUN if [ "$UI_DIST_EXISTS" = "false" ]; then \
+        echo "Installing WASM toolchain and Trunk for UI building..."; \
+        rustup target add wasm32-unknown-unknown; \
+        cargo install trunk --locked; \
+    else \
+        echo "Skipping WASM/Trunk installation - using pre-built UI assets"; \
+    fi
 
 # Main builder stage
 FROM trunk-builder AS builder
-
-# Build arguments for UI logic
-ARG BUILD_UI=false
-ARG UI_DIST_EXISTS=false
 
 WORKDIR /app
 
@@ -36,7 +38,14 @@ RUN mkdir -p ui/src && echo "fn main() {}" > ui/src/main.rs && echo "" > ui/src/
 
 # Build dependencies only (this layer will be cached until Cargo.toml changes)
 RUN cargo build --release --bin exposeme-server --bin exposeme-client
-RUN cargo build --release --target wasm32-unknown-unknown -p exposeme-ui
+
+# Only build WASM dependencies if we don't have pre-built UI assets
+RUN if [ "$UI_DIST_EXISTS" = "false" ]; then \
+        echo "Pre-building WASM dependencies..."; \
+        cargo build --release --target wasm32-unknown-unknown -p exposeme-ui; \
+    else \
+        echo "Skipping WASM dependency build - using pre-built UI"; \
+    fi
 
 # Remove dummy source files
 RUN rm -rf src ui/src
@@ -46,25 +55,18 @@ COPY build.rs ./
 COPY src/ ./src/
 COPY ui/ ./ui/
 
-# Build UI first if needed (cache-bust if no local dist)
-RUN if [ "$BUILD_UI" = "true" ]; then \
-        if [ "$UI_DIST_EXISTS" = "false" ]; then \
-            echo "No pre-built UI assets found locally, building with trunk..."; \
-            cd ui && trunk build --release && cd ..; \
-        else \
-            echo "Using pre-built UI assets from host..."; \
-            echo "Files in ui/dist:"; \
-            ls -la ui/dist/; \
-            echo "Preserving pre-built assets, skipping trunk build"; \
-        fi \
+# Build UI first if needed
+RUN if [ "$UI_DIST_EXISTS" = "false" ]; then \
+        echo "Building UI with Trunk..."; \
+        cd ui && trunk build --release && cd ..; \
+    else \
+        echo "Using pre-built UI assets"; \
+        echo "Files in ui/dist:"; \
+        ls -la ui/dist/ || echo "UI dist directory structure:"; \
     fi
 
-# Build the final application (dependencies already built above)
-RUN if [ "$BUILD_UI" = "true" ]; then \
-        cargo build --release --features ui --bin exposeme-server --bin exposeme-client; \
-    else \
-        cargo build --release --bin exposeme-server --bin exposeme-client; \
-    fi
+# Build the final application with UI feature (dependencies already built above)
+RUN cargo build --release --features ui --bin exposeme-server --bin exposeme-client
 
 # Runtime stage
 FROM debian:bookworm-slim AS server

@@ -25,7 +25,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ui -> target
-          key: ui-build-${{ hashFiles('ui/Cargo.lock', 'Cargo.lock') }}
 
       - name: Install Trunk
         run: cargo install trunk --locked

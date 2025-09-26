@@ -9,9 +9,42 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  ui-build:
+    name: Build UI Assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo for UI build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ui -> target
+          key: ui-build-${{ hashFiles('ui/Cargo.lock', 'Cargo.lock') }}
+
+      - name: Install Trunk
+        run: cargo install trunk --locked
+
+      - name: Build UI assets
+        working-directory: ui
+        run: trunk build --release
+
+      - name: Upload UI assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist/
+          retention-days: 1
+
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: ui-build
     strategy:
       fail-fast: false
       matrix:
@@ -42,9 +75,14 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            . -> target
-            ui -> target
+          workspaces: . -> target
+          key: ${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.3
+
+      - name: Configure sccache
+        run: echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 
       - name: Install system dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -52,18 +90,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev
 
-      - name: Install system dependencies (macOS)
-        if: matrix.os == 'macos-latest'
-        run: |
-          brew update || true
-          brew install openssl pkg-config || true
+      # macOS dependencies removed - using rustls, no OpenSSL needed
 
-      - name: Install Trunk
-        run: cargo install trunk --locked
-
-      - name: Build UI assets
-        working-directory: ui
-        run: trunk build --release
+      - name: Download pre-built UI assets
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist/
 
       - name: Build release binaries with UI feature
         run: cargo build --release --target ${{ matrix.target }} --bins --features ui
@@ -98,6 +131,7 @@ jobs:
   docker:
     name: Build Docker Images
     runs-on: ubuntu-latest
+    needs: ui-build
     permissions:
       contents: read
       packages: write
@@ -120,19 +154,11 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: Install Rust + wasm target + Trunk
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source ~/.cargo/env
-          rustup target add wasm32-unknown-unknown
-          cargo install trunk --locked
-
-      - name: Build UI assets
-        run: |
-          source ~/.cargo/env
-          cd ui
-          trunk build --release
-          cd ..
+      - name: Download pre-built UI assets
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist/
 
       - name: Build and push server image
         uses: docker/build-push-action@v5
@@ -147,8 +173,8 @@ jobs:
           build-args: |
             BUILD_UI=true
             UI_DIST_EXISTS=true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=server-${{ github.run_id }}
+          cache-to: type=gha,mode=max,scope=server-${{ github.run_id }}
 
       - name: Build and push client image
         uses: docker/build-push-action@v5
@@ -162,8 +188,8 @@ jobs:
             ghcr.io/${{ github.repository }}-client:${{ steps.version.outputs.version }}
           build-args: |
             BUILD_UI=false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=client-${{ github.run_id }}
+          cache-to: type=gha,mode=max,scope=client-${{ github.run_id }}
 
   release:
     name: Create Release

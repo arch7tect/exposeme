@@ -37,6 +37,13 @@ pub fn AppLayout() -> impl IntoView {
     let (health, set_health) = signal::<Option<HealthResponse>>(None);
     let (connected, set_connected) = signal(false);
 
+    // Global admin token state
+    let (admin_token, set_admin_token) = signal(String::new());
+
+    // Provide admin token to all components
+    provide_context(admin_token);
+    provide_context(set_admin_token);
+
     // Load initial health data
     Effect::new(move |_| {
         leptos::task::spawn_local(async move {
@@ -64,6 +71,7 @@ pub fn AppLayout() -> impl IntoView {
                         <Route path=StaticSegment("tunnels") view=TunnelsPage/>
                         <Route path=StaticSegment("certificates") view=CertificatesPage/>
                         <Route path=StaticSegment("settings") view=SettingsPage/>
+                        <Route path=StaticSegment("admin") view=AdminPage/>
                     </Routes>
                 </main>
             </div>

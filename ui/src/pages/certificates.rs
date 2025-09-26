@@ -6,7 +6,10 @@ use crate::types::*;
 pub fn CertificatesPage() -> impl IntoView {
     let (certificate_info, set_certificate_info) = signal::<Option<CertificateInfo>>(None);
     let (error, set_error) = signal::<Option<String>>(None);
-    let (admin_token, set_admin_token) = signal(String::new());
+
+    // Get global admin token from context
+    let admin_token = use_context::<ReadSignal<String>>()
+        .expect("Admin token signal should be provided in context");
     let (renewing, set_renewing) = signal(false);
     let (renewal_error, set_renewal_error) = signal::<Option<String>>(None);
     let (renewal_success, set_renewal_success) = signal(false);
@@ -56,31 +59,6 @@ pub fn CertificatesPage() -> impl IntoView {
             </header>
 
             <div class="page-content">
-                <div class="admin-auth-section">
-                    <h3>"Admin Authentication"</h3>
-                    <p>"Enter admin token to enable certificate management actions:"</p>
-                    <div class="admin-token-input">
-                        <input
-                            type="password"
-                            placeholder="Enter admin token..."
-                            value={move || admin_token.get()}
-                            on:input=move |ev| {
-                                set_admin_token.set(event_target_value(&ev));
-                            }
-                            class="token-input"
-                        />
-                        <div class="token-status">
-                            {move || {
-                                if admin_token.get().is_empty() {
-                                    view! { <span class="status-inactive">"No token provided"</span> }
-                                } else {
-                                    view! { <span class="status-active">"Token entered (admin actions enabled)"</span> }
-                                }
-                            }}
-                        </div>
-                    </div>
-                </div>
-
                 {move || error.get().map(|err| view! {
                     <div class="error-banner">
                         <strong>"Error: "</strong>
@@ -231,7 +209,10 @@ pub fn CertificatesPage() -> impl IntoView {
                                             {move || {
                                                 if admin_token.get().is_empty() {
                                                     view! {
-                                                        <p class="admin-required">"Admin token required for certificate management"</p>
+                                                        <div class="admin-required">
+                                                            <p>"Admin access required for certificate management"</p>
+                                                            <a href="/admin" class="admin-link">"Go to Admin Page →"</a>
+                                                        </div>
                                                     }.into_any()
                                                 } else {
                                                     view! {

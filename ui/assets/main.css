@@ -493,6 +493,73 @@ body {
     margin: 0;
 }
 
+.admin-required .admin-link {
+    color: #3b82f6;
+    text-decoration: none;
+    font-weight: 500;
+    display: inline-block;
+    margin-top: 0.5rem;
+}
+
+.admin-required .admin-link:hover {
+    color: #2563eb;
+    text-decoration: underline;
+}
+
+
+/* Admin Actions Section */
+.admin-actions-section {
+    background: white;
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+    border: 1px solid #e2e8f0;
+    margin-bottom: 1.5rem;
+}
+
+.admin-actions-section h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: #1e293b;
+}
+
+.quick-actions {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.action-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    text-decoration: none;
+    color: #334155;
+    font-weight: 500;
+    transition: all 0.2s ease;
+    min-width: 140px;
+}
+
+.action-link:hover {
+    background: #e2e8f0;
+    border-color: #cbd5e1;
+    color: #1e293b;
+    text-decoration: none;
+}
+
+.action-icon {
+    font-size: 1.25rem;
+}
+
+.action-text {
+    font-size: 0.875rem;
+}
+
 .action-error {
     background: #fef2f2;
     border: 1px solid #fecaca;

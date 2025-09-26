@@ -9,7 +9,10 @@ pub fn TunnelsPage() -> impl IntoView {
     let (metrics, set_metrics) = signal::<Option<MetricsResponse>>(None);
     let (error, set_error) = signal::<Option<String>>(None);
     let (_connected, set_connected) = signal(false);
-    let (admin_token, set_admin_token) = signal(String::new());
+
+    // Get global admin token from context
+    let admin_token = use_context::<ReadSignal<String>>()
+        .expect("Admin token signal should be provided in context");
 
     // Load initial data
     Effect::new(move |_| {
@@ -65,8 +68,6 @@ pub fn TunnelsPage() -> impl IntoView {
             </header>
 
             <div class="page-content">
-                <AdminTokenInput admin_token=admin_token set_admin_token=set_admin_token/>
-
                 <ErrorDisplay error=error/>
 
                 <div class="tunnels-section">
@@ -77,38 +78,6 @@ pub fn TunnelsPage() -> impl IntoView {
     }
 }
 
-#[component]
-pub fn AdminTokenInput(
-    admin_token: ReadSignal<String>,
-    set_admin_token: WriteSignal<String>,
-) -> impl IntoView {
-    view! {
-        <div class="admin-auth-section">
-            <h3>"Admin Authentication"</h3>
-            <p>"Enter admin token to enable tunnel management actions:"</p>
-            <div class="admin-token-input">
-                <input
-                    type="password"
-                    placeholder="Enter admin token..."
-                    value={move || admin_token.get()}
-                    on:input=move |ev| {
-                        set_admin_token.set(event_target_value(&ev));
-                    }
-                    class="token-input"
-                />
-                <div class="token-status">
-                    {move || {
-                        if admin_token.get().is_empty() {
-                            view! { <span class="status-inactive">"No token provided"</span> }.into_any()
-                        } else {
-                            view! { <span class="status-active">"Token entered (admin actions enabled)"</span> }.into_any()
-                        }
-                    }}
-                </div>
-            </div>
-        </div>
-    }
-}
 
 #[component]
 pub fn TunnelsList(
@@ -279,7 +248,10 @@ pub fn TunnelCard(
                 {move || {
                     if admin_token.get().is_empty() {
                         view! {
-                            <p class="admin-required">"Admin token required for actions"</p>
+                            <div class="admin-required">
+                                <p>"Admin access required for tunnel actions"</p>
+                                <a href="/admin" class="admin-link">"Go to Admin Page →"</a>
+                            </div>
                         }.into_any()
                     } else {
                         let disconnect_tunnel = disconnect_tunnel.clone();

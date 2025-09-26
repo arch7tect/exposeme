@@ -23,6 +23,10 @@ pub fn Navigation() -> impl IntoView {
                         <span class="mr-3 text-lg">"⚙️"</span>
                         "Settings"
                     </A>
+                    <A href="/admin" attr:class="flex items-center px-4 py-3 text-sm font-medium rounded-lg hover:bg-gray-100 transition-colors text-gray-700">
+                        <span class="mr-3 text-lg">"🔐"</span>
+                        "Admin"
+                    </A>
                 </div>
             </div>
         </nav>

@@ -132,7 +132,7 @@ Want to test ExposeME quickly without setting up your own server? Use our public
 **No config file needed - just run with CLI args:**
 
 ```bash
-docker run -it --rm arch7tect/exposeme-client:latest \
+docker run -it --rm ghcr.io/arch7tect/exposeme-client:latest \
   --server-url "wss://exposeme.org/tunnel-ws" \
   --token "uoINplvTSD3z8nOuzcDC5JDq41sf4GGELoLELBymXTY=" \
   --tunnel-id "my-tunnel" \
@@ -151,7 +151,7 @@ mv client.toml.template client.toml
 # local_target = "http://host.docker.internal:3000"  # Your local service port
 
 # Run the client
-docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml arch7tect/exposeme-client:latest
+docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml ghcr.io/arch7tect/exposeme-client:latest
 ```
 
 Your service will be accessible at: `https://my-tunnel.exposeme.org/`
@@ -217,7 +217,7 @@ docker compose logs -f
 **Option A: Using command line only (no config file needed):**
 
 ```bash
-docker run -it --rm arch7tect/exposeme-client:latest \
+docker run -it --rm ghcr.io/arch7tect/exposeme-client:latest \
   --server-url "wss://example.com/tunnel-ws" \
   --token "your_secure_auth_token" \
   --tunnel-id "my-app" \
@@ -245,7 +245,7 @@ insecure = false  # Set to true for self-signed certificates (development only)
 ```bash
 docker run -it --rm \
   -v ./client.toml:/etc/exposeme/client.toml \
-  arch7tect/exposeme-client:latest
+  ghcr.io/arch7tect/exposeme-client:latest
 ```
 
 3. **Access your service:**
@@ -652,10 +652,10 @@ docker compose pull
 docker compose down
 docker compose up -d
 
-# Update client - arch7tect/exposeme-client:1.4 == arch7tect/exposeme-client:latest
+# Update client - ghcr.io/arch7tect/exposeme-client:1.4 == ghcr.io/arch7tect/exposeme-client:latest
 docker run -it --rm \
   -v ./client.toml:/etc/exposeme/client.toml \
-  arch7tect/exposeme-client:latest
+  ghcr.io/arch7tect/exposeme-client:latest
 ```
 
 ## License

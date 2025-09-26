@@ -5,7 +5,8 @@
 set -e
 
 # Configuration
-DOCKER_HUB_USER=${DOCKER_HUB_USER:-"arch7tect"}
+REGISTRY=${REGISTRY:-"ghcr.io"}
+DOCKER_USER=${DOCKER_USER:-"arch7tect"}
 VERSION=${1:-"1.4"}
 NO_CACHE=${2:-"false"}
 BUILD_UI=${BUILD_UI:-"false"}
@@ -24,16 +25,16 @@ if [ "$NO_CACHE" = "true" ] || [ "$NO_CACHE" = "--no-cache" ]; then
 fi
 
 echo "🚀 Building and publishing ExposeME Docker images"
-echo "👤 Docker Hub user: $DOCKER_HUB_USER"
+echo "📦 Registry: $REGISTRY/$DOCKER_USER"
 echo "🏷️ Version: $VERSION"
 echo "🎨 UI: $( [ "$BUILD_UI" = "true" ] && echo "Enabled (use BUILD_UI=false to disable)" || echo "Disabled (default)" )"
 echo "📁 UI Dist: $( [ "$UI_DIST_EXISTS" = "true" ] && echo "Pre-built assets found" || echo "Will build from source" )"
 echo "🗄️ Cache: $( [ -n "$CACHE_FLAG" ] && echo "Disabled (--no-cache)" || echo "Enabled" )"
 
-# Check Docker Hub authorization
+# Check registry authorization
 if ! docker info | grep -q "Username:"; then
-    echo "🔐 Please login to Docker Hub:"
-    docker login
+    echo "🔐 Please login to $REGISTRY:"
+    docker login $REGISTRY
 fi
 
 # 1. Clean UI build if no-cache mode and UI enabled
@@ -46,24 +47,24 @@ fi
 echo "🔨 Building images..."
 
 # Build base image with both targets
-docker build $CACHE_FLAG --build-arg BUILD_UI=$BUILD_UI --build-arg UI_DIST_EXISTS=$UI_DIST_EXISTS --target server --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme-server:$VERSION .
-docker build $CACHE_FLAG --build-arg BUILD_UI=$BUILD_UI --build-arg UI_DIST_EXISTS=$UI_DIST_EXISTS --target client --platform linux/amd64 -t $DOCKER_HUB_USER/exposeme-client:$VERSION .
+docker build $CACHE_FLAG --build-arg BUILD_UI=$BUILD_UI --build-arg UI_DIST_EXISTS=$UI_DIST_EXISTS --target server --platform linux/amd64 -t $REGISTRY/$DOCKER_USER/exposeme-server:$VERSION .
+docker build $CACHE_FLAG --build-arg BUILD_UI=$BUILD_UI --build-arg UI_DIST_EXISTS=$UI_DIST_EXISTS --target client --platform linux/amd64 -t $REGISTRY/$DOCKER_USER/exposeme-client:$VERSION .
 
 # Tag as latest
 if [ "$VERSION" != "latest" ]; then
-    docker tag $DOCKER_HUB_USER/exposeme-server:$VERSION $DOCKER_HUB_USER/exposeme-server:latest
-    docker tag $DOCKER_HUB_USER/exposeme-client:$VERSION $DOCKER_HUB_USER/exposeme-client:latest
+    docker tag $REGISTRY/$DOCKER_USER/exposeme-server:$VERSION $REGISTRY/$DOCKER_USER/exposeme-server:latest
+    docker tag $REGISTRY/$DOCKER_USER/exposeme-client:$VERSION $REGISTRY/$DOCKER_USER/exposeme-client:latest
 fi
 
 # 2. Publish images
-echo "📤 Publishing images to Docker Hub..."
+echo "📤 Publishing images to $REGISTRY..."
 
-docker push $DOCKER_HUB_USER/exposeme-server:$VERSION
-docker push $DOCKER_HUB_USER/exposeme-client:$VERSION
+docker push $REGISTRY/$DOCKER_USER/exposeme-server:$VERSION
+docker push $REGISTRY/$DOCKER_USER/exposeme-client:$VERSION
 
 if [ "$VERSION" != "latest" ]; then
-    docker push $DOCKER_HUB_USER/exposeme-server:latest
-    docker push $DOCKER_HUB_USER/exposeme-client:latest
+    docker push $REGISTRY/$DOCKER_USER/exposeme-server:latest
+    docker push $REGISTRY/$DOCKER_USER/exposeme-client:latest
 fi
 
 # 3. Check image sizes
@@ -73,8 +74,8 @@ docker images | grep -E "(exposeme-server|exposeme-client)" | grep -E "($VERSION
 echo "✅ Done!"
 echo ""
 echo "🌐 Published images:"
-echo "   Server: docker pull $DOCKER_HUB_USER/exposeme-server:$VERSION"
-echo "   Client: docker pull $DOCKER_HUB_USER/exposeme-client:$VERSION"
+echo "   Server: docker pull $REGISTRY/$DOCKER_USER/exposeme-server:$VERSION"
+echo "   Client: docker pull $REGISTRY/$DOCKER_USER/exposeme-client:$VERSION"
 echo ""
 if [ "$BUILD_UI" = "true" ]; then
     echo "🎨 UI Features:"
@@ -94,4 +95,4 @@ echo "🚀 To start server:"
 echo "   docker-compose up -d"
 echo ""
 echo "🔗 To run client:"
-echo "   docker run -it --rm $DOCKER_HUB_USER/exposeme-client:$VERSION"
+echo "   docker run -it --rm $REGISTRY/$DOCKER_USER/exposeme-client:$VERSION"

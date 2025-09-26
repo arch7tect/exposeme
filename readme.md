@@ -604,6 +604,19 @@ ExposeME uses a binary protocol for communication between client and server. Bot
 - **Patch versions are compatible** within the same major.minor release
 - **Protocol changes** require both client and server updates
 
+## New in v1.4.34
+
+**GitHub Container Registry Migration**
+- Migrated Docker images from Docker Hub to GitHub Container Registry (ghcr.io)
+- Automated CI/CD builds now publish directly to GitHub Packages
+
+## New in v1.4.20
+
+**Modern Web UI Dashboard**
+- Modern Leptos WASM UI with TailwindCSS styling
+- Real-time traffic visualization and metrics charts
+- Enhanced certificate management with ACME renewal controls
+
 ## New in v1.4.9
 
 **Observability & Admin Features**

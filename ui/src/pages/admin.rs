@@ -30,7 +30,7 @@ pub fn AdminPage() -> impl IntoView {
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 hover:border-gray-300 hover:shadow-sm transition-all duration-200">
                                 <h4 class="text-base font-semibold mb-2 text-gray-900 flex items-center gap-2">"🔌 Tunnel Management"</h4>
-                                <p class="text-gray-600 text-sm mb-3 leading-relaxed">"Disconnect active tunnels and monitor connections"</p>
+                                <p class="text-gray-600 text-sm mb-3 leading-relaxed">"Disconnect active tunnels"</p>
                                 <div class="mb-3">
                                     {move || {
                                         if admin_token.get().is_empty() {
@@ -47,7 +47,7 @@ pub fn AdminPage() -> impl IntoView {
 
                             <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 hover:border-gray-300 hover:shadow-sm transition-all duration-200">
                                 <h4 class="text-base font-semibold mb-2 text-gray-900 flex items-center gap-2">"🔒 Certificate Management"</h4>
-                                <p class="text-gray-600 text-sm mb-3 leading-relaxed">"Force certificate renewal and manage SSL settings"</p>
+                                <p class="text-gray-600 text-sm mb-3 leading-relaxed">"Force certificate renewal"</p>
                                 <div class="mb-3">
                                     {move || {
                                         if admin_token.get().is_empty() {

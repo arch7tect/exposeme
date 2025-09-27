@@ -1,5 +1,4 @@
 use leptos::prelude::*;
-use crate::components::AdminAuth;
 
 #[component]
 pub fn AdminPage() -> impl IntoView {
@@ -18,12 +17,30 @@ pub fn AdminPage() -> impl IntoView {
 
             <div class="page-content">
                 <div class="admin-main-section">
-                    <AdminAuth
-                        admin_token=admin_token
-                        set_admin_token=set_admin_token
-                        title="Admin Access Control".to_string()
-                        description="Enter your admin token to enable administrative functions across the dashboard:".to_string()
-                    />
+                    <div class="admin-auth-section">
+                        <h3>"Admin Access Control"</h3>
+                        <p>"Enter your admin token to enable administrative functions across the dashboard:"</p>
+                        <div class="admin-token-input">
+                            <input
+                                type="password"
+                                placeholder="Enter admin token..."
+                                value={move || admin_token.get()}
+                                on:input=move |ev| {
+                                    set_admin_token.set(event_target_value(&ev));
+                                }
+                                class="token-input"
+                            />
+                            <div class="token-status">
+                                {move || {
+                                    if admin_token.get().is_empty() {
+                                        view! { <span class="status-inactive">"No token provided"</span> }
+                                    } else {
+                                        view! { <span class="status-active">"Token entered (admin actions enabled)"</span> }
+                                    }
+                                }}
+                            </div>
+                        </div>
+                    </div>
 
                     <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-200 mb-6">
                         <h3 class="text-lg font-semibold mb-4 text-gray-900">"Admin Capabilities"</h3>

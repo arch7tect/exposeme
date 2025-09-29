@@ -97,8 +97,8 @@ jobs:
           name: ui-dist
           path: ui/dist/
 
-      - name: Build release binaries with UI feature
-        run: cargo build --release --target ${{ matrix.target }} --bins --features ui
+      - name: Build release binaries with UI
+        run: cargo build --release --target ${{ matrix.target }} --bins
 
       # Package artifacts
       - name: Package binaries (Windows)

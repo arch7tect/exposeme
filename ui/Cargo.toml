@@ -13,29 +13,33 @@ crate-type = ["cdylib", "rlib"]
 csr = ["leptos/csr"]
 
 [dependencies]
-leptos = { workspace = true }
-leptos_meta = { workspace = true, features = [] }
-leptos_router = { workspace = true }
-wasm-bindgen = "0.2.101"
+# Leptos UI framework
+leptos = { version = "0.8", features = ["csr"] }
+leptos_meta = "0.8"
+leptos_router = "0.8"
+
+# WASM bindings
+wasm-bindgen = "0.2"
 js-sys = "0.3"
-serde = { workspace = true }
-serde_json = { workspace = true }
-chrono = { workspace = true }
+web-sys = { version = "0.3", features = [
+  "console",
+  "EventSource",
+  "MessageEvent",
+  "Window",
+  "Document",
+  "Element",
+  "HtmlElement",
+  "Location",
+] }
+
+# WASM utilities
 console_error_panic_hook = "0.1"
 wasm-bindgen-futures = "0.4"
 console_log = "1.0"
 log = "0.4"
 gloo = "0.11"
 
-[dependencies.web-sys]
-version = "0.3"
-features = [
-  "console",
-  "EventSource",
-  "MessageEvent", 
-  "Window",
-  "Document",
-  "Element",
-  "HtmlElement",
-  "Location",
-]
+# Shared dependencies
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }

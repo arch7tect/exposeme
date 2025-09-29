@@ -95,7 +95,6 @@ rust-embed = { version = "8.7", features = ["debug-embed", "include-exclude"] }
 
 [features]
 default = []
-ui = []
 
 [[workspace.metadata.leptos]]
 name = "ui"

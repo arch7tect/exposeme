@@ -65,8 +65,8 @@ RUN if [ "$UI_DIST_EXISTS" = "false" ]; then \
         ls -la ui/dist/ || echo "UI dist directory structure:"; \
     fi
 
-# Build the final application with UI feature (dependencies already built above)
-RUN cargo build --release --features ui --bin exposeme-server --bin exposeme-client
+# Build the final application (UI is always included now)
+RUN cargo build --release --bin exposeme-server --bin exposeme-client
 
 # Runtime stage
 FROM debian:bookworm-slim AS server

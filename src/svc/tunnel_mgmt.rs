@@ -647,14 +647,10 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
             }
         }
 
-        // Record disconnection in metrics
-        if result {
-            if let Some(metrics) = &context.metrics {
-                metrics.tunnel_disconnected(&tunnel_id);
-            }
+        // Record disconnection in metrics (AFTER WebSocket cleanup)
+        if let Some(metrics) = &context.metrics {
+            metrics.tunnel_disconnected(&tunnel_id);
         }
-
-
     }
 
     result

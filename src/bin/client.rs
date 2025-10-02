@@ -1,7 +1,7 @@
 // Main entry point
 use clap::Parser;
 use tokio::signal;
-use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 use std::time::Duration;
 
@@ -14,8 +14,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .install_default()
         .expect("Failed to install ring CryptoProvider");
 
-    let (shutdown_tx, _) = broadcast::channel::<()>(1);
-    let shutdown_tx_clone = shutdown_tx.clone();
+    let shutdown_token = CancellationToken::new();
+    let shutdown_token_signal = shutdown_token.clone();
 
     tokio::spawn(async move {
         #[cfg(unix)]
@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("Received Ctrl+C, initiating graceful shutdown...");
         }
 
-        let _ = shutdown_tx_clone.send(());
+        shutdown_token_signal.cancel();
     });
 
     let args = ClientArgs::parse();
@@ -57,14 +57,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut client = ExposeMeClient::new(config);
 
-    let mut shutdown_rx = shutdown_tx.subscribe();
     loop {
         tokio::select! {
-            _ = shutdown_rx.recv() => {
+            _ = shutdown_token.cancelled() => {
                 info!("Graceful shutdown initiated...");
                 break;
             }
-            result = client.run(shutdown_tx.subscribe()) => {
+            result = client.run(shutdown_token.clone()) => {
                 match result {
                     Ok(_) => {
                         info!("Client disconnected normally");

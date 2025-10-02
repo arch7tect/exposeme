@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client as HttpClient;
-use tokio::sync::{mpsc, RwLock, broadcast};
+use tokio::sync::{mpsc, RwLock};
+use tokio_util::sync::CancellationToken;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use tokio_tungstenite::Connector;
 use rustls::ClientConfig as RustlsClientConfig;
@@ -39,7 +40,7 @@ impl ExposeMeClient {
         &self.config
     }
 
-    pub async fn run(&mut self, mut shutdown_rx: broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(&mut self, shutdown_token: CancellationToken) -> Result<(), Box<dyn std::error::Error>> {
         // Connect to WebSocket server
         let (ws_stream, _) = if self.config.client.insecure && self.config.client.server_url.starts_with("wss://") {
             warn!("Using insecure connection (skipping TLS verification)");
@@ -167,19 +168,17 @@ impl ExposeMeClient {
         // Handle incoming WebSocket messages
         loop {
             tokio::select! {
-                // Handle shutdown signal
-                _ = shutdown_rx.recv() => {
+                _ = shutdown_token.cancelled() => {
                     info!("Client shutdown requested, closing WebSocket connection...");
                     shutdown_flag.store(true, Ordering::Relaxed);
                     {
                         let mut sender = ws_sender_shared.lock().await;
                         let _ = sender.close().await;
                     }
-                    
+
                     break;
                 }
-                
-                // Handle WebSocket messages
+
                 message = ws_receiver.next() => {
                     match message {
                         Some(Ok(WsMessage::Binary(bytes))) => {

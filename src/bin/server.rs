@@ -3,8 +3,9 @@ use exposeme::{initialize_tracing, ServerArgs, ServerConfig, SslManager, SslProv
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::RwLock;
 use tokio::signal;
+use tokio_util::sync::CancellationToken;
 use tokio_tungstenite::{tungstenite::Message as WsMessage};
 use tracing::{error, info, debug};
 use exposeme::svc::{start_http_server, start_https_server, TunnelMap, ActiveRequests, ActiveWebSockets, BoxError};
@@ -49,10 +50,10 @@ async fn main() -> Result<(), BoxError> {
     let metrics = Arc::new(MetricsCollector::new());
     metrics.server_started();
 
-    let (shutdown_tx, _) = broadcast::channel::<()>(1);
-    let shutdown_tx_clone = shutdown_tx.clone();
-    let shutdown_tx_http = shutdown_tx.clone();
-    let shutdown_tx_https = shutdown_tx.clone();
+    let shutdown_token = CancellationToken::new();
+    let shutdown_token_signal = shutdown_token.clone();
+    let shutdown_token_http = shutdown_token.clone();
+    let shutdown_token_https = shutdown_token.clone();
 
     let signal_handle = tokio::spawn(async move {
         #[cfg(unix)]
@@ -61,7 +62,7 @@ async fn main() -> Result<(), BoxError> {
                 .expect("Failed to install SIGTERM handler");
             let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
                 .expect("Failed to install SIGINT handler");
-            
+
             tokio::select! {
                 _ = sigterm.recv() => info!("Received SIGTERM, initiating graceful shutdown..."),
                 _ = sigint.recv() => info!("Received SIGINT, initiating graceful shutdown..."),
@@ -72,8 +73,8 @@ async fn main() -> Result<(), BoxError> {
             signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
             info!("Received Ctrl+C, initiating graceful shutdown...");
         }
-        
-        let _ = shutdown_tx_clone.send(());
+
+        shutdown_token_signal.cancel();
     });
 
     let tunnels_http = tunnels.clone();
@@ -93,7 +94,7 @@ async fn main() -> Result<(), BoxError> {
             challenge_store_http,
             ssl_manager_http,
             metrics_http,
-            shutdown_tx_http.subscribe(),
+            shutdown_token_http,
         ).await {
             error!("HTTP server error: {}", e);
         }
@@ -121,7 +122,7 @@ async fn main() -> Result<(), BoxError> {
                 ssl_manager_https,
                 ssl_config_for_https,
                 metrics_https,
-                shutdown_tx_https.subscribe(),
+                shutdown_token_https,
             ).await {
                 error!("HTTPS server error: {}", e);
             }
@@ -164,8 +165,7 @@ async fn main() -> Result<(), BoxError> {
         None
     };
 
-    let mut shutdown_rx_main = shutdown_tx.subscribe();
-    shutdown_rx_main.recv().await.ok();
+    shutdown_token.cancelled().await;
 
     info!("Graceful shutdown initiated...");
 

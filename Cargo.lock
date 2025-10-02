@@ -885,6 +885,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-stream",
  "tokio-tungstenite",
+ "tokio-util",
  "toml",
  "tower",
  "tracing",

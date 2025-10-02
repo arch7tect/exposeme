@@ -42,6 +42,7 @@ path = "examples/sse_test_server.rs"
 [dependencies]
 # Async runtime
 tokio = { version = "1.47", features = ["full"] }
+tokio-util = "0.7"
 
 # WebSocket support
 tokio-tungstenite = { version = "0.27", features = ["rustls-tls-webpki-roots"] }

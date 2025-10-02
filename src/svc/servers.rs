@@ -10,7 +10,8 @@ use hyper_util::service::TowerToHyperService;
 use rustls::ServerConfig as RustlsConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info};
 
@@ -23,7 +24,7 @@ pub async fn start_http_server(
     challenge_store: ChallengeStore,
     ssl_manager: Arc<RwLock<SslManager>>,
     metrics: Option<Arc<MetricsCollector>>,
-    mut shutdown_rx: broadcast::Receiver<()>,
+    shutdown_token: CancellationToken,
 ) -> Result<(), BoxError> {
     let addr: std::net::SocketAddr = config.http_addr().parse()?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -32,8 +33,7 @@ pub async fn start_http_server(
 
     loop {
         tokio::select! {
-            // Handle shutdown signal
-            _ = shutdown_rx.recv() => {
+            _ = shutdown_token.cancelled() => {
                 info!("HTTP server shutting down gracefully...");
                 break;
             }
@@ -79,7 +79,7 @@ pub async fn start_https_server(
     ssl_manager: Arc<RwLock<SslManager>>,
     tls_config: Arc<RustlsConfig>,
     metrics: Option<Arc<MetricsCollector>>,
-    mut shutdown_rx: broadcast::Receiver<()>,
+    shutdown_token: CancellationToken,
 ) -> Result<(), BoxError> {
     let tls_acceptor = TlsAcceptor::from(tls_config);
     let addr: std::net::SocketAddr = config.https_addr().parse()?;
@@ -89,8 +89,7 @@ pub async fn start_https_server(
 
     loop {
         tokio::select! {
-            // Handle shutdown signal
-            _ = shutdown_rx.recv() => {
+            _ = shutdown_token.cancelled() => {
                 info!("HTTPS server shutting down gracefully...");
                 break;
             }

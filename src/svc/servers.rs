@@ -13,6 +13,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tokio_rustls::TlsAcceptor;
+use tower::ServiceBuilder;
+use tower_http::compression::CompressionLayer;
 use tracing::{error, info};
 
 /// Start the HTTP server (handles redirects and ACME challenges)
@@ -52,7 +54,9 @@ pub async fn start_http_server(
                     metrics: metrics.clone(),
                 };
 
-                let service = UnifiedService::new(context);
+                let service = ServiceBuilder::new()
+                    .layer(CompressionLayer::new())
+                    .service(UnifiedService::new(context));
 
                 tokio::spawn(async move {
                     if let Err(err) = Builder::new(hyper_util::rt::TokioExecutor::new())
@@ -112,7 +116,9 @@ pub async fn start_https_server(
                     match tls_acceptor.accept(stream).await {
                         Ok(tls_stream) => {
                             let io = TokioIo::new(tls_stream);
-                            let service = UnifiedService::new(context);
+                            let service = ServiceBuilder::new()
+                                .layer(CompressionLayer::new())
+                                .service(UnifiedService::new(context));
 
                             if let Err(e) = Builder::new(hyper_util::rt::TokioExecutor::new())
                                 .serve_connection_with_upgrades(io, TowerToHyperService::new(service))

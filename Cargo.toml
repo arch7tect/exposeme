@@ -84,6 +84,7 @@ chrono = { version = "0.4", features = ["serde"] }
 x509-parser = "0.18.0"
 async-trait = "0.1"
 tower = "0.5"
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-br", "fs"] }
 bytes = "1.10"
 sha1 = "0.10"
 
@@ -108,5 +109,12 @@ bin-default-features = false
 site-root = "target/site"
 site-pkg-dir = "pkg"
 assets-dir = "assets"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
 
 [dev-dependencies]

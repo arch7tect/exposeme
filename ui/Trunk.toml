@@ -1,10 +1,12 @@
 [build]
-# The public URL from which assets are served
 public_url = "/"
-# The index HTML file to drive the bundling process
 target = "index.html"
-# Output directory
 dist = "dist"
+release = true
+
+[wasm-opt]
+enabled = true
+level = "z"
 
 [serve]
 # The IP addresses to serve on (new plural format)

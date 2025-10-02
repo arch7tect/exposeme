@@ -235,16 +235,12 @@ impl DnsProvider for HetznerProvider {
         Ok(())
     }
 
-    // =============================================================================
-    // OPTIMIZATION: Override public delete to skip unnecessary zone lookup
-    // =============================================================================
 
     async fn delete_txt_record(
         &mut self,
         _domain: &str, // Domain not needed for Hetzner delete
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Skip zone lookup entirely - create dummy zone since implementation doesn't use it
         let dummy_zone = ZoneInfo::from_name("unused".to_string());
         self.delete_txt_record_impl(&dummy_zone, record_id).await
     }

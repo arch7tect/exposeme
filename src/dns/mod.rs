@@ -1,5 +1,3 @@
-// Keep original interface, improve internals
-
 use async_trait::async_trait;
 use hickory_resolver::TokioResolver;
 use std::time::Duration;
@@ -8,7 +6,6 @@ use tracing::{info, warn};
 
 pub mod providers;
 
-/// Internal zone information for efficient provider operations
 #[derive(Debug, Clone)]
 pub(crate) struct ZoneInfo {
     pub id: String,      // For providers that need IDs (Hetzner)
@@ -16,7 +13,6 @@ pub(crate) struct ZoneInfo {
 }
 
 impl ZoneInfo {
-    /// Create ZoneInfo where ID and name are the same (DigitalOcean, Azure)
     pub fn from_name(name: String) -> Self {
         Self {
             id: name.clone(),
@@ -24,7 +20,6 @@ impl ZoneInfo {
         }
     }
 
-    /// Create ZoneInfo with different ID and name (Hetzner)
     pub fn new(id: String, name: String) -> Self {
         Self { id, name }
     }
@@ -32,21 +27,14 @@ impl ZoneInfo {
 
 #[async_trait]
 pub trait DnsProvider: Send + Sync {
-    // =============================================================================
-    // IMPLEMENTATIONS: Providers implement these methods
-    // =============================================================================
-
-    /// List zones with ID/name info
     async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>>;
 
-    /// List TXT records by zone
     async fn list_txt_records_impl(
         &mut self,
         zone: &ZoneInfo,
         name: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>>;
 
-    /// Create TXT record by zone  
     async fn create_txt_record_impl(
         &mut self,
         zone: &ZoneInfo,
@@ -54,18 +42,12 @@ pub trait DnsProvider: Send + Sync {
         value: &str
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>>;
 
-    /// Delete TXT record by zone
     async fn delete_txt_record_impl(
         &mut self,
         zone: &ZoneInfo,
         record_id: &str
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
-    // =============================================================================
-    // PUBLIC API: Default implementations using internal methods
-    // =============================================================================
-
-    /// List existing TXT record IDs for a given domain and record name  
     async fn list_txt_records(
         &mut self,
         domain: &str,
@@ -76,7 +58,6 @@ pub trait DnsProvider: Send + Sync {
         self.list_txt_records_impl(&zone, &record_name).await
     }
 
-    /// Create a TXT record and return record ID
     async fn create_txt_record(
         &mut self,
         domain: &str,
@@ -88,7 +69,6 @@ pub trait DnsProvider: Send + Sync {
         self.create_txt_record_impl(&zone, &record_name, value).await
     }
 
-    /// Delete a TXT record by ID
     async fn delete_txt_record(
         &mut self,
         domain: &str,
@@ -98,14 +78,12 @@ pub trait DnsProvider: Send + Sync {
         self.delete_txt_record_impl(&zone, record_id).await
     }
 
-    /// Internal: Find zone for domain
     async fn get_zone_info(&mut self, domain: &str) -> Result<ZoneInfo, Box<dyn std::error::Error + Send + Sync>> {
         info!("Looking up zone for domain: {}", domain);
 
         let available_zones = self.list_zones_impl().await?;
         info!("Found {} available zones", available_zones.len());
 
-        // Find the longest matching zone (most specific)
         let mut best_match = None;
         let mut best_length = 0;
 
@@ -128,11 +106,6 @@ pub trait DnsProvider: Send + Sync {
         }
     }
 
-    // =============================================================================
-    // FREE: Default implementations
-    // =============================================================================
-
-    /// Calculate record name relative to DNS zone
     fn calculate_record_name(&self, domain: &str, zone_name: &str, record_prefix: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let record_name = if domain == zone_name {
             record_prefix.to_string()
@@ -150,7 +123,6 @@ pub trait DnsProvider: Send + Sync {
         Ok(record_name)
     }
 
-    /// Clean up existing TXT records using list + delete
     async fn cleanup_txt_records(
         &mut self,
         domain: &str,
@@ -191,7 +163,6 @@ pub trait DnsProvider: Send + Sync {
         }
     }
 
-    /// Wait for DNS propagation
     async fn wait_for_propagation(
         &self,
         domain: &str,
@@ -232,7 +203,6 @@ pub trait DnsProvider: Send + Sync {
         Ok(())
     }
 
-    /// Check if TXT record exists with expected value
     async fn check_txt_record(
         &self,
         domain: &str,
@@ -262,14 +232,12 @@ pub trait DnsProvider: Send + Sync {
     }
 }
 
-/// Factory trait for creating DNS providers
 pub trait DnsProviderFactory {
     fn create_with_config(
         toml_config: Option<&serde_json::Value>
     ) -> Result<Box<dyn DnsProvider>, Box<dyn std::error::Error + Send + Sync>>;
 }
 
-/// Create DNS provider
 pub fn create_dns_provider(
     provider_name: &str,
     toml_config: Option<&serde_json::Value>
@@ -286,7 +254,6 @@ pub fn create_dns_provider(
     }
 }
 
-/// Helper trait for configuration merging
 pub trait ConfigHelper {
     fn get_string_with_env(
         toml_config: Option<&serde_json::Value>,

@@ -58,7 +58,6 @@ struct TxtRecord {
     value: Vec<String>,
 }
 
-// Response structures for listing records
 #[derive(Debug, Deserialize)]
 struct RecordSetsResponse {
     value: Vec<RecordSetInfo>,
@@ -114,7 +113,6 @@ impl AzureProvider {
 
     /// Get Azure access token using Service Principal
     async fn get_access_token(&mut self) -> Result<String, Box<dyn Error + Send + Sync>> {
-        // Check if current token is still valid
         if let (Some(token), Some(expires_at)) = (&self.access_token, self.token_expires_at) {
             if std::time::Instant::now() < expires_at {
                 return Ok(token.clone());
@@ -247,7 +245,6 @@ impl DnsProvider for AzureProvider {
 
         info!("Listing TXT records: {} in zone {}", name, zone.name);
 
-        // List all TXT recordsets in the zone
         let list_url = format!(
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/recordsets?api-version=2018-05-01&$filter=recordType eq 'TXT'",
             self.config.subscription_id,
@@ -268,7 +265,6 @@ impl DnsProvider for AzureProvider {
 
         let recordsets_response: RecordSetsResponse = response.json().await?;
 
-        // Find existing TXT records with matching name and return their names (Azure uses names as IDs)
         let matching_record_ids: Vec<String> = recordsets_response.value
             .iter()
             .filter(|record| {
@@ -322,7 +318,6 @@ impl DnsProvider for AzureProvider {
         }
 
         info!("Created TXT record: {}", name);
-        // Azure uses record name as ID
         Ok(name.to_string())
     }
 

@@ -1,4 +1,3 @@
-// ACME challenge handling
 
 use crate::svc::{BoxError, ChallengeStore};
 use crate::svc::types::ResponseBody;

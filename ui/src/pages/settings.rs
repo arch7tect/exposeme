@@ -109,42 +109,6 @@ pub fn ServerConfiguration(
                                             {if is_wildcard { "✓ Enabled" } else { "✗ Not configured" }}
                                         </span>
                                     </div>
-                                    <div class="config-row">
-                                        <span class="label">"Example URL:"</span>
-                                        <span class="value">
-                                            {
-                                                let protocol = if ssl_enabled { "https" } else { "http" };
-                                                match routing_mode.as_str() {
-                                                    "subdomain" => format!("{}://tunnel-id.{}/path", protocol, domain),
-                                                    "both" => format!("{}://tunnel-id.{}/path OR {}/tunnel-id/path", protocol, domain, domain),
-                                                    _ => format!("{}://{}/tunnel-id/path", protocol, domain)
-                                                }
-                                            }
-                                        </span>
-                                    </div>
-                                    <div class="config-info">
-                                        <p><strong>"Routing Mode Details:"</strong></p>
-                                        <ul>
-                                            <li><strong>"path:"</strong> " Uses single domain certificate - tunnels accessed via paths"</li>
-                                            <li><strong>"subdomain:"</strong> " Uses wildcard certificate - each tunnel gets own subdomain"</li>
-                                            <li><strong>"both:"</strong> " Supports both modes with wildcard certificate"</li>
-                                        </ul>
-                                        {if !is_wildcard && routing_mode != "path" {
-                                            Some(view! {
-                                                <div class="config-note">
-                                                    "Subdomain routing is configured but wildcard certificate is not enabled. Only path-based routing will work."
-                                                </div>
-                                            })
-                                        } else if is_wildcard && routing_mode == "path" {
-                                            Some(view! {
-                                                <div class="config-note">
-                                                    "Wildcard certificate is available. You can enable subdomain routing in server configuration."
-                                                </div>
-                                            })
-                                        } else {
-                                            None
-                                        }}
-                                    </div>
                                 </div>
                             }.into_any()
                         },

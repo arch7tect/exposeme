@@ -41,12 +41,10 @@ async fn handle_request(req: Request<Incoming>) -> Response<ResponseBody> {
     println!("   Method: {}", method);
     println!("   Path: {}", path);
 
-    // Print some headers
     for (name, value) in &headers {
         println!("   {}: {}", name, value.to_str().unwrap_or(""));
     }
 
-    // Get body
     let body_bytes = match req.into_body().collect().await {
         Ok(collected) => collected.to_bytes(),
         Err(e) => {
@@ -67,10 +65,8 @@ async fn handle_request(req: Request<Incoming>) -> Response<ResponseBody> {
 
     println!("   ---");
 
-    // Create response based on path
     let response = match path.as_str() {
         "/webhook" => {
-            // Simulate webhook response
             let response_body = r#"{"status": "ok", "message": "Webhook received!"}"#;
             Response::builder()
                 .status(StatusCode::OK)

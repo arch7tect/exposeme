@@ -1,4 +1,3 @@
-// WebSocket upgrade and data handling
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -144,7 +143,6 @@ async fn handle_websocket_upgrade(
                 websockets.insert(connection_id.clone(), connection);
             }
 
-            // Connection monitoring task
             let monitoring_task = {
                 let active_websockets = active_websockets.clone();
                 let connection_id = connection_id.clone();
@@ -164,12 +162,10 @@ async fn handle_websocket_upgrade(
                                     warn!("WebSocket {}: Connection timeout detected ({})", connection.connection_id, connection.status_summary().await);
                                     true
                                 } else {
-                                    // Log periodic status
                                     info!("WebSocket {}: Health check: {}", connection.connection_id, connection.status_summary().await);
                                     false
                                 }
                             } else {
-                                // Connection already cleaned up
                                 true
                             }
                         };
@@ -186,7 +182,6 @@ async fn handle_websocket_upgrade(
             let active_websockets_clone = active_websockets.clone();
             let connection_id_clone = connection_id.clone();
 
-            // Forward FROM local service TO server
             let local_to_server_task = {
                 let connection = connection_clone.clone();
                 let connection_id = connection_id_clone.clone();
@@ -263,7 +258,6 @@ async fn handle_websocket_upgrade(
                 })
             };
 
-            // Forward FROM server TO local service
             let server_to_local_task = {
                 let connection = connection_clone.clone();
 
@@ -287,7 +281,6 @@ async fn handle_websocket_upgrade(
                 })
             };
 
-            // Wait for any task to complete
             tokio::select! {
                 _ = monitoring_task => {
                     info!("Monitoring task completed for {}", connection_id);
@@ -343,13 +336,12 @@ async fn send_websocket_error_response(
 async fn handle_websocket_data(
     active_websockets: ActiveWebSockets,
     connection_id: String,
-    data: Vec<u8>, // No longer base64 string - raw bytes
+    data: Vec<u8>,
 ) {
     if let Some(connection) = active_websockets.read().await.get(&connection_id) {
         connection.update_activity().await;
         let data_size = data.len();
 
-        // No more base64 decoding - data is already raw bytes
         if connection.send_to_local(data).await.is_ok() {
             debug!("WebSocket {}: Forwarded {} bytes to local WebSocket", connection.connection_id, data_size);
         } else {
@@ -373,7 +365,6 @@ async fn handle_websocket_close(
             connection.connection_id, code, reason, connection.status_summary().await
         );
     } else {
-        // Connection already cleaned up, this is normal during shutdown
         debug!("Connection {} already cleaned up, ignoring close message", connection_id);
     }
 }

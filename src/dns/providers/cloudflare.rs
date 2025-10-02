@@ -97,7 +97,6 @@ impl CloudflareProvider {
         let cf_response: CloudflareResponse<T> = serde_json::from_str(&response_text)
             .map_err(|e| format!("Failed to parse Cloudflare response: {}", e))?;
 
-        // Log any informational messages from Cloudflare
         if !cf_response.messages.is_empty() {
             let info_messages: Vec<String> = cf_response.messages
                 .iter()
@@ -265,20 +264,17 @@ impl DnsProvider for CloudflareProvider {
             .send()
             .await?;
 
-        // For DELETE operations, Cloudflare returns a different response structure
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await?;
             return Err(format!("Failed to delete record ({}): {}", status, error_text).into());
         }
 
-        // Try to parse as Cloudflare response, but don't fail if it's just empty
         let response_text = response.text().await?;
         if !response_text.is_empty() {
             let cf_response: CloudflareResponse<serde_json::Value> = serde_json::from_str(&response_text)
                 .map_err(|e| format!("Failed to parse Cloudflare delete response: {}", e))?;
 
-            // Log any informational messages from Cloudflare
             if !cf_response.messages.is_empty() {
                 let info_messages: Vec<String> = cf_response.messages
                     .iter()

@@ -1,5 +1,3 @@
-// Tunnel client connection management
-
 use crate::Message;
 use crate::svc::types::*;
 use crate::svc::{BoxError, ServiceContext};
@@ -17,12 +15,10 @@ use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMessage};
 use tracing::{debug, error, info, trace, warn};
 
-/// Handle a tunnel management connection from an exposeme-client
 pub async fn handle_tunnel_management_connection(
     upgraded: Upgraded,
     context: ServiceContext,
 ) -> Result<(), BoxError> {
-    // Convert upgraded connection to WebSocket
     let ws_stream = WebSocketStream::from_raw_socket(
         TokioIo::new(upgraded),
         Role::Server,
@@ -82,14 +78,12 @@ pub async fn handle_tunnel_management_connection(
                     break;
                 }
 
-                // Record ping sent time for timeout detection
                 if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
                     connection.record_ping_sent().await;
                 }
                 debug!("Sent native WebSocket ping to tunnel '{}'", tunnel_id);
             }
 
-            // Handle outgoing messages to client
             message = rx.recv() => {
                 let Some(message) = message else {
                     break;
@@ -113,7 +107,6 @@ pub async fn handle_tunnel_management_connection(
                 }
             }
 
-            // Handle incoming WebSocket messages
             message = ws_receiver.next() => {
                 let Some(message) = message else {
                     break;
@@ -159,7 +152,6 @@ pub async fn handle_tunnel_management_connection(
                                             "WebSocket upgrade response: {} (status: {})",
                                             connection_id, status
                                         );
-                                        // Nothing to do here as we've already upgraded incoming connection.
                                     }
 
                                     Message::WebSocketData {
@@ -200,7 +192,6 @@ pub async fn handle_tunnel_management_connection(
                     }
                     Ok(WsMessage::Pong(_)) => {
                         debug!("Received native WebSocket pong from tunnel '{}'", tunnel_id);
-                        // Update activity to mark connection as alive
                         if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
                             connection.update_activity().await;
                         }
@@ -222,7 +213,6 @@ pub async fn handle_tunnel_management_connection(
         }
     }
 
-    // Clean up tunnel on disconnect
     info!("Sending WebSocket close frame to client");
     let close_frame = tokio_tungstenite::tungstenite::protocol::CloseFrame {
         code: CloseCode::Away,
@@ -258,14 +248,12 @@ fn start_ping_task(
 
             match connection {
                 Some(conn) => {
-                    // Check if connection is stale
                     if conn.is_stale().await {
                         warn!("Tunnel '{}' is stale, removing immediately", tunnel_id);
                         shutdown_tunnel(context.clone(), tunnel_id.clone()).await;
                         break;
                     }
 
-                    // Request main loop to send a ping
                     if ping_tx.send(()).is_err() {
                         warn!(
                             "Failed to request ping for tunnel '{}', main loop closed",
@@ -290,7 +278,6 @@ async fn wait_for_authentication(
     ws_sender: &mut SplitSink<WebSocketStream<TokioIo<Upgraded>>, WsMessage>,
     context: &ServiceContext,
 ) -> Result<Option<String>, BoxError> {
-    // Wait for auth message with timeout
     let auth_timeout = Duration::from_secs(30);
 
     match tokio::time::timeout(auth_timeout, ws_receiver.next()).await {
@@ -303,7 +290,6 @@ async fn wait_for_authentication(
                 }) => {
                     info!("Auth request for tunnel '{}'", tunnel_id);
 
-                    // Validate tunnel ID
                     if let Err(e) = context.config.validate_tunnel_id(&tunnel_id) {
                         let error_msg = WsMessage::Binary(
                             Message::AuthError {
@@ -317,7 +303,6 @@ async fn wait_for_authentication(
                         return Ok(None);
                     }
 
-                    // Token validation
                     if !context.config.auth.tokens.contains(&token) {
                         let error_msg = WsMessage::Binary(
                             Message::AuthError {
@@ -331,7 +316,6 @@ async fn wait_for_authentication(
                         return Ok(None);
                     }
 
-                    // Check if tunnel_id is already taken
                     {
                         let tunnels_guard = context.tunnels.read().await;
                         if tunnels_guard.contains_key(&tunnel_id) {
@@ -415,7 +399,6 @@ async fn wait_for_authentication(
     }
 }
 
-/// Handle HTTP response start message
 async fn handle_http_response_start(
     id: String,
     status: u16,
@@ -462,7 +445,6 @@ async fn handle_http_response_start(
     }
 }
 
-/// Handle data chunk message
 async fn handle_data_chunk(id: String, data: Vec<u8>, is_final: bool, context: &ServiceContext) {
     debug!(
         "DataChunk: {} bytes, final={} (id: {})",
@@ -488,9 +470,7 @@ async fn handle_data_chunk(id: String, data: Vec<u8>, is_final: bool, context: &
     }
 }
 
-/// Handle WebSocket data from tunnel client - Binary data, no base64 needed
 async fn handle_websocket_data(connection_id: String, data: Vec<u8>, context: &ServiceContext) {
-    // Handle WebSocket data from tunnel client
     if let Some(connection) = context.active_websockets.read().await.get(&connection_id) {
         debug!(
             "Received data for {} (age: {}, {} bytes)",
@@ -498,8 +478,7 @@ async fn handle_websocket_data(connection_id: String, data: Vec<u8>, context: &S
             connection.age_info(),
             data.len()
         );
-        
-        // Record WebSocket traffic (tunnel -> server -> client)
+
         if let Some(metrics) = &context.metrics {
             metrics.record_websocket_traffic(&connection.tunnel_id, 0, data.len() as u64);
         }
@@ -525,14 +504,12 @@ async fn handle_websocket_data(connection_id: String, data: Vec<u8>, context: &S
     }
 }
 
-/// Handle WebSocket close from tunnel client
 async fn handle_websocket_close(
     connection_id: String,
     code: Option<u16>,
     reason: Option<String>,
     context: &ServiceContext,
 ) {
-    // Handle WebSocket close from tunnel client
     if let Some(connection) = context
         .active_websockets
         .write()
@@ -564,7 +541,6 @@ async fn handle_websocket_close(
     }
 }
 
-/// Clean up all resources associated with a tunnel when it disconnects
 pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool {
     let result = {
         let mut tunnels_guard = context.tunnels.write().await;
@@ -578,7 +554,6 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
     };
 
     if result {
-        // Clean up active requests for this tunnel
         let requests_to_cleanup = {
             let requests = context.active_requests.read().await;
             requests
@@ -598,7 +573,6 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
             }
         }
 
-        // Clean up WebSocket connections for this tunnel
         let websocket_connections_to_cleanup = {
             let websockets = context.active_websockets.read().await;
             websockets
@@ -622,16 +596,14 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
                 {
                     debug!("Cleaned up WebSocket connection: {}", connection_id);
 
-                    // Record WebSocket disconnection in metrics
                     if let Some(metrics) = &context.metrics {
                         metrics.websocket_disconnected(&tunnel_id);
                     }
 
-                    // Close the browser WebSocket connection gracefully
                     if let Some(ws_tx) = &connection.ws_tx {
                         let close_msg = WsMessage::Close(Some(
                             tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                                code: 1001u16.into(), // Going away
+                                code: 1001u16.into(),
                                 reason: "ExposeME client disconnected".into(),
                             },
                         ));
@@ -643,7 +615,7 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
             }
         }
 
-        // Record disconnection in metrics (AFTER WebSocket cleanup)
+        // AFTER WebSocket cleanup
         if let Some(metrics) = &context.metrics {
             metrics.tunnel_disconnected(&tunnel_id);
         }

@@ -1,4 +1,3 @@
-// Certificate and management API endpoints
 
 use crate::svc::{BoxError, SslManager, ServiceContext};
 use crate::svc::types::ResponseBody;
@@ -135,7 +134,6 @@ async fn handle_certificate_info(
             "needs_renewal": info.needs_renewal,
         })),
         "dns_provider": config.ssl.dns_provider.as_ref().map(|dns| {
-            // Check if DNS provider is configured either via config file or environment variables
             let is_configured = !dns.config.is_null() || match dns.provider.as_str() {
                 "cloudflare" => std::env::var("EXPOSEME_CLOUDFLARE_TOKEN").is_ok(),
                 "digitalocean" => std::env::var("EXPOSEME_DIGITALOCEAN_TOKEN").is_ok(),

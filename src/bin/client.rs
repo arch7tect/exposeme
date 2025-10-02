@@ -1,4 +1,3 @@
-// Main entry point
 use clap::Parser;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;

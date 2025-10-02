@@ -1,4 +1,3 @@
-// Main client implementation
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -41,7 +40,6 @@ impl ExposeMeClient {
     }
 
     pub async fn run(&mut self, shutdown_token: CancellationToken) -> Result<(), Box<dyn std::error::Error>> {
-        // Connect to WebSocket server
         let (ws_stream, _) = if self.config.client.insecure && self.config.client.server_url.starts_with("wss://") {
             warn!("Using insecure connection (skipping TLS verification)");
             warn!("This should only be used for development with self-signed certificates");
@@ -66,7 +64,6 @@ impl ExposeMeClient {
 
         let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-        // Send authentication
         let auth_message = Message::Auth {
             token: self.config.client.auth_token.clone(),
             tunnel_id: self.config.client.tunnel_id.clone(),
@@ -77,18 +74,14 @@ impl ExposeMeClient {
         ws_sender.send(WsMessage::Binary(auth_bytes.into())).await?;
         info!("Sent authentication for tunnel '{}'", self.config.client.tunnel_id);
 
-        // Create shared state
         let active_websockets: ActiveWebSockets = Arc::new(RwLock::new(std::collections::HashMap::new()));
         let outgoing_requests: OutgoingRequests = Arc::new(RwLock::new(std::collections::HashMap::new()));
 
-        // Create shared state for coordinated shutdown
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let outgoing_shutdown_flag = shutdown_flag.clone();
 
-        // Create channel for sending messages back to server
         let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<Message>();
 
-        // Create handlers
         let http_handler = HttpHandler::new(
             self.http_client.clone(),
             self.config.client.local_target.clone(),
@@ -104,11 +97,9 @@ impl ExposeMeClient {
             shutdown_flag.clone(),
         );
 
-        // Split WebSocket sender for shared access
         let ws_sender_shared = Arc::new(tokio::sync::Mutex::new(ws_sender));
         let ws_sender_for_task = ws_sender_shared.clone();
 
-        // Spawn task to handle outgoing messages to server
         let _outgoing_handle = tokio::spawn(async move {
             debug!("Starting outgoing message handler task");
             let mut message_count = 0;
@@ -160,12 +151,10 @@ impl ExposeMeClient {
             debug!("Outgoing message handler ended (sent {} messages)", message_count);
         });
 
-        // Start cleanup task
         let mut cleanup_task = self.start_cleanup_task(active_websockets.clone()).await;
 
         let mut need_reconnect = false;
 
-        // Handle incoming WebSocket messages
         loop {
             tokio::select! {
                 _ = shutdown_token.cancelled() => {
@@ -263,13 +252,11 @@ impl ExposeMeClient {
             }
         }
 
-        // Graceful cleanup on client disconnect with timeout
         info!("Starting graceful cleanup...");
-        
+
         let cleanup_timeout = Duration::from_secs(5);
         let cleanup_start = tokio::time::Instant::now();
-        
-        // Give cleanup task a chance to finish, then abort it
+
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_millis(500)) => {
                 debug!("Cleanup grace period completed, aborting task");
@@ -280,7 +267,6 @@ impl ExposeMeClient {
             }
         }
 
-        // Clean up all WebSocket connections on shutdown with timeout
         let cleanup_result = tokio::select! {
             _ = tokio::time::sleep(cleanup_timeout) => {
                 warn!("Cleanup timeout reached after {:?}, forcing shutdown", cleanup_timeout);
@@ -291,22 +277,19 @@ impl ExposeMeClient {
                 let connection_count = websockets.len();
                 if connection_count > 0 {
                     info!("Cleaning up {} WebSocket connections on shutdown", connection_count);
-                    
-                    // Close all active WebSocket connections gracefully
+
                     for (_id, connection) in websockets.iter() {
                         info!("Closing WebSocket connection: {}", connection.connection_id);
-                        
-                        // Send close message to server through tunnel
+
                         let close_msg = Message::WebSocketClose {
                             connection_id: connection.connection_id.clone(),
-                            code: Some(1000), // Normal Closure
+                            code: Some(1000),
                             reason: Some("Client shutting down".to_string()),
                         };
-                        
+
                         let _ = connection.to_server_tx.send(close_msg);
                     }
-                    
-                    // Clear all connections
+
                     websockets.clear();
                 }
             } => {

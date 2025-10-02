@@ -37,7 +37,6 @@ pub async fn start_http_server(
                 info!("HTTP server shutting down gracefully...");
                 break;
             }
-            // Accept new connections
             result = listener.accept() => {
                 let (stream, _) = result?;
                 let io = TokioIo::new(stream);
@@ -93,7 +92,6 @@ pub async fn start_https_server(
                 info!("HTTPS server shutting down gracefully...");
                 break;
             }
-            // Accept new connections
             result = listener.accept() => {
                 let (stream, _) = result?;
                 let tls_acceptor = tls_acceptor.clone();

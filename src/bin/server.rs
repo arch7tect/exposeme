@@ -225,17 +225,14 @@ async fn graceful_shutdown(
     timeout: Duration,
 ) {
     tokio::time::sleep(Duration::from_millis(500)).await;
-    // Close all tunnel WebSocket connections
     {
         let mut tunnels = tunnels.write().await;
         let tunnel_count = tunnels.len();
         info!("Dropping {} tunnel connections...", tunnel_count);
-        tunnels.clear(); // This drops all UnboundedSenders
+        tunnels.clear();
     }
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
-
-    // Force close all WebSocket connections
     {
         let websockets = active_websockets.write().await;
         let ws_count = websockets.len();
@@ -247,7 +244,7 @@ async fn graceful_shutdown(
                 if let Some(ws_tx) = &connection.ws_tx {
                     let close_msg = WsMessage::Close(Some(
                         tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                            code: 1001u16.into(), // Going Away
+                            code: 1001u16.into(),
                             reason: "Server shutting down".into(),
                         },
                     ));
@@ -259,7 +256,6 @@ async fn graceful_shutdown(
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Wait for active requests to complete
     let start = tokio::time::Instant::now();
     loop {
         let active_count = {

@@ -1,4 +1,3 @@
-// HTTP request/response handling
 use std::collections::HashMap;
 use std::sync::Arc;
 use bytes::Bytes;
@@ -55,7 +54,6 @@ impl HttpHandler {
         let to_server_tx = self.to_server_tx.clone();
 
         if is_complete == true {
-            // Complete request - process immediately
             debug!("Processing complete request: {} {} ({} bytes)", method, path, initial_data.len());
 
             tokio::spawn(async move {
@@ -78,7 +76,6 @@ impl HttpHandler {
                 }
             });
         } else {
-            // Streaming request - expect DataChunk messages
             debug!("Processing streaming request start: {} {}", method, path);
 
             let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
@@ -253,7 +250,6 @@ async fn stream_response_to_server(
                     total_bytes += chunk.len();
                     chunk_count += 1;
 
-                    // Log progress every 10 chunks or for large chunks
                     if chunk_count % 10 == 0 || chunk.len() > 1024 {
                         trace!("Sending chunk {} ({} bytes, {} total) for {}",
                               chunk_count, chunk.len(), total_bytes, id);
@@ -277,7 +273,6 @@ async fn stream_response_to_server(
             }
         }
 
-        // Send final chunk
         trace!("Sending final chunk for {} ({} total bytes, {} chunks)", id, total_bytes, chunk_count);
 
         let final_msg = Message::DataChunk {

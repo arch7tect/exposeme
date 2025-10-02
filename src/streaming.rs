@@ -1,4 +1,3 @@
-// Simple unified streaming detection
 
 use hyper::{Request, body::Incoming};
 

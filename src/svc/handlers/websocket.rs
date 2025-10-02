@@ -1,4 +1,3 @@
-// WebSocket upgrade and proxy handling
 
 use crate::svc::{BoxError, ServiceContext};
 use crate::svc::types::*;
@@ -187,10 +186,8 @@ async fn handle_websocket_proxy_connection(
 ) -> Result<(), BoxError> {
     debug!("Starting WebSocket proxy for connection {}", connection_id);
 
-    // Create channels for communication with tunnel client
     let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsMessage>();
 
-    // Update the stored connection with ws_tx
     {
         let mut websockets = context.active_websockets.write().await;
         if let Some(connection) = websockets.get_mut(&connection_id) {
@@ -202,7 +199,6 @@ async fn handle_websocket_proxy_connection(
         }
     }
 
-    // Convert to WebSocket
     let ws_stream = WebSocketStream::from_raw_socket(
         TokioIo::new(upgraded),
         Role::Server,
@@ -230,7 +226,6 @@ async fn handle_websocket_proxy_connection(
         metrics.websocket_connected(&tunnel_id);
     }
 
-    // Forward messages FROM original client TO tunnel client
     let connection_id_clone = connection_id.clone();
     let context_clone = context.clone();
 
@@ -252,7 +247,6 @@ async fn handle_websocket_proxy_connection(
                         }
                     }
 
-                    // Send to tunnel client
                     if let Err(e) = send_to_tunnel(
                         &connection_id_clone,
                         message,
@@ -278,7 +272,6 @@ async fn handle_websocket_proxy_connection(
                         }
                     }
 
-                    // Send to tunnel client
                     if let Err(e) = send_to_tunnel(
                         &connection_id_clone,
                         message,
@@ -307,7 +300,6 @@ async fn handle_websocket_proxy_connection(
                         reason,
                     };
 
-                    // Send close to tunnel client
                     if let Err(e) = send_to_tunnel(
                         &connection_id_clone,
                         message,
@@ -336,7 +328,6 @@ async fn handle_websocket_proxy_connection(
         );
     });
 
-    // Forward messages FROM tunnel client TO original client
     let connection_id_clone = connection_id.clone();
     let tunnel_to_original_task = tokio::spawn(async move {
         while let Some(ws_message) = ws_rx.recv().await {
@@ -355,7 +346,6 @@ async fn handle_websocket_proxy_connection(
         );
     });
 
-    // Wait for either task to complete
     tokio::select! {
         _ = original_to_tunnel_task => {
             info!("Original client disconnected for {}", connection_id);
@@ -365,7 +355,6 @@ async fn handle_websocket_proxy_connection(
         }
     }
 
-    // Final cleanup
     let tunnel_id = {
         let mut websockets = context.active_websockets.write().await;
         let tunnel_id = websockets.get(&connection_id).map(|conn| conn.tunnel_id.clone());
@@ -391,20 +380,17 @@ pub async fn send_to_tunnel(
     message: Message,
     context: &ServiceContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Get tunnel_id from connection
     let tunnel_id = {
         let websockets = context.active_websockets.read().await;
         match websockets.get(connection_id) {
             Some(conn) => conn.tunnel_id.clone(),
             None => {
-                // Connection already cleaned up, this is normal during shutdown
                 debug!("Connection {} already cleaned up, ignoring message", connection_id);
                 return Ok(());
             }
         }
     };
 
-    // Send to correct tunnel
     {
         let tunnels_guard = context.tunnels.read().await;
         match tunnels_guard.get(&tunnel_id).map(|conn| conn.sender.clone()) {
@@ -417,7 +403,6 @@ pub async fn send_to_tunnel(
                 }
             }
             None => {
-                // Tunnel disconnected
                 debug!("Tunnel {} disconnected, ignoring message for connection {}", tunnel_id, connection_id);
                 if let Some(metrics) = &context.metrics {
                     metrics.record_error(Some(&tunnel_id));

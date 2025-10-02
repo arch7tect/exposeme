@@ -35,7 +35,6 @@ pub async fn handle_tunnel_request(
 
     let request_id = uuid::Uuid::new_v4().to_string();
 
-    // Get tunnel sender
     let tunnel_sender = {
         let tunnels_guard = context.tunnels.read().await;
         tunnels_guard.get(&tunnel_id).map(|conn| conn.sender.clone())
@@ -94,10 +93,8 @@ pub async fn handle_tunnel_request(
     let mut request_size = 0u64;
 
     if is_streaming_request {
-        // Handle as streaming request (including SSE)
         debug!("Processing {} request: {} {}", request_type, method, forwarded_path);
 
-        // Send initial request without body
         let initial_request = Message::HttpRequestStart {
             id: request_id.clone(),
             method: method.to_string(),
@@ -115,7 +112,6 @@ pub async fn handle_tunnel_request(
                 .unwrap());
         }
 
-        // Stream request body if present
         let client_disconnected_flag = {
             let active_requests = context.active_requests.read().await;
             active_requests.get(&request_id).map(|req| req.client_disconnected.clone())
@@ -131,7 +127,6 @@ pub async fn handle_tunnel_request(
         }
 
     } else {
-        // Handle as complete request
         let body_bytes = match req.into_body().collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(_) => {
@@ -162,7 +157,6 @@ pub async fn handle_tunnel_request(
         }
     }
 
-    // Build response (handles both complete and streaming)
     build_response(request_id, response_rx, context.active_requests, context.metrics.as_ref(), &tunnel_id, request_size).await
 }
 
@@ -175,7 +169,6 @@ async fn build_response(
     tunnel_id: &str,
     request_size: u64,
 ) -> Result<Response<ResponseBody>, BoxError> {
-    // Only match on the FIRST event to determine response type
     match response_rx.recv().await {
         Some(ResponseEvent::Complete { status, headers, body }) => {
             info!("Complete response: {} ({} bytes)", status, body.len());
@@ -186,7 +179,6 @@ async fn build_response(
                 metrics.record_request(tunnel_id, request_size, body.len() as u64);
             }
 
-            // Check if this is an SSE response that should have been streamed
             if headers.get("content-type")
                 .map(|ct| ct.contains("text/event-stream"))
                 .unwrap_or(false) {
@@ -225,7 +217,6 @@ async fn build_response(
                 builder = builder.header(key, value);
             }
 
-            // Handle streaming with Frame<Bytes>
             let active_requests_for_stream = active_requests.clone();
             let request_id_for_stream = request_id.clone();
             let metrics_for_stream = metrics.cloned();
@@ -235,13 +226,11 @@ async fn build_response(
                 let mut total_streaming_bytes = 0u64;
                 let initial_data_len = initial_data.len() as u64;
 
-                // Send initial data if present
                 if !initial_data.is_empty() {
                     total_streaming_bytes += initial_data_len;
                     yield Ok(Frame::data(Bytes::from(initial_data)));
                 }
 
-                // Stream the rest - this handles StreamChunk and StreamEnd
                 while let Some(event) = response_rx.recv().await {
                     match event {
                         ResponseEvent::StreamChunk(chunk) => {
@@ -257,7 +246,6 @@ async fn build_response(
                                     metrics.record_request(&tunnel_id_for_stream, 0, additional_bytes);
                                 }
                             }
-                            // Clean up the request when stream ends
                             active_requests_for_stream.write().await.remove(&request_id_for_stream);
                             break;
                         }
@@ -270,7 +258,6 @@ async fn build_response(
                                     metrics.record_request(&tunnel_id_for_stream, 0, additional_bytes);
                                 }
                             }
-                            // Clean up on error
                             active_requests_for_stream.write().await.remove(&request_id_for_stream);
                             yield Err(e.into());
                             break;
@@ -279,7 +266,6 @@ async fn build_response(
                     }
                 }
 
-                // Final cleanup in case we exit the loop without StreamEnd/Error
                 if active_requests_for_stream.write().await.remove(&request_id_for_stream).is_some() {
                     debug!("Final cleanup for streaming request {} (streamed: {} bytes)", request_id_for_stream, total_streaming_bytes);
                     // Record final bytes if we didn't hit StreamEnd/Error
@@ -305,7 +291,6 @@ async fn build_response(
         }
 
         Some(ResponseEvent::StreamChunk(_)) => {
-            // This shouldn't happen as first event, but handle gracefully
             warn!("Received StreamChunk as first event for {}", request_id);
             active_requests.write().await.remove(&request_id);
             Ok(Response::builder()
@@ -314,7 +299,6 @@ async fn build_response(
         }
 
         Some(ResponseEvent::StreamEnd) => {
-            // This shouldn't happen as first event, but handle gracefully
             warn!("Received StreamEnd as first event for {}", request_id);
             active_requests.write().await.remove(&request_id);
             Ok(Response::builder()
@@ -362,7 +346,6 @@ async fn stream_request_body(
         }
     }
 
-    // Send final chunk
     tunnel_sender.send(Message::DataChunk {
         id: request_id,
         data: vec![],

@@ -138,7 +138,6 @@ impl SslManager {
         let cert_path = cache_dir.join(format!("{}.pem", cert_filename));
         let key_path = cache_dir.join(format!("{}.key", cert_filename));
 
-        // Check existing certificates
         if cert_path.exists() && key_path.exists() {
             info!("Found existing certificates, checking validity...");
             if let Ok(config) = self.load_certificates(&cert_path, &key_path).await {
@@ -148,15 +147,12 @@ impl SslManager {
             warn!("Existing certificates invalid, obtaining new ones");
         }
 
-        // Validate configuration
         if self.config.ssl.wildcard && self.dns_provider.is_none() {
             return Err("Wildcard certificates require DNS provider configuration".into());
         }
 
-        // Obtain certificate
         let (cert_pem, key_pem) = self.obtain_certificate(&cert_domains, email).await?;
 
-        // Save and load certificates
         tokio::fs::write(&cert_path, &cert_pem).await?;
         tokio::fs::write(&key_path, &key_pem).await?;
         info!("Certificates saved to cache directory");
@@ -177,7 +173,6 @@ impl SslManager {
 
         info!("Using ACME directory: {}", directory_url);
 
-        // Create account using correct API
         let new_account = NewAccount {
             contact: &[&format!("mailto:{}", email)],
             terms_of_service_agreed: true,
@@ -191,7 +186,6 @@ impl SslManager {
         let identifiers: Vec<Identifier> =
             domains.iter().map(|d| Identifier::Dns(d.clone())).collect();
 
-        // Create order with correct NewOrder API
         let mut order = account
             .new_order(&NewOrder::new(identifiers.as_slice()))
             .await?;
@@ -237,7 +231,6 @@ impl SslManager {
         order: &mut Order,
         cleanup_tasks: &mut Vec<CleanupTask>,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        // Process authorizations
         let mut authorizations = order.authorizations();
         let mut auth_no = 1;
         while let Some(authz_handle) = authorizations.next().await {
@@ -321,12 +314,10 @@ impl SslManager {
         };
         let record_name = "_acme-challenge";
 
-        // Get DNS challenge
         let mut challenge = authz_handle
             .challenge(ChallengeType::Dns01)
             .ok_or("No DNS-01 challenge found")?;
 
-        // Get key authorization from the order for this challenge
         let key_authorization = challenge.key_authorization();
         let dns_value = key_authorization.dns_value();
         info!(
@@ -340,7 +331,6 @@ impl SslManager {
                 .as_mut()
                 .ok_or("DNS provider not configured")?;
 
-            // Clean up existing records on first auth
             if auth_no == 1 {
                 if let Err(e) = dns_provider
                     .cleanup_txt_records(&record_domain, record_name)
@@ -350,7 +340,6 @@ impl SslManager {
                 }
             }
 
-            // Create record and wait for propagation
             let record_id = dns_provider
                 .create_txt_record(&record_domain, record_name, &dns_value)
                 .await?;
@@ -370,12 +359,10 @@ impl SslManager {
             record_id
         };
 
-        // Set challenge ready
         if let Err(e) = challenge.set_ready().await {
             error!("Setting challenge ready failed: {}", e);
         }
 
-        // Cleanup later - return info for it
         Ok(DnsCleanupInfo {
             domain: domain.to_owned(),
             record_id,
@@ -387,14 +374,12 @@ impl SslManager {
         authz_handle: &'a mut instant_acme::AuthorizationHandle<'a>,
         _domain: &str,
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
-        // Get HTTP challenge
         let mut challenge = authz_handle
             .challenge(ChallengeType::Http01)
             .ok_or("No HTTP-01 challenge found")?;
 
         let key_authorization = challenge.key_authorization();
 
-        // Add challenge to store
         {
             let mut store = self.challenge_store.write().await;
             store.insert(
@@ -403,12 +388,10 @@ impl SslManager {
             );
         }
 
-        // Set challenge ready
         if let Err(e) = challenge.set_ready().await {
             error!("Failed to set challenge ready: {}", e);
         }
 
-        // Cleanup later - return info for it
         Ok(challenge.token.clone())
     }
 
@@ -573,7 +556,6 @@ impl SslManager {
         let key_backup_path =
             Path::new(&cert_cache_dir).join(format!("{}.key.backup", cert_filename));
 
-        // Create backup copies
         let has_backup = if cert_path.exists() && key_path.exists() {
             match (
                 tokio::fs::copy(&cert_path, &cert_backup_path).await,
@@ -592,7 +574,6 @@ impl SslManager {
             false
         };
 
-        // Remove existing certificates
         if cert_path.exists() {
             tokio::fs::remove_file(&cert_path).await?;
         }
@@ -600,7 +581,6 @@ impl SslManager {
             tokio::fs::remove_file(&key_path).await?;
         }
 
-        // Try to generate new certificate
         let renewal_result = match ssl_provider {
             SslProvider::LetsEncrypt => self.setup_letsencrypt().await,
             SslProvider::SelfSigned => self.generate_self_signed().await,
@@ -614,7 +594,6 @@ impl SslManager {
                 Ok(())
             }
             Err(e) => {
-                // Restore from backup if available
                 if has_backup {
                     match (
                         tokio::fs::copy(&cert_backup_path, &cert_path).await,

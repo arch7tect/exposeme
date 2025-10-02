@@ -1,5 +1,3 @@
-// Main request handler and routing
-
 pub mod tunnel;
 pub mod websocket;
 pub mod acme;
@@ -17,7 +15,6 @@ use std::task::{Context, Poll};
 use tower::Service;
 use tracing::{debug, info};
 
-/// Unified service that routes requests to appropriate handlers
 #[derive(Clone)]
 pub struct UnifiedService {
     context: ServiceContext,
@@ -44,7 +41,6 @@ impl Service<Request<Incoming>> for UnifiedService {
     }
 }
 
-/// Main request routing logic
 async fn route_request(
     req: Request<Incoming>,
     context: ServiceContext,
@@ -61,27 +57,23 @@ async fn route_request(
         is_websocket
     );
 
-    // ACME challenges
     if path.starts_with("/.well-known/acme-challenge/") {
         info!("ACME challenge via {}", if context.is_https { "HTTPS" } else { "HTTP" });
         return acme::handle_acme_challenge(req, context.challenge_store).await;
     }
 
-    // Internal API and admin endpoints
     if path.starts_with("/api/") {
         if let Some(resp) = api::handle_api(&req, &context.ssl_manager, &context.config, Some(&context)).await? {
             return Ok(resp);
         }
     }
 
-    // Admin observability endpoints
     if path.starts_with("/admin/") && context.metrics.is_some() {
         if let Some(response) = admin::handle_admin_request(&req, context.clone(), path).await? {
             return Ok(response);
         }
     }
 
-    // WebSocket requests
     if is_websocket {
         return if path == context.config.server.tunnel_path {
             debug!("Tunnel management WebSocket via {}",
@@ -94,16 +86,13 @@ async fn route_request(
         };
     }
 
-    // UI assets - only serve on main domain for HTTPS
     if context.is_https && UIAssets::is_ui_asset(path) {
-        // Check if this is the main domain (not a tunnel subdomain)
         let host = req.headers()
             .get("host")
             .and_then(|h| h.to_str().ok())
             .unwrap_or("");
         let host_without_port = host.split(':').next().unwrap_or(host);
 
-        // Only serve UI assets on the main domain
         if host_without_port == context.config.server.domain {
             if let Some(response) = UIAssets::serve_asset(path) {
                 debug!("Serving UI asset on main domain: {}", path);
@@ -112,12 +101,10 @@ async fn route_request(
         }
     }
 
-    // HTTP/HTTPS tunnel requests
     if context.is_https {
         tunnel::handle_tunnel_request(req, context.clone()).await
     } else {
         if context.config.ssl.enabled {
-            // Redirect to HTTPS using the actual host from the request
             let host = req.headers()
                 .get("host")
                 .and_then(|h| h.to_str().ok())

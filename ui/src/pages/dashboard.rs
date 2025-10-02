@@ -5,13 +5,11 @@ use crate::sse::SseGuard;
 
 #[component]
 pub fn Dashboard() -> impl IntoView {
-    // Reactive signals for dashboard data
     let (health, set_health) = signal::<Option<HealthResponse>>(None);
     let (metrics, set_metrics) = signal::<Option<MetricsResponse>>(None);
     let (error, set_error) = signal::<Option<String>>(None);
     let (connected, set_connected) = signal(false);
 
-    // Load initial data
     Effect::new(move |_| {
         leptos::task::spawn_local(async move {
             match fetch_health().await {
@@ -32,11 +30,9 @@ pub fn Dashboard() -> impl IntoView {
         });
     });
 
-    // Better panic messages in dev
     #[cfg(debug_assertions)]
     console_error_panic_hook::set_once();
 
-    // Store non-Send handles locally in the owner arena
     let _sse_guard = StoredValue::new_local({
         let set_metrics = set_metrics;
         let set_connected = set_connected;
@@ -82,7 +78,6 @@ pub fn Dashboard() -> impl IntoView {
                         <CertificateStatus health=health/>
                     </div>
 
-                    // Add traffic visualization
                     <crate::components::TrafficChart metrics=metrics/>
                 </div>
             </div>
@@ -303,9 +298,6 @@ pub fn CertificateStatus(health: ReadSignal<Option<HealthResponse>>) -> impl Int
         </div>
     }
 }
-
-
-// Helper functions
 
 fn format_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];

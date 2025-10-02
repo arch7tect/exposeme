@@ -7,7 +7,6 @@ pub fn CertificatesPage() -> impl IntoView {
     let (certificate_info, set_certificate_info) = signal::<Option<CertificateInfo>>(None);
     let (error, set_error) = signal::<Option<String>>(None);
 
-    // Get global admin token from context
     let admin_token = use_context::<ReadSignal<String>>()
         .expect("Admin token signal should be provided in context");
     let (renewing, set_renewing) = signal(false);
@@ -131,14 +130,13 @@ pub fn CertificatesPage() -> impl IntoView {
                                                 <div class="cert-row">
                                                     <span class="label">"Renewal Status:"</span>
                                                     <span class={if cert_details.needs_renewal { "value status-warning" } else { "value status-ok" }}>
-                                                        {if cert_details.needs_renewal { "⚠️ Needs Renewal" } else { "✅ Current" }}
+                                                        {if cert_details.needs_renewal { "Needs Renewal" } else { "Current" }}
                                                     </span>
                                                 </div>
                                             </div>
                                         </div>
                                     })}
 
-                                    // Enhanced certificate details card
                                     <div class="certificate-card">
                                         <h3>"Certificate Details"</h3>
                                         <div class="certificate-content">

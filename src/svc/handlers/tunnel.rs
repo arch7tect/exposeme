@@ -1,4 +1,4 @@
-// src/svc/handlers/tunnel.rs - HTTP tunnel request handling
+// HTTP tunnel request handling
 
 use crate::svc::{BoxError, ServiceContext};
 use crate::svc::types::*;
@@ -55,25 +55,21 @@ pub async fn handle_tunnel_request(
         }
     };
 
-    // SSE and streaming detection
     let is_streaming_request = is_streaming_request(&req);
     let method = req.method().clone();
     let mut headers = extract_headers(&req);
 
-    // Handle SSE reconnection - check for Last-Event-ID header
     if let Some(last_event_id) = req.headers().get("last-event-id")
         .and_then(|h| h.to_str().ok()) {
-        debug!("🔄 SSE reconnection detected with Last-Event-ID: {}", last_event_id);
+        debug!("SSE reconnection detected with Last-Event-ID: {}", last_event_id);
         headers.insert("Last-Event-ID".to_string(), last_event_id.to_string());
     }
 
-    // USE the unified is_sse function:
     let is_sse = is_sse(
         req.headers().get("content-type").and_then(|h| h.to_str().ok()),
         req.headers().get("accept").and_then(|h| h.to_str().ok())
     );
 
-    // Log request type for debugging
     let request_type = if is_sse {
         "SSE"
     } else if is_streaming_request {
@@ -82,12 +78,10 @@ pub async fn handle_tunnel_request(
         "regular"
     };
 
-    info!("📥 {} request: {} {} (id: {})", request_type, method, forwarded_path, request_id);
+    info!("{} request: {} {} (id: {})", request_type, method, forwarded_path, request_id);
 
-    // Create response channel
     let (response_tx, response_rx) = mpsc::channel(32);
 
-    // Register request
     context.active_requests.write().await.insert(
         request_id.clone(),
         ActiveRequest {
@@ -101,7 +95,7 @@ pub async fn handle_tunnel_request(
 
     if is_streaming_request {
         // Handle as streaming request (including SSE)
-        debug!("🔄 Processing {} request: {} {}", request_type, method, forwarded_path);
+        debug!("Processing {} request: {} {}", request_type, method, forwarded_path);
 
         // Send initial request without body
         let initial_request = Message::HttpRequestStart {
@@ -184,7 +178,7 @@ async fn build_response(
     // Only match on the FIRST event to determine response type
     match response_rx.recv().await {
         Some(ResponseEvent::Complete { status, headers, body }) => {
-            info!("✅ Complete response: {} ({} bytes)", status, body.len());
+            info!("Complete response: {} ({} bytes)", status, body.len());
             active_requests.write().await.remove(&request_id);
             
             // Record actual request/response bytes in metrics
@@ -196,7 +190,7 @@ async fn build_response(
             if headers.get("content-type")
                 .map(|ct| ct.contains("text/event-stream"))
                 .unwrap_or(false) {
-                warn!("⚠️  SSE response received as complete - this may cause issues");
+                warn!("SSE response received as complete - this may cause issues");
             }
 
             let mut builder = Response::builder().status(status);
@@ -214,7 +208,7 @@ async fn build_response(
             );
 
             let response_type = if is_sse_response { "SSE" } else { "streaming" };
-            info!("🔄 {} response: {} (initial: {} bytes)", response_type, status, initial_data.len());
+            info!("{} response: {} (initial: {} bytes)", response_type, status, initial_data.len());
             
             // Record streaming request in metrics (initial bytes only, as total is unknown)
             if let Some(metrics) = metrics {
@@ -222,7 +216,7 @@ async fn build_response(
             }
 
             if is_sse_response {
-                debug!("✨ Adding SSE-specific response headers");
+                debug!("Adding SSE-specific response headers");
                 add_sse_headers(&mut headers);
             }
 
@@ -255,7 +249,7 @@ async fn build_response(
                             yield Ok(Frame::data(chunk));
                         }
                         ResponseEvent::StreamEnd => {
-                            debug!("✅ Stream ended {} (total: {} bytes)", request_id_for_stream, total_streaming_bytes);
+                            debug!("Stream ended {} (total: {} bytes)", request_id_for_stream, total_streaming_bytes);
                             // Record total streaming bytes in metrics (subtract initial data since it was already counted)
                             if let Some(ref metrics) = metrics_for_stream {
                                 let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
@@ -287,7 +281,7 @@ async fn build_response(
 
                 // Final cleanup in case we exit the loop without StreamEnd/Error
                 if active_requests_for_stream.write().await.remove(&request_id_for_stream).is_some() {
-                    debug!("🧹 Final cleanup for streaming request {} (streamed: {} bytes)", request_id_for_stream, total_streaming_bytes);
+                    debug!("Final cleanup for streaming request {} (streamed: {} bytes)", request_id_for_stream, total_streaming_bytes);
                     // Record final bytes if we didn't hit StreamEnd/Error
                     if let Some(ref metrics) = metrics_for_stream {
                         let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);

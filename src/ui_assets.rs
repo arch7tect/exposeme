@@ -18,18 +18,15 @@ use rust_embed::RustEmbed;
 pub struct UIAssets;
 
 impl UIAssets {
-    /// Handle UI asset requests with optimized caching
+    /// Handle UI asset requests
     pub fn serve_asset(path: &str) -> Option<Response<ResponseBody>> {
-        debug!("🎨 Serving UI asset: {}", path);
+        debug!("Serving UI asset: {}", path);
 
-        // Remove leading slash for rust-embed lookup
         let file_path = path.trim_start_matches('/');
 
-        // Special handling for root path and favicon
         let lookup_path = if path == "/" {
             "index.html"
         } else if path == "/favicon.ico" {
-            // Try to find favicon, fallback to serving a minimal one
             if UIAssets::get("favicon.ico").is_none() {
                 return Some(Self::serve_default_favicon());
             }
@@ -40,8 +37,6 @@ impl UIAssets {
 
         if let Some(file) = UIAssets::get(lookup_path) {
             let mime_type = Self::get_mime_type(lookup_path);
-
-            // Clone the data to avoid lifetime issues
             let file_data = file.data.to_vec();
 
             let response = Response::builder()
@@ -53,10 +48,10 @@ impl UIAssets {
                 .body(boxed_body(file_data))
                 .unwrap();
 
-            debug!("🎨 Serving asset: {} -> {}", path, lookup_path);
+            debug!("Serving asset: {} -> {}", path, lookup_path);
             Some(response)
         } else {
-            debug!("❌ Asset not found: {} -> {}", path, lookup_path);
+            debug!("Asset not found: {} -> {}", path, lookup_path);
             None
         }
     }
@@ -104,27 +99,24 @@ impl UIAssets {
 
     /// Check if path is a UI asset
     pub fn is_ui_asset(path: &str) -> bool {
-        // Remove leading slash for rust-embed lookup
         let file_path = path.trim_start_matches('/');
         let lookup_path = if path == "/" { "index.html" } else { file_path };
 
-        // Always serve favicon.ico (we have a fallback)
         if path == "/favicon.ico" {
-            debug!("✅ Favicon requested: {}", path);
+            debug!("Favicon requested: {}", path);
             return true;
         }
 
         let result = UIAssets::get(lookup_path).is_some();
 
-        // Debug logging to see what's happening
         if !result {
-            debug!("❌ Asset not found: {} -> {}", path, lookup_path);
-            debug!("📁 Available assets:");
+            debug!("Asset not found: {} -> {}", path, lookup_path);
+            debug!("Available assets:");
             for file in UIAssets::iter() {
                 debug!("   - {}", file.as_ref());
             }
         } else {
-            debug!("✅ Asset found: {} -> {}", path, lookup_path);
+            debug!("Asset found: {} -> {}", path, lookup_path);
         }
 
         result

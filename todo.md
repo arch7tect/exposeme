@@ -52,7 +52,7 @@ A web-based management interface would improve operational visibility and contro
 
 ### Enhanced Streaming Support
 
-**Status**: ✅ Implemented in v1.1  
+**Status**: Implemented in v1.1  
 **Priority**: High  
 **Complexity**: Medium
 
@@ -64,7 +64,7 @@ A web-based management interface would improve operational visibility and contro
 
 ### Binary Protocol Support
 
-**Status**: ✅ Implemented in v1.3  
+**Status**: Implemented in v1.3  
 **Priority**: High  
 **Complexity**: Medium
 

@@ -1,4 +1,4 @@
-// src/svc/tunnel_mgmt.rs - Tunnel client connection management
+// Tunnel client connection management
 
 use crate::Message;
 use crate::svc::types::*;
@@ -32,33 +32,30 @@ pub async fn handle_tunnel_management_connection(
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    debug!("🔍 Waiting for authentication message...");
+    debug!("Waiting for authentication message...");
 
     let tunnel_id =
         match wait_for_authentication(&mut ws_receiver, &mut ws_sender, &context).await? {
             Some(info) => info,
             None => {
-                info!("❌ Authentication failed or connection closed");
+                info!("Authentication failed or connection closed");
                 return Ok(());
             }
         };
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-    // Register tunnel
     let tunnel_connection = Arc::new(TunnelConnection::new(tx, tunnel_id.clone()));
 
     {
         let mut tunnels_guard = context.tunnels.write().await;
         tunnels_guard.insert(tunnel_id.clone(), tunnel_connection);
     }
-    debug!("✅ Authentication successful for tunnel '{}'", tunnel_id);
+    debug!("Authentication successful for tunnel '{}'", tunnel_id);
 
-    // Record tunnel connection in metrics
     if let Some(metrics) = &context.metrics {
         metrics.tunnel_connected(&tunnel_id);
     }
 
-    // Create channel for ping requests from ping task to main loop
     let (ping_tx, mut ping_rx) = mpsc::unbounded_channel::<()>();
     let ping_handle = start_ping_task(
         tunnel_id.clone(),
@@ -70,7 +67,6 @@ pub async fn handle_tunnel_management_connection(
     let mut message_count = 0;
     loop {
         tokio::select! {
-            // Handle ping requests from ping task
             _ = ping_rx.recv() => {
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -79,7 +75,7 @@ pub async fn handle_tunnel_management_connection(
                 let ping_payload = timestamp.to_be_bytes().to_vec();
 
                 if let Err(e) = ws_sender.send(WsMessage::Ping(ping_payload.into())).await {
-                    error!("❌ Failed to send ping to tunnel '{}': {}", tunnel_id, e);
+                    error!("Failed to send ping to tunnel '{}': {}", tunnel_id, e);
                     if let Some(metrics) = &context.metrics {
                         metrics.record_error(Some(&tunnel_id));
                     }
@@ -90,7 +86,7 @@ pub async fn handle_tunnel_management_connection(
                 if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
                     connection.record_ping_sent().await;
                 }
-                debug!("📡 Sent native WebSocket ping to tunnel '{}'", tunnel_id);
+                debug!("Sent native WebSocket ping to tunnel '{}'", tunnel_id);
             }
 
             // Handle outgoing messages to client
@@ -123,7 +119,7 @@ pub async fn handle_tunnel_management_connection(
                     break;
                 };
                 message_count += 1;
-                trace!("🔍 Server: Received WebSocket message #{}", message_count);
+                trace!("Server: Received WebSocket message #{}", message_count);
 
                 if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
                     connection.update_activity().await;
@@ -131,11 +127,11 @@ pub async fn handle_tunnel_management_connection(
 
                 match message {
                     Ok(WsMessage::Binary(bytes)) => {
-                        trace!("🔍 Server: Processing binary message #{} ({} bytes)", message_count, bytes.len());
+                        trace!("Server: Processing binary message #{} ({} bytes)", message_count, bytes.len());
 
                         match Message::from_bincode(&bytes) {
                             Ok(msg) => {
-                                trace!("🔍 Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
+                                trace!("Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
 
                                 match msg {
                                     Message::HttpResponseStart {
@@ -160,7 +156,7 @@ pub async fn handle_tunnel_management_connection(
                                         headers: _,
                                     } => {
                                         debug!(
-                                            "📡 WebSocket upgrade response: {} (status: {})",
+                                            "WebSocket upgrade response: {} (status: {})",
                                             connection_id, status
                                         );
                                         // Nothing to do here as we've already upgraded incoming connection.
@@ -188,7 +184,7 @@ pub async fn handle_tunnel_management_connection(
                                 }
                             }
                             Err(e) => {
-                                error!("❌ Failed to parse bincode message: {}", e);
+                                error!("Failed to parse bincode message: {}", e);
                                 if let Some(metrics) = &context.metrics {
                                     metrics.record_error(Some(&tunnel_id));
                                 }
@@ -196,14 +192,14 @@ pub async fn handle_tunnel_management_connection(
                         }
                     }
                     Ok(WsMessage::Text(text)) => {
-                        error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
-                        error!("❌ Please ensure both client and server are using the same protocol version");
+                        error!("Received unexpected text message (protocol requires binary): {} chars", text.len());
+                        error!("Please ensure both client and server are using the same protocol version");
                         if let Some(metrics) = &context.metrics {
                             metrics.record_error(Some(&tunnel_id));
                         }
                     }
                     Ok(WsMessage::Pong(_)) => {
-                        debug!("🏓 Received native WebSocket pong from tunnel '{}'", tunnel_id);
+                        debug!("Received native WebSocket pong from tunnel '{}'", tunnel_id);
                         // Update activity to mark connection as alive
                         if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
                             connection.update_activity().await;
@@ -227,14 +223,14 @@ pub async fn handle_tunnel_management_connection(
     }
 
     // Clean up tunnel on disconnect
-    info!("📤 Sending WebSocket close frame to client");
+    info!("Sending WebSocket close frame to client");
     let close_frame = tokio_tungstenite::tungstenite::protocol::CloseFrame {
         code: CloseCode::Away,
         reason: "Server shutting down".into(),
     };
     let _ = ws_sender.send(WsMessage::Close(Some(close_frame))).await;
     let _ = ws_sender.close().await;
-    info!("✅ WebSocket closed gracefully");
+    info!("WebSocket closed gracefully");
 
     shutdown_tunnel(context.clone(), tunnel_id.clone()).await;
     ping_handle.abort();
@@ -264,7 +260,7 @@ fn start_ping_task(
                 Some(conn) => {
                     // Check if connection is stale
                     if conn.is_stale().await {
-                        warn!("🔄 Tunnel '{}' is stale, removing immediately", tunnel_id);
+                        warn!("Tunnel '{}' is stale, removing immediately", tunnel_id);
                         shutdown_tunnel(context.clone(), tunnel_id.clone()).await;
                         break;
                     }
@@ -272,20 +268,20 @@ fn start_ping_task(
                     // Request main loop to send a ping
                     if ping_tx.send(()).is_err() {
                         warn!(
-                            "❌ Failed to request ping for tunnel '{}', main loop closed",
+                            "Failed to request ping for tunnel '{}', main loop closed",
                             tunnel_id
                         );
                         break;
                     }
                 }
                 None => {
-                    debug!("🔄 Tunnel '{}' no longer exists, stopping ping", tunnel_id);
+                    debug!("Tunnel '{}' no longer exists, stopping ping", tunnel_id);
                     break;
                 }
             }
         }
 
-        info!("💔 Ping task ended for tunnel '{}'", tunnel_id);
+        info!("Ping task ended for tunnel '{}'", tunnel_id);
     })
 }
 
@@ -429,7 +425,7 @@ async fn handle_http_response_start(
     context: &ServiceContext,
 ) {
     debug!(
-        "📥 Response: {} (id: {}, complete: {:?}, {} bytes)",
+        "Response: {} (id: {}, complete: {:?}, {} bytes)",
         status,
         id,
         is_complete,
@@ -445,8 +441,8 @@ async fn handle_http_response_start(
             };
 
             match request.response_tx.send(complete_event).await {
-                Ok(_) => debug!("✅ Complete response queued for {}", id),
-                Err(e) => error!("❌ Failed to queue complete response for {}: {}", id, e),
+                Ok(_) => debug!("Complete response queued for {}", id),
+                Err(e) => error!("Failed to queue complete response for {}: {}", id, e),
             }
         } else {
             let stream_start = ResponseEvent::StreamStart {
@@ -456,9 +452,9 @@ async fn handle_http_response_start(
             };
 
             match request.response_tx.send(stream_start).await {
-                Ok(_) => debug!("✅ Stream started for {}", id),
+                Ok(_) => debug!("Stream started for {}", id),
                 Err(e) => {
-                    error!("❌ Failed to start stream for {}: {}", id, e);
+                    error!("Failed to start stream for {}: {}", id, e);
                     context.active_requests.write().await.remove(&id);
                 }
             }
@@ -469,7 +465,7 @@ async fn handle_http_response_start(
 /// Handle data chunk message
 async fn handle_data_chunk(id: String, data: Vec<u8>, is_final: bool, context: &ServiceContext) {
     debug!(
-        "📥 DataChunk: {} bytes, final={} (id: {})",
+        "DataChunk: {} bytes, final={} (id: {})",
         data.len(),
         is_final,
         id
@@ -485,10 +481,10 @@ async fn handle_data_chunk(id: String, data: Vec<u8>, is_final: bool, context: &
 
         if is_final {
             let _ = request.response_tx.send(ResponseEvent::StreamEnd).await;
-            debug!("✅ Stream ended for {}", id);
+            debug!("Stream ended for {}", id);
         }
     } else {
-        warn!("❌ Received DataChunk for unknown request: {}", id);
+        warn!("Received DataChunk for unknown request: {}", id);
     }
 }
 
@@ -497,7 +493,7 @@ async fn handle_websocket_data(connection_id: String, data: Vec<u8>, context: &S
     // Handle WebSocket data from tunnel client
     if let Some(connection) = context.active_websockets.read().await.get(&connection_id) {
         debug!(
-            "📡 Received data for {} (age: {}, {} bytes)",
+            "Received data for {} (age: {}, {} bytes)",
             connection_id,
             connection.age_info(),
             data.len()
@@ -544,7 +540,7 @@ async fn handle_websocket_close(
         .remove(&connection_id)
     {
         info!(
-            "📡 Close for {}: code={:?}, reason={:?}, final_status={}",
+            "Close for {}: code={:?}, reason={:?}, final_status={}",
             connection_id,
             code,
             reason,
@@ -564,7 +560,7 @@ async fn handle_websocket_close(
                 error!("Failed to send close frame for {}: {:?}", connection_id, e);
             };
         }
-        info!("✅ Cleaned up WebSocket connection {}", connection_id);
+        info!("Cleaned up WebSocket connection {}", connection_id);
     }
 }
 
@@ -614,7 +610,7 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
 
         if !websocket_connections_to_cleanup.is_empty() {
             info!(
-            "🧹 Cleaning up {} WebSocket connections",
+            "Cleaning up {} WebSocket connections",
             websocket_connections_to_cleanup.len()
         );
             for connection_id in websocket_connections_to_cleanup {
@@ -624,7 +620,7 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
                     .await
                     .remove(&connection_id)
                 {
-                    debug!("🗑️  Cleaned up WebSocket connection: {}", connection_id);
+                    debug!("Cleaned up WebSocket connection: {}", connection_id);
 
                     // Record WebSocket disconnection in metrics
                     if let Some(metrics) = &context.metrics {

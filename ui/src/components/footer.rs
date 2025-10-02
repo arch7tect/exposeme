@@ -7,7 +7,6 @@ pub fn Footer(health: ReadSignal<Option<HealthResponse>>) -> impl IntoView {
         <footer class="bg-gray-50 border-t border-gray-200 mt-auto">
             <div class="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
                 <div class="flex flex-col sm:flex-row justify-between items-center space-y-2 sm:space-y-0">
-                    // Left side - Version info
                     <div class="flex items-center space-x-4 text-sm text-gray-600">
 {move || {
                             match health.get() {
@@ -32,7 +31,6 @@ pub fn Footer(health: ReadSignal<Option<HealthResponse>>) -> impl IntoView {
                         }}
                     </div>
 
-                    // Right side - Build info and links
                     <div class="flex items-center space-x-4 text-sm text-gray-500">
                         <span>
                             "Built with "
@@ -47,7 +45,6 @@ pub fn Footer(health: ReadSignal<Option<HealthResponse>>) -> impl IntoView {
                     </div>
                 </div>
 
-                // Additional footer info
                 <div class="mt-2 pt-2 border-t border-gray-200 text-xs text-center text-gray-400">
                     "Real-time tunnel monitoring and SSL certificate management"
                 </div>

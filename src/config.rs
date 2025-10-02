@@ -1,4 +1,3 @@
-// src/config.rs
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -245,7 +244,6 @@ pub struct ClientArgs {
 
 impl ServerConfig {
     pub fn validate_tunnel_id(&self, tunnel_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Basic validation for all modes
         if tunnel_id.is_empty() {
             return Err("Tunnel ID cannot be empty".into());
         }
@@ -254,7 +252,6 @@ impl ServerConfig {
             return Err("Tunnel ID too long (max 63 characters)".into());
         }
 
-        // Additional validation for subdomain routing
         match self.server.routing_mode {
             RoutingMode::Subdomain | RoutingMode::Both => {
                 // RFC 1123 hostname validation
@@ -287,7 +284,6 @@ impl ServerConfig {
             Self::default()
         };
 
-        // Override with CLI arguments
         if let Some(bind) = &args.http_bind {
             config.server.http_bind = bind.clone();
         }
@@ -330,7 +326,6 @@ impl ServerConfig {
             config.limits.request_timeout_secs = timeout;
         }
 
-        // Environment variable overrides
         if let Ok(domain) = std::env::var("EXPOSEME_DOMAIN") {
             config.server.domain = domain;
             tracing::info!("Domain set from EXPOSEME_DOMAIN environment variable");
@@ -356,7 +351,6 @@ impl ServerConfig {
             config.server.tunnel_path = tunnel_path;
         }
 
-        // SSL settings
         if let Ok(email) = std::env::var("EXPOSEME_EMAIL") {
             config.ssl.email = email;
             tracing::info!("Email set from EXPOSEME_EMAIL environment variable");
@@ -372,7 +366,6 @@ impl ServerConfig {
             tracing::info!("Wildcard certificates enabled from EXPOSEME_WILDCARD");
         }
 
-        // Routing mode environment variable
         if let Ok(routing_mode) = std::env::var("EXPOSEME_ROUTING_MODE") {
             config.server.routing_mode = match routing_mode.as_str() {
                 "path" => RoutingMode::Path,
@@ -386,7 +379,6 @@ impl ServerConfig {
             tracing::info!("Routing mode set to {:?} from EXPOSEME_ROUTING_MODE", config.server.routing_mode);
         }
 
-        // DNS Provider configuration - only set provider name from environment
         if let Ok(dns_provider) = std::env::var("EXPOSEME_DNS_PROVIDER") {
             config.ssl.dns_provider = Some(DnsProviderConfig {
                 provider: dns_provider.clone(),
@@ -396,19 +388,16 @@ impl ServerConfig {
             tracing::info!("DNS provider will be configured from its specific environment variables");
         }
 
-        // Authentication tokens from environment
         if let Ok(token) = std::env::var("EXPOSEME_AUTH_TOKEN") {
             config.auth.tokens = vec![token];
             tracing::info!("Authentication token set from EXPOSEME_AUTH_TOKEN");
         }
 
-        // Admin token from environment  
         if let Ok(admin_token) = std::env::var("EXPOSEME_ADMIN_TOKEN") {
             config.auth.admin_token = Some(admin_token);
             tracing::info!("Admin token set from EXPOSEME_ADMIN_TOKEN");
         }
 
-        // Request timeout from environment
         if let Ok(timeout) = std::env::var("EXPOSEME_REQUEST_TIMEOUT") {
             if let Ok(secs) = timeout.parse::<u64>() {
                 config.limits.request_timeout_secs = secs;
@@ -418,7 +407,6 @@ impl ServerConfig {
             }
         }
 
-        // Automatic configuration for subdomain routing
         if matches!(config.server.routing_mode, RoutingMode::Subdomain | RoutingMode::Both) {
             if config.ssl.enabled && !config.ssl.wildcard {
                 tracing::warn!("Subdomain routing with SSL requires wildcard certificates");
@@ -520,10 +508,9 @@ impl ServerConfig {
 
 impl ClientConfig {
     pub fn load(args: &ClientArgs) -> Result<Self, Box<dyn std::error::Error>> {
-        // Check if all required params are provided via CLI to skip config file requirement
-        let can_skip_config = args.server_url.is_some() && 
-                              args.token.is_some() && 
-                              args.tunnel_id.is_some() && 
+        let can_skip_config = args.server_url.is_some() &&
+                              args.token.is_some() &&
+                              args.tunnel_id.is_some() &&
                               args.local_target.is_some();
 
         let mut config = if args.config.exists() {
@@ -574,7 +561,6 @@ impl ClientConfig {
             config.client.websocket_monitoring_interval_secs = monitoring;
         }
 
-        // Validate that all required fields are set
         if config.client.server_url.is_empty() {
             return Err("server_url is required (use --server-url or set in config file)".into());
         }

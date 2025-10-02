@@ -25,7 +25,6 @@ impl SseGuard {
 
         let canceled = Arc::new(AtomicBool::new(false));
 
-        // Wrap callbacks in Arc to share between listeners
         let on_msg = Arc::new(on_msg);
         let on_error = Arc::new(on_error);
         let on_connected = Arc::new(on_connected);
@@ -75,6 +74,6 @@ impl SseGuard {
 impl Drop for SseGuard {
     fn drop(&mut self) {
         self.canceled.store(true, Ordering::Relaxed);
-        self.es.close(); // Stop the stream
+        self.es.close();
     }
 }

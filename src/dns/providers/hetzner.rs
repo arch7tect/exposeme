@@ -1,5 +1,3 @@
-// src/dns/providers/hetzner.rs
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -75,7 +73,7 @@ impl HetznerProvider {
             .build()
             .expect("Failed to create HTTP client");
 
-        info!("✅ Hetzner DNS provider initialized");
+        info!("Hetzner DNS provider initialized");
         Self { config, client }
     }
 }
@@ -110,7 +108,7 @@ impl DnsProviderFactory for HetznerProvider {
             "TOML configuration"
         };
 
-        info!("✅ Hetzner DNS provider configured from {}", config_source);
+        info!("Hetzner DNS provider configured from {}", config_source);
         Ok(Box::new(Self::new(config)))
     }
 }
@@ -118,7 +116,7 @@ impl DnsProviderFactory for HetznerProvider {
 #[async_trait]
 impl DnsProvider for HetznerProvider {
     async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("📋 Listing available zones from Hetzner DNS");
+        info!("Listing available zones from Hetzner DNS");
 
         let response = self.client
             .get("https://dns.hetzner.com/api/v1/zones")
@@ -135,10 +133,10 @@ impl DnsProvider for HetznerProvider {
         let zones_response: ZonesResponse = response.json().await?;
         let zone_infos: Vec<ZoneInfo> = zones_response.zones
             .into_iter()
-            .map(|zone| ZoneInfo::new(zone.id, zone.name)) // 🎉 Store both ID and name
+            .map(|zone| ZoneInfo::new(zone.id, zone.name)) // Store both ID and name
             .collect();
 
-        info!("📋 Found {} zones", zone_infos.len());
+        info!("Found {} zones", zone_infos.len());
         Ok(zone_infos)
     }
 
@@ -147,7 +145,7 @@ impl DnsProvider for HetznerProvider {
         zone: &ZoneInfo,
         name: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("📋 Listing TXT records: {} in zone {}", name, zone.name);
+        info!("Listing TXT records: {} in zone {}", name, zone.name);
 
         let url = format!("https://dns.hetzner.com/api/v1/records?zone_id={}", zone.id);
         let response = self.client
@@ -171,7 +169,7 @@ impl DnsProvider for HetznerProvider {
             .map(|record| record.id.clone())
             .collect();
 
-        info!("📋 Found {} existing TXT records", matching_record_ids.len());
+        info!("Found {} existing TXT records", matching_record_ids.len());
         Ok(matching_record_ids)
     }
 
@@ -181,7 +179,7 @@ impl DnsProvider for HetznerProvider {
         name: &str,
         value: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        info!("✨ Creating TXT record: {} in zone {} = {}", name, zone.name, value);
+        info!("Creating TXT record: {} in zone {} = {}", name, zone.name, value);
 
         let create_request = CreateRecordRequest {
             zone_id: zone.id.clone(), // No extra lookup needed
@@ -208,7 +206,7 @@ impl DnsProvider for HetznerProvider {
         let create_response: CreateRecordResponse = response.json().await?;
         let record_id = create_response.record.id;
 
-        info!("✅ Created TXT record with ID: {}", record_id);
+        info!("Created TXT record with ID: {}", record_id);
         Ok(record_id)
     }
 
@@ -217,7 +215,7 @@ impl DnsProvider for HetznerProvider {
         _zone: &ZoneInfo, // Zone not needed for Hetzner delete
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("🗑️  Deleting TXT record {}", record_id);
+        info!("Deleting TXT record {}", record_id);
 
         let url = format!("https://dns.hetzner.com/api/v1/records/{}", record_id);
 
@@ -233,7 +231,7 @@ impl DnsProvider for HetznerProvider {
             return Err(format!("Failed to delete record ({}): {}", status, error_text).into());
         }
 
-        info!("✅ Deleted TXT record {}", record_id);
+        info!("Deleted TXT record {}", record_id);
         Ok(())
     }
 

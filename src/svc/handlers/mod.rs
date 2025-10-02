@@ -1,4 +1,4 @@
-// src/svc/handlers/mod.rs - Main request handler and routing
+// Main request handler and routing
 
 pub mod tunnel;
 pub mod websocket;
@@ -54,7 +54,7 @@ async fn route_request(
     let is_websocket = is_websocket_upgrade(&req);
 
     info!(
-        "📥 {} request: {} {} (WebSocket: {})",
+        "{} request: {} {} (WebSocket: {})",
         if context.is_https { "HTTPS" } else { "HTTP" },
         method,
         path,
@@ -63,7 +63,7 @@ async fn route_request(
 
     // ACME challenges
     if path.starts_with("/.well-known/acme-challenge/") {
-        info!("🔍 ACME challenge via {}", if context.is_https { "HTTPS" } else { "HTTP" });
+        info!("ACME challenge via {}", if context.is_https { "HTTPS" } else { "HTTP" });
         return acme::handle_acme_challenge(req, context.challenge_store).await;
     }
 
@@ -84,11 +84,11 @@ async fn route_request(
     // WebSocket requests
     if is_websocket {
         return if path == context.config.server.tunnel_path {
-            debug!("🔌 Tunnel management WebSocket via {}",
+            debug!("Tunnel management WebSocket via {}",
                   if context.is_https { "HTTPS" } else { "HTTP" });
             websocket::handle_tunnel_management_websocket(req, context).await
         } else {
-            debug!("🔌 Tunneled WebSocket via {}",
+            debug!("Tunneled WebSocket via {}",
                   if context.is_https { "HTTPS" } else { "HTTP" });
             websocket::handle_websocket_upgrade_request(req, context).await
         };
@@ -106,7 +106,7 @@ async fn route_request(
         // Only serve UI assets on the main domain
         if host_without_port == context.config.server.domain {
             if let Some(response) = UIAssets::serve_asset(path) {
-                debug!("📋 Serving UI asset on main domain: {}", path);
+                debug!("Serving UI asset on main domain: {}", path);
                 return Ok(response);
             }
         }
@@ -135,7 +135,7 @@ async fn route_request(
                 .body(boxed_body("Redirecting to HTTPS"))
                 .unwrap())
         } else {
-            debug!("🌐 Processing tunneled HTTP request via HTTP (SSL disabled)");
+            debug!("Processing tunneled HTTP request via HTTP (SSL disabled)");
             tunnel::handle_tunnel_request(req, context).await
         }
     }

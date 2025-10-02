@@ -15,20 +15,20 @@ NC='\033[0m' # No Color
 
 # Helper functions
 error() {
-    echo -e "${RED}❌ ERROR: $1${NC}" >&2
+    echo -e "${RED}ERROR: $1${NC}" >&2
     exit 1
 }
 
 success() {
-    echo -e "${GREEN}✅ $1${NC}"
+    echo -e "${GREEN}$1${NC}"
 }
 
 info() {
-    echo -e "${BLUE}ℹ️  $1${NC}"
+    echo -e "${BLUE}INFO: $1${NC}"
 }
 
 warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
+    echo -e "${YELLOW}$1${NC}"
 }
 
 bold() {
@@ -206,7 +206,7 @@ show_release_info() {
     local repo_url=$(git remote get-url origin | sed 's/\.git$//' | sed 's/git@github\.com:/https:\/\/github\.com\//')
 
     echo
-    bold "🚀 RELEASE INITIATED SUCCESSFULLY!"
+    bold "RELEASE INITIATED SUCCESSFULLY!"
     echo
     info "Version: $VERSION"
     info "Tag: $TAG"
@@ -223,12 +223,12 @@ show_release_info() {
     echo "  • Release: $repo_url/releases/tag/$TAG (available in ~10-15 minutes)"
     echo "  • Packages: $repo_url/packages"
     echo
-    success "Release $TAG is now building! 🎉"
+    success "Release $TAG is now building!"
 }
 
 # Main execution
 main() {
-    bold "🏷️  EXPOSEME RELEASE SCRIPT"
+    bold "EXPOSEME RELEASE SCRIPT"
     echo "═══════════════════════════════════════"
     echo
     info "Preparing release for version $VERSION..."

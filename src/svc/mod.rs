@@ -1,4 +1,4 @@
-// src/svc/mod.rs - Main module file with re-exports
+// Main module file with re-exports
 
 pub mod types;
 pub mod servers;

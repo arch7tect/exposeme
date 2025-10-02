@@ -33,18 +33,14 @@ pub fn AppLayout() -> impl IntoView {
     use crate::api::*;
     use crate::types::*;
 
-    // Shared app state for header and footer
     let (health, set_health) = signal::<Option<HealthResponse>>(None);
     let (connected, set_connected) = signal(false);
 
-    // Global admin token state
     let (admin_token, set_admin_token) = signal(String::new());
 
-    // Provide admin token to all components
     provide_context(admin_token);
     provide_context(set_admin_token);
 
-    // Load initial health data
     Effect::new(move |_| {
         leptos::task::spawn_local(async move {
             match fetch_health().await {
@@ -86,9 +82,9 @@ pub fn main() {
     _ = console_log::init_with_level(log::Level::Debug);
     console_error_panic_hook::set_once();
 
-    web_sys::console::log_1(&"🎨 ExposeME WASM initializing...".into());
+    web_sys::console::log_1(&"ExposeME WASM initializing...".into());
 
     mount_to_body(|| view! { <App/> });
 
-    web_sys::console::log_1(&"🎨 ExposeME App mounted!".into());
+    web_sys::console::log_1(&"ExposeME App mounted!".into());
 }

@@ -14,13 +14,11 @@ pub fn TrafficChart(metrics: ReadSignal<Option<MetricsResponse>>) -> impl IntoVi
                         let total_out = m.server.total_bytes_out + m.server.websocket_bytes_out;
                         let max_traffic = std::cmp::max(total_in, total_out) as f64;
 
-                        // Calculate percentages for visual bars
                         let in_percentage = if max_traffic > 0.0 { (total_in as f64 / max_traffic * 100.0) as u32 } else { 0 };
                         let out_percentage = if max_traffic > 0.0 { (total_out as f64 / max_traffic * 100.0) as u32 } else { 0 };
 
                         view! {
                             <div class="space-y-6">
-                                // HTTP vs WebSocket breakdown
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div class="p-4 bg-blue-50 rounded-lg">
                                         <h4 class="font-medium text-blue-900 mb-2">"HTTP Traffic"</h4>
@@ -59,12 +57,10 @@ pub fn TrafficChart(metrics: ReadSignal<Option<MetricsResponse>>) -> impl IntoVi
                                     </div>
                                 </div>
 
-                                // Visual traffic bars
                                 <div class="space-y-4">
                                     <h4 class="font-medium text-gray-900">"Traffic Distribution"</h4>
 
                                     <div class="space-y-3">
-                                        // Incoming traffic bar
                                         <div>
                                             <div class="flex justify-between text-sm text-gray-600 mb-1">
                                                 <span>"Data In"</span>
@@ -78,7 +74,6 @@ pub fn TrafficChart(metrics: ReadSignal<Option<MetricsResponse>>) -> impl IntoVi
                                             </div>
                                         </div>
 
-                                        // Outgoing traffic bar
                                         <div>
                                             <div class="flex justify-between text-sm text-gray-600 mb-1">
                                                 <span>"Data Out"</span>
@@ -94,7 +89,6 @@ pub fn TrafficChart(metrics: ReadSignal<Option<MetricsResponse>>) -> impl IntoVi
                                     </div>
                                 </div>
 
-                                // Additional stats
                                 <div class="grid grid-cols-3 gap-4 pt-4 border-t border-gray-200">
                                     <div class="text-center">
                                         <div class="text-2xl font-bold text-blue-600">{m.server.total_requests}</div>
@@ -132,7 +126,6 @@ pub fn TrafficChart(metrics: ReadSignal<Option<MetricsResponse>>) -> impl IntoVi
     }
 }
 
-// Helper function for formatting bytes
 fn format_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;

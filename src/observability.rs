@@ -74,12 +74,10 @@ impl MetricsCollector {
     }
     
     pub fn record_request(&self, tunnel_id: &str, bytes_in: u64, bytes_out: u64) {
-        // Server totals
         self.server_metrics.total_requests.fetch_add(1, Ordering::Relaxed);
         self.server_metrics.total_bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
         self.server_metrics.total_bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
-        
-        // Tunnel specific
+
         if let Some(tunnel) = self.tunnel_metrics.read().unwrap().get(tunnel_id) {
             tunnel.requests_count.fetch_add(1, Ordering::Relaxed);
             tunnel.bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
@@ -107,11 +105,9 @@ impl MetricsCollector {
     }
     
     pub fn record_websocket_traffic(&self, tunnel_id: &str, bytes_in: u64, bytes_out: u64) {
-        // Server totals
         self.server_metrics.websocket_bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
         self.server_metrics.websocket_bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
-        
-        // Tunnel specific
+
         if let Some(tunnel) = self.tunnel_metrics.read().unwrap().get(tunnel_id) {
             tunnel.websocket_bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
             tunnel.websocket_bytes_out.fetch_add(bytes_out, Ordering::Relaxed);

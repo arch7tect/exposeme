@@ -1,4 +1,3 @@
-// src/protocol.rs
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

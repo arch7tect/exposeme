@@ -10,8 +10,7 @@ pub async fn handle_admin_request(
     path: &str,
 ) -> Result<Option<Response<ResponseBody>>, BoxError> {
     let method = req.method();
-    
-    // Simple authentication check
+
     let is_admin = if let Some(admin_token) = &context.config.auth.admin_token {
         req.headers().get("authorization")
             .and_then(|h| h.to_str().ok())
@@ -29,8 +28,6 @@ pub async fn handle_admin_request(
             .unwrap()));
     }
 
-
-    // Handle tunnel deletion endpoint
     if path.starts_with("/admin/tunnels/") && method == "DELETE" {
         let tunnel_id = path.strip_prefix("/admin/tunnels/").unwrap_or("");
         if !tunnel_id.is_empty() {
@@ -38,7 +35,6 @@ pub async fn handle_admin_request(
         }
     }
 
-    // Handle SSL renewal endpoint
     if path == "/admin/ssl/renew" && method == "POST" {
         return Ok(Some(handle_ssl_renewal(context).await?));
     }

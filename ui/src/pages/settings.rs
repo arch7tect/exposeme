@@ -4,13 +4,11 @@ use crate::types::*;
 
 #[component]
 pub fn SettingsPage() -> impl IntoView {
-    // Reactive signals for settings data
     let (health, set_health) = signal::<Option<HealthResponse>>(None);
     let (metrics, set_metrics) = signal::<Option<MetricsResponse>>(None);
     let (certificate_info, set_certificate_info) = signal::<Option<CertificateInfo>>(None);
     let (error, set_error) = signal::<Option<String>>(None);
 
-    // Load initial data
     Effect::new(move |_| {
         leptos::task::spawn_local(async move {
             match fetch_health().await {
@@ -134,13 +132,13 @@ pub fn ServerConfiguration(
                                         {if !is_wildcard && routing_mode != "path" {
                                             Some(view! {
                                                 <div class="config-note">
-                                                    "⚠️ Subdomain routing is configured but wildcard certificate is not enabled. Only path-based routing will work."
+                                                    "Subdomain routing is configured but wildcard certificate is not enabled. Only path-based routing will work."
                                                 </div>
                                             })
                                         } else if is_wildcard && routing_mode == "path" {
                                             Some(view! {
                                                 <div class="config-note">
-                                                    "💡 Wildcard certificate is available. You can enable subdomain routing in server configuration."
+                                                    "Wildcard certificate is available. You can enable subdomain routing in server configuration."
                                                 </div>
                                             })
                                         } else {
@@ -151,7 +149,6 @@ pub fn ServerConfiguration(
                             }.into_any()
                         },
                         (Some(h), None) => {
-                            // Fallback when certificate info is not available
                             let domain = h.domain.clone();
                             let ssl_enabled = h.ssl_enabled;
                             let version = h.version.clone();
@@ -431,7 +428,6 @@ pub fn ErrorDisplay(error: ReadSignal<Option<String>>) -> impl IntoView {
     }
 }
 
-// Helper functions
 fn format_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;

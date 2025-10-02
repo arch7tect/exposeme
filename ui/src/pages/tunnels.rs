@@ -5,16 +5,13 @@ use crate::sse::SseGuard;
 
 #[component]
 pub fn TunnelsPage() -> impl IntoView {
-    // Reactive signals for tunnel data
     let (metrics, set_metrics) = signal::<Option<MetricsResponse>>(None);
     let (error, set_error) = signal::<Option<String>>(None);
     let (_connected, set_connected) = signal(false);
 
-    // Get global admin token from context
     let admin_token = use_context::<ReadSignal<String>>()
         .expect("Admin token signal should be provided in context");
 
-    // Load initial data
     Effect::new(move |_| {
         leptos::task::spawn_local(async move {
             match fetch_metrics().await {
@@ -28,11 +25,9 @@ pub fn TunnelsPage() -> impl IntoView {
         });
     });
 
-    // Better panic messages in dev
     #[cfg(debug_assertions)]
     console_error_panic_hook::set_once();
 
-    // Store non-Send handles locally in the owner arena
     let _sse_guard = StoredValue::new_local({
         let set_metrics = set_metrics;
         let set_connected = set_connected;
@@ -195,7 +190,6 @@ pub fn TunnelCard(
         leptos::task::spawn_local(async move {
             match disconnect_tunnel_request(&tunnel_id, &token).await {
                 Ok(_) => {
-                    // Success - tunnel should disappear from list on next metrics update
                     set_disconnecting.set(false);
                 }
                 Err(e) => {
@@ -279,7 +273,6 @@ pub fn TunnelCard(
     }
 }
 
-// Helper component to display errors
 #[component]
 pub fn ErrorDisplay(error: ReadSignal<Option<String>>) -> impl IntoView {
     view! {
@@ -292,7 +285,6 @@ pub fn ErrorDisplay(error: ReadSignal<Option<String>>) -> impl IntoView {
     }
 }
 
-// Helper functions
 fn format_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
@@ -324,8 +316,7 @@ fn format_timestamp(timestamp: u64) -> String {
     if timestamp == 0 {
         "Never".to_string()
     } else {
-        // Convert timestamp to relative time
-        let now = js_sys::Date::now() as u64 / 1000; // Current time in seconds
+        let now = js_sys::Date::now() as u64 / 1000;
         let elapsed = if now > timestamp { now - timestamp } else { 0 };
 
         if elapsed < 60 {

@@ -1,4 +1,4 @@
-// src/svc/handlers/api.rs - Certificate and management API endpoints
+// Certificate and management API endpoints
 
 use crate::svc::{BoxError, SslManager, ServiceContext};
 use crate::svc::types::ResponseBody;
@@ -23,22 +23,18 @@ pub async fn handle_api(
     let method = req.method();
 
     match (method, path) {
-        // GET /api/certificates - Get certificate status
         (&hyper::Method::GET, "/api/certificates") => {
             handle_certificate_status(ssl_manager, config).await.map(|resp| Some(resp))
         }
 
-        // GET /api/certificates/info - Get detailed certificate information
         (&hyper::Method::GET, "/api/certificates/info") => {
             handle_certificate_info(ssl_manager, config).await.map(|resp| Some(resp))
         }
 
-        // GET /api/health - Extended health check with certificate info
         (&hyper::Method::GET, "/api/health") => {
             handle_extended_health_check(ssl_manager, config).await.map(|resp| Some(resp))
         }
 
-        // GET /api/metrics - Get metrics data (unprotected)
         (&hyper::Method::GET, "/api/metrics") => {
             if let Some(ctx) = context {
                 handle_metrics_endpoint(ctx).await.map(|resp| Some(resp))
@@ -50,7 +46,6 @@ pub async fn handle_api(
             }
         }
 
-        // GET /api/metrics/stream - Get metrics stream (unprotected)
         (&hyper::Method::GET, "/api/metrics/stream") => {
             if let Some(ctx) = context {
                 handle_metrics_stream_endpoint(ctx.clone()).await.map(|resp| Some(resp))
@@ -184,7 +179,6 @@ async fn handle_extended_health_check(
     let mut warnings = Vec::new();
     let mut errors = Vec::new();
 
-    // Check SSL configuration
     if config.ssl.enabled {
         match manager.get_certificate_info().await {
             Ok(cert_info) => {
@@ -212,7 +206,6 @@ async fn handle_extended_health_check(
             }
         }
 
-        // Check wildcard configuration
         if config.ssl.wildcard && config.ssl.dns_provider.is_none() {
             health_status = "unhealthy".to_string();
             errors.push("Wildcard certificates enabled but no DNS provider configured".to_string());

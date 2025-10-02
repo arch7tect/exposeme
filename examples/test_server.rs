@@ -1,4 +1,3 @@
-// examples/test_server.rs
 // Simple HTTP server for testing the tunnel
 use hyper::{body::Incoming, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -38,7 +37,7 @@ async fn handle_request(req: Request<Incoming>) -> Response<ResponseBody> {
     let path = req.uri().path().to_string();
     let headers = req.headers().clone();
 
-    println!("🔔 Received request:");
+    println!("Received request:");
     println!("   Method: {}", method);
     println!("   Path: {}", path);
 
@@ -107,12 +106,12 @@ async fn handle_request(req: Request<Incoming>) -> Response<ResponseBody> {
 
 #[tokio::main]
 async fn main() {
-    println!("🚀 Starting test server...");
+    println!("Starting test server...");
 
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], 3300).into();
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
 
-    println!("🚀 Test server running on http://localhost:3300");
+    println!("Test server running on http://localhost:3300");
     println!("   Try: curl http://localhost:3300/webhook -d 'test data'");
     println!("   Or:  curl http://localhost:3300/health");
 
@@ -126,7 +125,7 @@ async fn main() {
                 .serve_connection(io, TowerToHyperService::new(service))
                 .await
             {
-                eprintln!("❌ Server error: {}", err);
+                eprintln!("Server error: {}", err);
             }
         });
     }

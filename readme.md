@@ -156,7 +156,7 @@ docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml ghcr.io/arch7tect
 
 Your service will be accessible at: `https://my-tunnel.exposeme.org/`
 
-**⚠️ Test Server Limitations:**
+**Test Server Limitations:**
 - **No uptime guarantee** - service may be unavailable
 - **Testing only** - not suitable for production use
 - **No support** - use at your own risk

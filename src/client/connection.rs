@@ -1,4 +1,4 @@
-// src/client/connection.rs - WebSocket connection management
+// WebSocket connection management
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -86,7 +86,7 @@ impl ActiveWebSocketConnection {
             .send(message)
             .map_err(|e| {
                 let error_msg = format!("Failed to send message to server: {}", e);
-                error!("❌ WebSocket {}: {}", self.connection_id, error_msg);
+                error!("WebSocket {}: {}", self.connection_id, error_msg);
                 error_msg
             })
     }
@@ -97,7 +97,7 @@ impl ActiveWebSocketConnection {
             .send(data)
             .map_err(|e| {
                 let error_msg = format!("Failed to send data to local WebSocket: {}", e);
-                error!("❌ WebSocket {}: {}", self.connection_id, error_msg);
+                error!("WebSocket {}: {}", self.connection_id, error_msg);
                 error_msg
             })
     }
@@ -115,7 +115,7 @@ pub async fn cleanup_expired_connections(
         for (id, connection) in websockets.iter() {
             if connection.is_idle(max_idle_time).await {
                 warn!(
-                    "⚠️  WebSocket {}: Marking for cleanup: {} (idle: {}s, max_idle: {}s)",
+                    "WebSocket {}: Marking for cleanup: {} (idle: {}s, max_idle: {}s)",
                     connection.connection_id,
                     connection.status_summary().await,
                     connection.idle_time().await.as_secs(),
@@ -127,14 +127,14 @@ pub async fn cleanup_expired_connections(
 
         for id in to_remove {
             if let Some(connection) = websockets.remove(&id) {
-                info!("🔌 WebSocket {}: Cleaned up idle connection (max_idle: {}s)", connection.connection_id, max_idle_time.as_secs());
+                info!("WebSocket {}: Cleaned up idle connection (max_idle: {}s)", connection.connection_id, max_idle_time.as_secs());
                 cleanup_count += 1;
             }
         }
     }
 
     if cleanup_count > 0 {
-        info!("🧹 Cleaned up {} idle WebSocket connections (max_idle: {}s)", cleanup_count, max_idle_time.as_secs());
+        info!("Cleaned up {} idle WebSocket connections (max_idle: {}s)", cleanup_count, max_idle_time.as_secs());
     }
 
     cleanup_count

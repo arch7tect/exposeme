@@ -66,12 +66,10 @@ pub async fn fetch_certificate_info() -> Result<CertificateInfo, String> {
 pub async fn renew_certificate_request(admin_token: &str) -> Result<(), String> {
     let window = web_sys::window().ok_or("No window object")?;
 
-    // Create headers
     let headers = web_sys::Headers::new().map_err(|_| "Failed to create headers")?;
     headers.set("Authorization", &format!("Bearer {}", admin_token))
         .map_err(|_| "Failed to set Authorization header")?;
 
-    // Create request init object
     let init = web_sys::RequestInit::new();
     init.set_method("POST");
     init.set_headers(&headers);
@@ -101,7 +99,6 @@ pub async fn renew_certificate_request(admin_token: &str) -> Result<(), String> 
     let response: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| format!("JSON parse error: {:?}", e))?;
 
-    // Check if the operation was successful
     if let Some(success) = response.get("success").and_then(|v| v.as_bool()) {
         if success {
             Ok(())
@@ -120,12 +117,10 @@ pub async fn renew_certificate_request(admin_token: &str) -> Result<(), String> 
 pub async fn disconnect_tunnel_request(tunnel_id: &str, admin_token: &str) -> Result<(), String> {
     let window = web_sys::window().ok_or("No window object")?;
 
-    // Create headers
     let headers = web_sys::Headers::new().map_err(|_| "Failed to create headers")?;
     headers.set("Authorization", &format!("Bearer {}", admin_token))
         .map_err(|_| "Failed to set Authorization header")?;
 
-    // Create request init object
     let init = web_sys::RequestInit::new();
     init.set_method("DELETE");
     init.set_headers(&headers);
@@ -157,7 +152,6 @@ pub async fn disconnect_tunnel_request(tunnel_id: &str, admin_token: &str) -> Re
     let response: serde_json::Value = serde_json::from_str(&json_str)
         .map_err(|e| format!("JSON parse error: {:?}", e))?;
 
-    // Check if the operation was successful
     if let Some(success) = response.get("success").and_then(|v| v.as_bool()) {
         if success {
             Ok(())

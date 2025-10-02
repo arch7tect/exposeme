@@ -1,4 +1,4 @@
-// src/client/http_handler.rs - HTTP request/response handling
+// HTTP request/response handling
 use std::collections::HashMap;
 use std::sync::Arc;
 use bytes::Bytes;
@@ -47,8 +47,8 @@ impl HttpHandler {
         initial_data: Vec<u8>,
         is_complete: bool,
     ) {
-        info!("📥 Http request: {} {}", method, path);
-        debug!("📥 Received HttpRequestStart: {} {} (id: {}, complete: {})", method, path, id, is_complete);
+        info!("Http request: {} {}", method, path);
+        debug!("Received HttpRequestStart: {} {} (id: {}, complete: {})", method, path, id, is_complete);
 
         let http_client = self.http_client.clone();
         let local_target = self.local_target.clone();
@@ -56,7 +56,7 @@ impl HttpHandler {
 
         if is_complete == true {
             // Complete request - process immediately
-            debug!("📦 Processing complete request: {} {} ({} bytes)", method, path, initial_data.len());
+            debug!("Processing complete request: {} {} ({} bytes)", method, path, initial_data.len());
 
             tokio::spawn(async move {
                 let url = format!("{}{}", local_target, path);
@@ -68,23 +68,23 @@ impl HttpHandler {
 
                 match request.send().await {
                     Ok(response) => {
-                        debug!("✅ Complete request succeeded: {} {}", method, path);
+                        debug!("Complete request succeeded: {} {}", method, path);
                         stream_response_to_server(&to_server_tx, id, response).await;
                     }
                     Err(e) => {
-                        error!("❌ Complete request failed: {} {}: {}", method, path, e);
+                        error!("Complete request failed: {} {}: {}", method, path, e);
                         send_error_response(&to_server_tx, id, e.to_string()).await;
                     }
                 }
             });
         } else {
             // Streaming request - expect DataChunk messages
-            debug!("📥 Processing streaming request start: {} {}", method, path);
+            debug!("Processing streaming request start: {} {}", method, path);
 
             let (body_tx, body_rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
 
             if !initial_data.is_empty() {
-                debug!("📦 Sending initial data: {} bytes", initial_data.len());
+                debug!("Sending initial data: {} bytes", initial_data.len());
                 let _ = body_tx.send(Ok(initial_data.into())).await;
             }
 
@@ -92,7 +92,7 @@ impl HttpHandler {
                 self.outgoing_requests.write().await.insert(id.clone(), OutgoingRequest {
                     body_tx: Some(body_tx.clone()),
                 });
-                debug!("✅ Registered streaming request: {}", id);
+                debug!("Registered streaming request: {}", id);
             }
 
             tokio::spawn(async move {
@@ -108,11 +108,11 @@ impl HttpHandler {
 
                 match request.send().await {
                     Ok(response) => {
-                        debug!("✅ Streaming request succeeded: {} {}", method, path);
+                        debug!("Streaming request succeeded: {} {}", method, path);
                         stream_response_to_server(&to_server_tx, id, response).await;
                     }
                     Err(e) => {
-                        error!("❌ Streaming request failed: {} {}: {}", method, path, e);
+                        error!("Streaming request failed: {} {}: {}", method, path, e);
                         send_error_response(&to_server_tx, id, e.to_string()).await;
                     }
                 }
@@ -121,7 +121,7 @@ impl HttpHandler {
     }
 
     pub async fn handle_data_chunk(&self, id: String, data: Vec<u8>, is_final: bool) {
-        debug!("📥 Received DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
+        debug!("Received DataChunk: {} bytes, final={} (id: {})", data.len(), is_final, id);
 
         let body_tx = {
             let requests = self.outgoing_requests.read().await;
@@ -129,10 +129,10 @@ impl HttpHandler {
         };
 
         let Some(tx) = body_tx else {
-            warn!("❌ Received DataChunk for unknown request ID: {} (this indicates HttpRequestStart was not received)", id);
+            warn!("Received DataChunk for unknown request ID: {} (this indicates HttpRequestStart was not received)", id);
             let requests = self.outgoing_requests.read().await;
             let active_ids: Vec<String> = requests.keys().cloned().collect();
-            warn!("📋 Active request IDs: {:?}", active_ids);
+            warn!("Active request IDs: {:?}", active_ids);
             return;
         };
 
@@ -181,27 +181,27 @@ async fn stream_response_to_server(
     id: String,
     response: reqwest::Response,
 ) {
-    trace!("🔍 ENTER stream_response_to_server for id: {}", id);
+    trace!("ENTER stream_response_to_server for id: {}", id);
 
     let status = response.status().as_u16();
     let headers = extract_response_headers(&response);
 
-    debug!("📤 Preparing response: {} (id: {}, headers: {})", status, id, headers.len());
+    debug!("Preparing response: {} (id: {}, headers: {})", status, id, headers.len());
 
     let should_stream = is_streaming_response(&response);
     let is_sse_resp = is_sse(
         response.headers().get("content-type").and_then(|h| h.to_str().ok()),
         None
     );
-    debug!("🔍 Should stream: {} (SSE: {})", should_stream, is_sse_resp);
+    debug!("Should stream: {} (SSE: {})", should_stream, is_sse_resp);
 
     if to_server_tx.is_closed() {
-        error!("❌ WebSocket sender is CLOSED for {}", id);
+        error!("WebSocket sender is CLOSED for {}", id);
         return;
     }
 
     if !should_stream {
-        debug!("🔍 Processing as complete response for {}", id);
+        debug!("Processing as complete response for {}", id);
 
         match response.bytes().await {
             Ok(bytes) => {
@@ -215,20 +215,20 @@ async fn stream_response_to_server(
 
                 match to_server_tx.send(response_msg) {
                     Ok(_) => {
-                        trace!("✅ Complete HttpResponseStart sent successfully for {}", id);
+                        trace!("Complete HttpResponseStart sent successfully for {}", id);
                     }
                     Err(e) => {
-                        error!("❌ FAILED to send HttpResponseStart for {}: {}", id, e);
+                        error!("FAILED to send HttpResponseStart for {}: {}", id, e);
                     }
                 }
             }
             Err(e) => {
-                error!("❌ Failed to read response body for {}: {}", id, e);
+                error!("Failed to read response body for {}: {}", id, e);
                 send_error_response(to_server_tx, id.to_owned(), e.to_string()).await;
             }
         }
     } else {
-        debug!("🔍 Processing as streaming response for {}", id);
+        debug!("Processing as streaming response for {}", id);
 
         let start_msg = Message::HttpResponseStart {
             id: id.clone(),
@@ -239,7 +239,7 @@ async fn stream_response_to_server(
         };
 
         if let Err(e) = to_server_tx.send(start_msg) {
-            error!("❌ Failed to send streaming response start for {}: {}", id, e);
+            error!("Failed to send streaming response start for {}: {}", id, e);
             return;
         }
 
@@ -255,7 +255,7 @@ async fn stream_response_to_server(
 
                     // Log progress every 10 chunks or for large chunks
                     if chunk_count % 10 == 0 || chunk.len() > 1024 {
-                        trace!("📤 Sending chunk {} ({} bytes, {} total) for {}",
+                        trace!("Sending chunk {} ({} bytes, {} total) for {}",
                               chunk_count, chunk.len(), total_bytes, id);
                     }
 
@@ -266,19 +266,19 @@ async fn stream_response_to_server(
                     };
 
                     if let Err(e) = to_server_tx.send(chunk_msg) {
-                        error!("❌ Failed to send data chunk for {}: {}", id, e);
+                        error!("Failed to send data chunk for {}: {}", id, e);
                         break;
                     }
                 }
                 Err(e) => {
-                    error!("❌ Response stream error for {}: {}", id, e);
+                    error!("Response stream error for {}: {}", id, e);
                     break;
                 }
             }
         }
 
         // Send final chunk
-        trace!("🔍 Sending final chunk for {} ({} total bytes, {} chunks)", id, total_bytes, chunk_count);
+        trace!("Sending final chunk for {} ({} total bytes, {} chunks)", id, total_bytes, chunk_count);
 
         let final_msg = Message::DataChunk {
             id: id.clone(),
@@ -287,13 +287,13 @@ async fn stream_response_to_server(
         };
 
         if let Err(e) = to_server_tx.send(final_msg) {
-            error!("❌ Failed to send final chunk for {}: {}", id, e);
+            error!("Failed to send final chunk for {}: {}", id, e);
         }
 
-        debug!("📊 Streaming completed for {}: {} bytes in {} chunks", id, total_bytes, chunk_count);
+        debug!("Streaming completed for {}: {} bytes in {} chunks", id, total_bytes, chunk_count);
     }
     
-    trace!("🔍 EXIT stream_response_to_server for id: {}", id);
+    trace!("EXIT stream_response_to_server for id: {}", id);
 }
 
 async fn send_error_response(
@@ -301,7 +301,7 @@ async fn send_error_response(
     id: String,
     error: String,
 ) {
-    error!("📤 Sending error response for {}: {}", id, error);
+    error!("Sending error response for {}: {}", id, error);
 
     let error_response = Message::HttpResponseStart {
         id: id.clone(),
@@ -312,9 +312,9 @@ async fn send_error_response(
     };
 
     if let Err(e) = to_server_tx.send(error_response) {
-        error!("❌ Failed to send error response for {}: {}", id, e);
+        error!("Failed to send error response for {}: {}", id, e);
     } else {
-        info!("✅ Error response sent for {}", id);
+        info!("Error response sent for {}", id);
     }
 }
 

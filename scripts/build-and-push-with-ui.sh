@@ -6,7 +6,7 @@ set -e
 
 export BUILD_UI=true
 
-echo "🎨 Building ExposeME Docker images with Web UI Dashboard enabled"
+echo "Building ExposeME Docker images with Web UI Dashboard enabled"
 echo ""
 
 # Call the main build script with UI enabled, passing all parameters

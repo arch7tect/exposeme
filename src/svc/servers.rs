@@ -1,4 +1,4 @@
-// src/svc/servers.rs - HTTP/HTTPS server startup logic
+// HTTP/HTTPS server startup logic
 
 use crate::svc::{BoxError, ServiceContext};
 use crate::svc::handlers::UnifiedService;
@@ -28,13 +28,13 @@ pub async fn start_http_server(
     let addr: std::net::SocketAddr = config.http_addr().parse()?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    info!("✅ HTTP server listening on http://{}", config.http_addr());
+    info!("HTTP server listening on http://{}", config.http_addr());
 
     loop {
         tokio::select! {
             // Handle shutdown signal
             _ = shutdown_rx.recv() => {
-                info!("🔄 HTTP server shutting down gracefully...");
+                info!("HTTP server shutting down gracefully...");
                 break;
             }
             // Accept new connections
@@ -85,13 +85,13 @@ pub async fn start_https_server(
     let addr: std::net::SocketAddr = config.https_addr().parse()?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    info!("✅ HTTPS server listening on https://{}", config.https_addr());
+    info!("HTTPS server listening on https://{}", config.https_addr());
 
     loop {
         tokio::select! {
             // Handle shutdown signal
             _ = shutdown_rx.recv() => {
-                info!("🔄 HTTPS server shutting down gracefully...");
+                info!("HTTPS server shutting down gracefully...");
                 break;
             }
             // Accept new connections

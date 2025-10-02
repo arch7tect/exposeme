@@ -1,4 +1,4 @@
-// src/client/mod.rs - Main client implementation
+// Main client implementation
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -42,8 +42,8 @@ impl ExposeMeClient {
     pub async fn run(&mut self, mut shutdown_rx: broadcast::Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
         // Connect to WebSocket server
         let (ws_stream, _) = if self.config.client.insecure && self.config.client.server_url.starts_with("wss://") {
-            warn!("⚠️  Using insecure connection (skipping TLS verification)");
-            warn!("⚠️  This should only be used for development with self-signed certificates");
+            warn!("Using insecure connection (skipping TLS verification)");
+            warn!("This should only be used for development with self-signed certificates");
 
             let tls_config = RustlsClientConfig::builder()
                 .dangerous()
@@ -109,7 +109,7 @@ impl ExposeMeClient {
 
         // Spawn task to handle outgoing messages to server
         let _outgoing_handle = tokio::spawn(async move {
-            debug!("🔍 Starting outgoing message handler task");
+            debug!("Starting outgoing message handler task");
             let mut message_count = 0;
 
             while let Some(message) = to_server_rx.recv().await {
@@ -117,33 +117,33 @@ impl ExposeMeClient {
 
                 match message.to_bincode() {
                     Ok(bytes) => {
-                        trace!("🔍 Sending message #{} ({} bytes)", message_count, bytes.len());
+                        trace!("Sending message #{} ({} bytes)", message_count, bytes.len());
                         let mut sender = ws_sender_for_task.lock().await;
                         if outgoing_shutdown_flag.load(Ordering::Relaxed) {
-                            debug!("🔄 Shutdown flag set, stopping outgoing message handler");
+                            debug!("Shutdown flag set, stopping outgoing message handler");
                             break;
                         }
                         match sender.send(WsMessage::Binary(bytes.into())).await {
                             Ok(_) => {
-                                trace!("✅ Message #{} sent successfully", message_count);
+                                trace!("Message #{} sent successfully", message_count);
                             }
                             Err(e) => {
                                 match e {
                                     tokio_tungstenite::tungstenite::Error::ConnectionClosed |
                                     tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
-                                        debug!("🔄 WebSocket closed, stopping outgoing messages");
+                                        debug!("WebSocket closed, stopping outgoing messages");
                                         break;
                                     }
                                     tokio_tungstenite::tungstenite::Error::Protocol(_) => {
-                                        debug!("🔄 WebSocket protocol error, stopping outgoing messages");
+                                        debug!("WebSocket protocol error, stopping outgoing messages");
                                         break;
                                     }
                                     tokio_tungstenite::tungstenite::Error::Io(_) => {
-                                        debug!("🔄 IO error, stopping outgoing messages");
+                                        debug!("IO error, stopping outgoing messages");
                                         break;
                                     }
                                     _ => {
-                                        error!("❌ Failed to send message: {}", e);
+                                        error!("Failed to send message: {}", e);
                                         break;
                                     }
                                 }
@@ -151,12 +151,12 @@ impl ExposeMeClient {
                         }
                     }
                     Err(e) => {
-                        error!("❌ Failed to serialize message #{}: {}", message_count, e);
+                        error!("Failed to serialize message #{}: {}", message_count, e);
                     }
                 }
             }
 
-            debug!("⚠️ Outgoing message handler ended (sent {} messages)", message_count);
+            debug!("Outgoing message handler ended (sent {} messages)", message_count);
         });
 
         // Start cleanup task
@@ -169,7 +169,7 @@ impl ExposeMeClient {
             tokio::select! {
                 // Handle shutdown signal
                 _ = shutdown_rx.recv() => {
-                    info!("🔄 Client shutdown requested, closing WebSocket connection...");
+                    info!("Client shutdown requested, closing WebSocket connection...");
                     shutdown_flag.store(true, Ordering::Relaxed);
                     {
                         let mut sender = ws_sender_shared.lock().await;
@@ -183,7 +183,7 @@ impl ExposeMeClient {
                 message = ws_receiver.next() => {
                     match message {
                         Some(Ok(WsMessage::Binary(bytes))) => {
-                            debug!("📨 Raw WebSocket message received: {} bytes", bytes.len());
+                            debug!("Raw WebSocket message received: {} bytes", bytes.len());
                             trace!("Bytes: {}", bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<String>>().join(" "));
                             match Message::from_bincode(&bytes) {
                                 Ok(msg) => {
@@ -192,13 +192,13 @@ impl ExposeMeClient {
                                     }
                                 }
                                 Err(e) => {
-                                    error!("❌ Failed to parse WebSocket message: {}", e);
+                                    error!("Failed to parse WebSocket message: {}", e);
                                 }
                             }
                         }
                         Some(Ok(WsMessage::Text(text))) => {
-                            error!("❌ Received unexpected text message (protocol requires binary): {} chars", text.len());
-                            error!("❌ Please ensure both client and server are using the same protocol version");
+                            error!("Received unexpected text message (protocol requires binary): {} chars", text.len());
+                            error!("Please ensure both client and server are using the same protocol version");
                             break;
                         }
                         Some(Ok(WsMessage::Close(frame))) => {
@@ -265,7 +265,7 @@ impl ExposeMeClient {
         }
 
         // Graceful cleanup on client disconnect with timeout
-        info!("🔄 Starting graceful cleanup...");
+        info!("Starting graceful cleanup...");
         
         let cleanup_timeout = Duration::from_secs(5);
         let cleanup_start = tokio::time::Instant::now();
@@ -284,18 +284,18 @@ impl ExposeMeClient {
         // Clean up all WebSocket connections on shutdown with timeout
         let cleanup_result = tokio::select! {
             _ = tokio::time::sleep(cleanup_timeout) => {
-                warn!("⚠️ Cleanup timeout reached after {:?}, forcing shutdown", cleanup_timeout);
+                warn!("Cleanup timeout reached after {:?}, forcing shutdown", cleanup_timeout);
                 false
             }
             _ = async {
                 let mut websockets = active_websockets.write().await;
                 let connection_count = websockets.len();
                 if connection_count > 0 {
-                    info!("🔌 Cleaning up {} WebSocket connections on shutdown", connection_count);
+                    info!("Cleaning up {} WebSocket connections on shutdown", connection_count);
                     
                     // Close all active WebSocket connections gracefully
                     for (_id, connection) in websockets.iter() {
-                        info!("🔌 Closing WebSocket connection: {}", connection.connection_id);
+                        info!("Closing WebSocket connection: {}", connection.connection_id);
                         
                         // Send close message to server through tunnel
                         let close_msg = Message::WebSocketClose {
@@ -317,9 +317,9 @@ impl ExposeMeClient {
         
         let cleanup_elapsed = cleanup_start.elapsed();
         if cleanup_result {
-            info!("✅ Graceful cleanup completed in {:?}", cleanup_elapsed);
+            info!("Graceful cleanup completed in {:?}", cleanup_elapsed);
         } else {
-            info!("⚠️ Forced cleanup after {:?}", cleanup_elapsed);
+            info!("Forced cleanup after {:?}", cleanup_elapsed);
         }
 
         info!("Client connection ended");
@@ -338,13 +338,13 @@ impl ExposeMeClient {
     ) -> Result<(), Box<dyn std::error::Error>> {
         match msg {
             Message::AuthSuccess { tunnel_id, public_url } => {
-                info!("✅ Tunnel '{}' established!", tunnel_id);
-                info!("🌐 Public URL: {}", public_url);
-                info!("🔄 Forwarding to: {}", self.config.client.local_target);
+                info!("Tunnel '{}' established!", tunnel_id);
+                info!("Public URL: {}", public_url);
+                info!("Forwarding to: {}", self.config.client.local_target);
             }
 
             Message::AuthError { error, message } => {
-                error!("❌ Authentication failed: {} - {}", error, message);
+                error!("Authentication failed: {} - {}", error, message);
                 return Err(format!("Auth error: {}", message).into());
             }
 
@@ -398,7 +398,7 @@ impl ExposeMeClient {
                 let current_count = active_websockets.read().await.len();
                 if current_count > 0 || cleaned > 0 {
                     info!(
-                        "🔌 WebSocket status: {} active connections, {} cleaned up (max_idle: {}s, check_interval: {}s)",
+                        "WebSocket status: {} active connections, {} cleaned up (max_idle: {}s, check_interval: {}s)",
                         current_count,
                         cleaned,
                         max_connection_idle.as_secs(),

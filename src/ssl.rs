@@ -1,4 +1,3 @@
-// src/ssl.rs
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufReader, Cursor};
@@ -62,12 +61,12 @@ impl SslManager {
 
             match create_dns_provider(&dns_config.provider, toml_config) {
                 Ok(provider) => {
-                    info!("✅ DNS provider '{}' initialized", dns_config.provider);
+                    info!("DNS provider '{}' initialized", dns_config.provider);
                     Some(provider)
                 }
                 Err(e) => {
                     error!(
-                        "❌ Failed to initialize DNS provider '{}': {}",
+                        "Failed to initialize DNS provider '{}': {}",
                         dns_config.provider, e
                     );
                     None
@@ -121,7 +120,6 @@ impl SslManager {
 
         tokio::fs::create_dir_all(cache_dir).await?;
 
-        // Determine certificate type and filename
         let (cert_domains, cert_filename) = if self.config.ssl.wildcard {
             let wildcard_domain = format!("*.{}", domain);
             info!(
@@ -207,7 +205,7 @@ impl SslManager {
             .await
             .err();
         if error.is_none() {
-            info!("✅ All authorizations processed, poll order ready");
+            info!("All authorizations processed, poll order ready");
 
             error = match order.poll_ready(&RetryPolicy::default()).await {
                 Ok(status) => {
@@ -224,11 +222,11 @@ impl SslManager {
         self.cleanup_acme_challenge_records(cleanup_tasks).await;
 
         if let Some(e) = error {
-            error!("❌ Error obtaining certificate: {}", e);
+            error!("Error obtaining certificate: {}", e);
             return Err(e);
         }
 
-        info!("✅ Order is ready. Finalizing.");
+        info!("Order is ready. Finalizing.");
         let private_key_pem = order.finalize().await?;
         let cert_chain_pem = order.poll_certificate(&RetryPolicy::default()).await?;
         Ok((cert_chain_pem, private_key_pem))
@@ -293,7 +291,7 @@ impl SslManager {
                 CleanupTask::Dns(info) => {
                     if let Some(dns) = self.dns_provider.as_mut() {
                         info!(
-                            "✅ Cleanup DNS txt record with id {} for {}",
+                            "Cleanup DNS txt record with id {} for {}",
                             info.record_id, info.domain
                         );
                         if let Err(e) = dns.delete_txt_record(&info.domain, &info.record_id).await {
@@ -302,7 +300,7 @@ impl SslManager {
                     }
                 }
                 CleanupTask::Http(token) => {
-                    info!("✅ Cleanup HTTPS token {}", token);
+                    info!("Cleanup HTTPS token {}", token);
                     let mut store = self.challenge_store.write().await;
                     store.remove(&token);
                 }
@@ -360,7 +358,7 @@ impl SslManager {
                 .wait_for_propagation(&record_domain, record_name, &dns_value)
                 .await
             {
-                error!("❌ DNS propagation failed: {}", e);
+                error!("DNS propagation failed: {}", e);
                 if let Err(e) = dns_provider
                     .delete_txt_record(&record_domain, &record_id)
                     .await
@@ -374,7 +372,7 @@ impl SslManager {
 
         // Set challenge ready
         if let Err(e) = challenge.set_ready().await {
-            error!("❌ Setting challenge ready failed: {}", e);
+            error!("Setting challenge ready failed: {}", e);
         }
 
         // Cleanup later - return info for it
@@ -407,7 +405,7 @@ impl SslManager {
 
         // Set challenge ready
         if let Err(e) = challenge.set_ready().await {
-            error!("❌ Failed to set challenge ready: {}", e);
+            error!("Failed to set challenge ready: {}", e);
         }
 
         // Cleanup later - return info for it
@@ -582,7 +580,7 @@ impl SslManager {
                 tokio::fs::copy(&key_path, &key_backup_path).await,
             ) {
                 (Ok(_), Ok(_)) => {
-                    info!("📦 Created certificate backup for {}", domain);
+                    info!("Created certificate backup for {}", domain);
                     true
                 }
                 _ => {
@@ -612,7 +610,7 @@ impl SslManager {
         match renewal_result {
             Ok(new_config) => {
                 self.rustls_config = Some(Arc::new(new_config));
-                info!("✅ Certificate renewal completed for {}", domain);
+                info!("Certificate renewal completed for {}", domain);
                 Ok(())
             }
             Err(e) => {
@@ -623,12 +621,12 @@ impl SslManager {
                         tokio::fs::copy(&key_backup_path, &key_path).await,
                     ) {
                         (Ok(_), Ok(_)) => {
-                            info!("🔄 Restored certificate from backup after renewal failure");
+                            info!("Restored certificate from backup after renewal failure");
                             if let Ok(restored_config) =
                                 self.load_certificates(&cert_path, &key_path).await
                             {
                                 self.rustls_config = Some(Arc::new(restored_config));
-                                info!("✅ Successfully restored working certificates");
+                                info!("Successfully restored working certificates");
                             }
                         }
                         _ => {
@@ -637,7 +635,7 @@ impl SslManager {
                     }
                 }
 
-                error!("❌ Certificate renewal failed for {}: {}", domain, e);
+                error!("Certificate renewal failed for {}: {}", domain, e);
                 Err(format!("Certificate renewal failed: {}", e).into())
             }
         }

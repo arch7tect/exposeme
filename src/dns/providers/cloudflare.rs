@@ -1,5 +1,3 @@
-// src/dns/providers/cloudflare.rs
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -78,7 +76,7 @@ impl CloudflareProvider {
             .build()
             .expect("Failed to create HTTP client");
 
-        info!("✅ Cloudflare DNS provider initialized");
+        info!("Cloudflare DNS provider initialized");
         Self { config, client }
     }
 
@@ -105,7 +103,7 @@ impl CloudflareProvider {
                 .iter()
                 .map(|m| format!("Code {}: {}", m.code, m.message))
                 .collect();
-            info!("📨 Cloudflare messages: {}", info_messages.join(", "));
+            info!("Cloudflare messages: {}", info_messages.join(", "));
         }
 
         if !cf_response.success {
@@ -152,7 +150,7 @@ impl DnsProviderFactory for CloudflareProvider {
             "TOML configuration"
         };
 
-        info!("✅ Cloudflare DNS provider configured from {}", config_source);
+        info!("Cloudflare DNS provider configured from {}", config_source);
         Ok(Box::new(Self::new(config)))
     }
 }
@@ -160,7 +158,7 @@ impl DnsProviderFactory for CloudflareProvider {
 #[async_trait]
 impl DnsProvider for CloudflareProvider {
     async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("📋 Listing available zones from Cloudflare");
+        info!("Listing available zones from Cloudflare");
 
         let response = self.client
             .get("https://api.cloudflare.com/client/v4/zones")
@@ -177,7 +175,7 @@ impl DnsProvider for CloudflareProvider {
             .map(|zone| ZoneInfo::new(zone.id, zone.name))
             .collect();
 
-        info!("📋 Found {} active zones", zone_infos.len());
+        info!("Found {} active zones", zone_infos.len());
         Ok(zone_infos)
     }
 
@@ -186,7 +184,7 @@ impl DnsProvider for CloudflareProvider {
         zone: &ZoneInfo,
         name: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("📋 Listing TXT records: {} in zone {}", name, zone.name);
+        info!("Listing TXT records: {} in zone {}", name, zone.name);
 
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{}/dns_records?type=TXT&name={}",
@@ -208,7 +206,7 @@ impl DnsProvider for CloudflareProvider {
             .filter_map(|record| record.id.clone())
             .collect();
 
-        info!("📋 Found {} existing TXT records", matching_record_ids.len());
+        info!("Found {} existing TXT records", matching_record_ids.len());
         Ok(matching_record_ids)
     }
 
@@ -218,7 +216,7 @@ impl DnsProvider for CloudflareProvider {
         name: &str,
         value: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        info!("✨ Creating TXT record: {} in zone {} = {}", name, zone.name, value);
+        info!("Creating TXT record: {} in zone {} = {}", name, zone.name, value);
 
         let create_request = CreateRecordRequest {
             record_type: "TXT".to_string(),
@@ -243,7 +241,7 @@ impl DnsProvider for CloudflareProvider {
         let record: CloudflareDnsRecord = self.handle_cloudflare_response(response).await?;
         let record_id = record.id.ok_or("No record ID returned from Cloudflare")?;
 
-        info!("✅ Created TXT record with ID: {}", record_id);
+        info!("Created TXT record with ID: {}", record_id);
         Ok(record_id)
     }
 
@@ -252,7 +250,7 @@ impl DnsProvider for CloudflareProvider {
         zone: &ZoneInfo,
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("🗑️  Deleting TXT record {} from zone {}", record_id, zone.name);
+        info!("Deleting TXT record {} from zone {}", record_id, zone.name);
 
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}",
@@ -286,7 +284,7 @@ impl DnsProvider for CloudflareProvider {
                     .iter()
                     .map(|m| format!("Code {}: {}", m.code, m.message))
                     .collect();
-                info!("📨 Cloudflare delete messages: {}", info_messages.join(", "));
+                info!("Cloudflare delete messages: {}", info_messages.join(", "));
             }
 
             if !cf_response.success {
@@ -298,7 +296,7 @@ impl DnsProvider for CloudflareProvider {
             }
         }
 
-        info!("✅ Deleted TXT record {}", record_id);
+        info!("Deleted TXT record {}", record_id);
         Ok(())
     }
 }

@@ -222,7 +222,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: ExposeME ${{ steps.version.outputs.version }}
           body: |
-            ## 🚀 ExposeME ${{ steps.version.outputs.version }}
+            ## ExposeME ${{ steps.version.outputs.version }}
 
             ### Downloads (All include Web UI Dashboard)
             - Linux (x64): `exposeme-linux-x64.tar.gz`

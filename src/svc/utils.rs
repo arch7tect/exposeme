@@ -1,4 +1,4 @@
-// src/svc/utils.rs - Utility functions for service handlers
+// Utility functions for service handlers
 
 use crate::svc::types::*;
 use crate::{RoutingMode, ServerConfig};

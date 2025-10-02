@@ -1,4 +1,4 @@
-// examples/simple_sse_test.rs - Simple SSE test without Unicode
+// Simple SSE test without Unicode
 
 use std::time::Duration;
 use hyper::{Request, Response, StatusCode, body::Incoming};

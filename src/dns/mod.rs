@@ -1,4 +1,4 @@
-// src/dns/mod.rs - Keep original interface, improve internals
+// Keep original interface, improve internals
 
 use async_trait::async_trait;
 use hickory_resolver::TokioResolver;
@@ -100,10 +100,10 @@ pub trait DnsProvider: Send + Sync {
 
     /// Internal: Find zone for domain
     async fn get_zone_info(&mut self, domain: &str) -> Result<ZoneInfo, Box<dyn std::error::Error + Send + Sync>> {
-        info!("🔍 Looking up zone for domain: {}", domain);
+        info!("Looking up zone for domain: {}", domain);
 
         let available_zones = self.list_zones_impl().await?;
-        info!("📋 Found {} available zones", available_zones.len());
+        info!("Found {} available zones", available_zones.len());
 
         // Find the longest matching zone (most specific)
         let mut best_match = None;
@@ -113,13 +113,13 @@ pub trait DnsProvider: Send + Sync {
             if domain.ends_with(&zone.name) && zone.name.len() > best_length {
                 best_match = Some(zone.clone());
                 best_length = zone.name.len();
-                info!("✅ Found better match: {}", zone.name);
+                info!("Found better match: {}", zone.name);
             }
         }
 
         match best_match {
             Some(zone) => {
-                info!("✅ Using zone: {} (ID: {})", zone.name, zone.id);
+                info!("Using zone: {} (ID: {})", zone.name, zone.id);
                 Ok(zone)
             }
             None => {
@@ -156,36 +156,36 @@ pub trait DnsProvider: Send + Sync {
         domain: &str,
         name: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("🧹 Cleaning up existing TXT records: {}.{}", name, domain);
+        info!("Cleaning up existing TXT records: {}.{}", name, domain);
 
         match self.list_txt_records(domain, name).await {
             Ok(existing_records) => {
                 if existing_records.is_empty() {
-                    info!("✅ No existing TXT records to clean up");
+                    info!("No existing TXT records to clean up");
                     return Ok(());
                 }
 
-                info!("🗑️  Found {} existing TXT record(s) to clean up", existing_records.len());
+                info!("Found {} existing TXT record(s) to clean up", existing_records.len());
 
                 for record_id in existing_records {
-                    info!("🗑️  Deleting old TXT record ID: {}", record_id);
+                    info!("Deleting old TXT record ID: {}", record_id);
 
                     match self.delete_txt_record(domain, &record_id).await {
                         Ok(_) => {
-                            info!("✅ Deleted old TXT record {}", record_id);
+                            info!("Deleted old TXT record {}", record_id);
                         }
                         Err(e) => {
-                            warn!("⚠️  Failed to delete old TXT record {}: {}", record_id, e);
+                            warn!("Failed to delete old TXT record {}: {}", record_id, e);
                         }
                     }
                 }
 
-                info!("🧹 Cleanup completed");
+                info!("Cleanup completed");
                 Ok(())
             }
             Err(e) => {
-                warn!("⚠️  Failed to list existing records for cleanup: {}", e);
-                warn!("⚠️  Continuing without cleanup...");
+                warn!("Failed to list existing records for cleanup: {}", e);
+                warn!("Continuing without cleanup...");
                 Ok(())
             }
         }
@@ -198,7 +198,7 @@ pub trait DnsProvider: Send + Sync {
         name: &str,
         value: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("⏳ Waiting for DNS propagation of {}.{}", name, domain);
+        info!("Waiting for DNS propagation of {}.{}", name, domain);
 
         sleep(Duration::from_secs(30)).await;
 
@@ -209,16 +209,16 @@ pub trait DnsProvider: Send + Sync {
 
             match self.check_txt_record(domain, name, value).await {
                 Ok(true) => {
-                    info!("✅ DNS propagation confirmed");
+                    info!("DNS propagation confirmed");
                     return Ok(());
                 }
                 Ok(false) => {
                     if attempt < MAX_ATTEMPTS {
-                        info!("⏳ DNS not yet propagated, attempt {}. Waiting {} seconds...", attempt, RETRY_DELAY);
+                        info!("DNS not yet propagated, attempt {}. Waiting {} seconds...", attempt, RETRY_DELAY);
                         sleep(Duration::from_secs(RETRY_DELAY)).await;
                         continue;
                     } else {
-                        warn!("⚠️  DNS propagation not confirmed after {} minutes, proceeding anyway", MAX_ATTEMPTS*RETRY_DELAY/60);
+                        warn!("DNS propagation not confirmed after {} minutes, proceeding anyway", MAX_ATTEMPTS*RETRY_DELAY/60);
                         return Ok(());
                     }
                 }
@@ -247,15 +247,15 @@ pub trait DnsProvider: Send + Sync {
                 for record in txt_records.iter() {
                     let record_value = record.to_string().trim_matches('"').to_string();
                     if record_value == expected_value {
-                        info!("✅ Found matching TXT record for {}", fqdn);
+                        info!("Found matching TXT record for {}", fqdn);
                         return Ok(true);
                     }
                 }
-                info!("❌ No matching TXT record found for {}", fqdn);
+                info!("No matching TXT record found for {}", fqdn);
                 Ok(false)
             }
             Err(e) => {
-                info!("❌ DNS lookup failed for {}: {}", fqdn, e);
+                info!("DNS lookup failed for {}: {}", fqdn, e);
                 Ok(false)
             }
         }

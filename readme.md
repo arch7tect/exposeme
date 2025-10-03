@@ -23,19 +23,11 @@ ExposeME lets you share your local development server with the outside world by 
 
 ## Web UI Dashboard
 
-ExposeME includes a modern web dashboard built with Leptos (Rust WASM) for real-time monitoring and management.
-
-### Features
-
-- **Live Metrics** - Real-time server statistics with traffic visualization charts
-- **Tunnel Management** - View active tunnels, disconnect sessions, monitor traffic
-- **Certificate Management** - SSL status, expiration tracking, ACME renewal controls
-- **Server Configuration** - Routing mode detection, DNS provider status
-- **Professional Design** - TailwindCSS styling with responsive mobile layout
+ExposeME includes a web dashboard built with Leptos (Rust WASM) for real-time monitoring and management.
 
 ### Access
 
-Visit `https://yourdomain.com/` when no tunnel routes match. Docker images include UI by default.
+Visit `https://yourdomain.com/` when no tunnel routes match. 
 
 ## Architecture
 
@@ -147,8 +139,8 @@ curl -O https://raw.githubusercontent.com/arch7tect/exposeme/master/config/clien
 mv client.toml.template client.toml
 
 # Edit only these two lines in client.toml:
-# tunnel_id = "my-tunnel"     # Choose a unique tunnel name  
-# local_target = "http://host.docker.internal:3000"  # Your local service port
+tunnel_id = "my-tunnel"     # Choose a unique tunnel name  
+local_target = "http://host.docker.internal:3000"  # Your local service port
 
 # Run the client
 docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml ghcr.io/arch7tect/exposeme-client:latest

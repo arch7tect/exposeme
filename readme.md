@@ -658,6 +658,7 @@ docker compose down
 docker compose up -d
 
 # Update client - ghcr.io/arch7tect/exposeme-client:1.4 == ghcr.io/arch7tect/exposeme-client:latest
+docker pull ghcr.io/arch7tect/exposeme-client:latest
 docker run -it --rm \
   -v ./client.toml:/etc/exposeme/client.toml \
   ghcr.io/arch7tect/exposeme-client:latest

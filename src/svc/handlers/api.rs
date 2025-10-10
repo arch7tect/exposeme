@@ -239,23 +239,24 @@ async fn handle_extended_health_check(
 async fn handle_metrics_endpoint(context: &ServiceContext) -> Result<Response<ResponseBody>, BoxError> {
     if let Some(metrics) = &context.metrics {
         let server_metrics = metrics.get_server_metrics();
-        let tunnel_metrics = metrics.get_tunnel_metrics().read().unwrap();
-        
+
         let uptime = metrics.get_uptime_seconds();
-        
+
         let mut tunnels_data = Vec::new();
-        for (tunnel_id, tunnel) in tunnel_metrics.iter() {
-            tunnels_data.push(serde_json::json!({
-                "tunnel_id": tunnel_id,
-                "last_activity": tunnel.last_activity.load(std::sync::atomic::Ordering::Relaxed),
-                "requests_count": tunnel.requests_count.load(std::sync::atomic::Ordering::Relaxed),
-                "bytes_in": tunnel.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
-                "bytes_out": tunnel.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
-                "websocket_connections": tunnel.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
-                "websocket_bytes_in": tunnel.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
-                "websocket_bytes_out": tunnel.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
-                "error_count": tunnel.error_count.load(std::sync::atomic::Ordering::Relaxed)
-            }));
+        if let Ok(tunnel_metrics) = metrics.get_tunnel_metrics().read() {
+            for (tunnel_id, tunnel) in tunnel_metrics.iter() {
+                tunnels_data.push(serde_json::json!({
+                    "tunnel_id": tunnel_id,
+                    "last_activity": tunnel.last_activity.load(std::sync::atomic::Ordering::Relaxed),
+                    "requests_count": tunnel.requests_count.load(std::sync::atomic::Ordering::Relaxed),
+                    "bytes_in": tunnel.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                    "bytes_out": tunnel.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                    "websocket_connections": tunnel.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
+                    "websocket_bytes_in": tunnel.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                    "websocket_bytes_out": tunnel.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                    "error_count": tunnel.error_count.load(std::sync::atomic::Ordering::Relaxed)
+                }));
+            }
         }
 
         let response_json = serde_json::json!({
@@ -293,23 +294,24 @@ async fn handle_metrics_stream_endpoint(context: ServiceContext) -> Result<Respo
         let stream = IntervalStream::new(interval)
             .map(move |_| {
                 let server_metrics = metrics.get_server_metrics();
-                let tunnel_metrics = metrics.get_tunnel_metrics().read().unwrap();
-                
+
                 let uptime = metrics.get_uptime_seconds();
-                
+
                 let mut tunnels_data = Vec::new();
-                for (tunnel_id, tunnel) in tunnel_metrics.iter() {
-                    tunnels_data.push(serde_json::json!({
-                        "tunnel_id": tunnel_id,
-                        "last_activity": tunnel.last_activity.load(std::sync::atomic::Ordering::Relaxed),
-                        "requests_count": tunnel.requests_count.load(std::sync::atomic::Ordering::Relaxed),
-                        "bytes_in": tunnel.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
-                        "bytes_out": tunnel.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
-                        "websocket_connections": tunnel.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
-                        "websocket_bytes_in": tunnel.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
-                        "websocket_bytes_out": tunnel.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
-                        "error_count": tunnel.error_count.load(std::sync::atomic::Ordering::Relaxed)
-                    }));
+                if let Ok(tunnel_metrics) = metrics.get_tunnel_metrics().read() {
+                    for (tunnel_id, tunnel) in tunnel_metrics.iter() {
+                        tunnels_data.push(serde_json::json!({
+                            "tunnel_id": tunnel_id,
+                            "last_activity": tunnel.last_activity.load(std::sync::atomic::Ordering::Relaxed),
+                            "requests_count": tunnel.requests_count.load(std::sync::atomic::Ordering::Relaxed),
+                            "bytes_in": tunnel.bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                            "bytes_out": tunnel.bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                            "websocket_connections": tunnel.websocket_connections.load(std::sync::atomic::Ordering::Relaxed),
+                            "websocket_bytes_in": tunnel.websocket_bytes_in.load(std::sync::atomic::Ordering::Relaxed),
+                            "websocket_bytes_out": tunnel.websocket_bytes_out.load(std::sync::atomic::Ordering::Relaxed),
+                            "error_count": tunnel.error_count.load(std::sync::atomic::Ordering::Relaxed)
+                        }));
+                    }
                 }
 
                 let response_json = serde_json::json!({

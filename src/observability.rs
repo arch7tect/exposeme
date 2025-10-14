@@ -74,6 +74,12 @@ impl MetricsCollector {
             self.server_metrics.active_tunnels.fetch_sub(1, Ordering::Relaxed);
         }
         if let Ok(mut tunnels) = self.tunnel_metrics.write() {
+            if let Some(tunnel) = tunnels.get(tunnel_id) {
+                let ws_count = tunnel.websocket_connections.load(Ordering::Relaxed);
+                if ws_count > 0 {
+                    self.server_metrics.websocket_connections.fetch_sub(ws_count, Ordering::Relaxed);
+                }
+            }
             tunnels.remove(tunnel_id);
         }
     }

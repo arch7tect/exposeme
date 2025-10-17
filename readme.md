@@ -446,6 +446,17 @@ volumes:
   - ./logs:/var/log/exposeme:rw
 ```
 
+**Permissions:**
+If using `TRACING_LOG`, ensure the logs directory has proper permissions:
+```bash
+mkdir -p logs && chmod 777 logs/
+```
+
+**Viewing logs:**
+```bash
+tail -f logs/server.log
+```
+
 ## API Endpoints
 
 ExposeME provides REST API endpoints for health monitoring, certificate management, and observability.

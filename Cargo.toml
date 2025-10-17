@@ -80,6 +80,8 @@ uuid = { version = "1.18", features = ["v4"] }
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+tracing-rolling-file = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 x509-parser = "0.18.0"
 async-trait = "0.1"

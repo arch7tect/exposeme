@@ -15,6 +15,8 @@ services:
       - ./config/server.toml:/etc/exposeme/server.toml:ro
       # SSL certificates storage
       - ./certs:/etc/exposeme/certs:rw
+      # Logs directory
+      - ./logs:/var/log/exposeme:rw
 
     environment:
       # Domain configuration
@@ -36,6 +38,7 @@ services:
 
       # Logging
       - RUST_LOG=${RUST_LOG:-info}
+      - TRACING_LOG=${TRACING_LOG:-}
       - RUST_BACKTRACE=1
 
       # Other

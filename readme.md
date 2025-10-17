@@ -411,6 +411,40 @@ OPTIONS:
 | `EXPOSEME_ADMIN_TOKEN` | Admin token for observability API             | `admin_secure_token`      |
 | `EXPOSEME_REQUEST_TIMEOUT` | HTTP request timeout in seconds               | `30`                      |
 | `RUST_LOG` | Logging level (e.g., `info`, `debug`)                 | `info`                    |
+| `TRACING_LOG` | Advanced file logging configuration              | See below                 |
+
+### File Logging with TRACING_LOG
+
+Configure file logging with rotation using the `TRACING_LOG` environment variable:
+
+```bash
+# Size-based rotation (10MB per file, keep 7 files)
+export TRACING_LOG="level=info,file=/var/log/exposeme/server.log,max_size=10M,max_files=7"
+
+# Time-based rotation (daily rotation)
+export TRACING_LOG="level=debug,file=/var/log/exposeme/server.log,rotation=daily"
+
+# Simple file logging (no rotation)
+export TRACING_LOG="level=info,file=/var/log/exposeme/server.log"
+```
+
+**TRACING_LOG Options:**
+- `level` - Log level: `trace`, `debug`, `info`, `warn`, `error`
+- `file` - Log file path
+- `max_size` - Max file size before rotation (supports `K`, `M`, `G` suffixes)
+- `max_files` - Number of rotated files to keep (required with `max_size`)
+- `rotation` - Time-based rotation: `minutely`, `hourly`, `daily`, `never`
+- `append` - Append to existing file: `true`, `false`
+
+**Rotated file naming:** Files rotate as `app.log`, `app.log.1`, `app.log.2`, etc.
+
+**Docker compose example:**
+```yaml
+environment:
+  - TRACING_LOG=level=info,file=/var/log/exposeme/server.log,max_size=10M,max_files=7
+volumes:
+  - ./logs:/var/log/exposeme:rw
+```
 
 ## API Endpoints
 

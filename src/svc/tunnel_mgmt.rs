@@ -13,6 +13,7 @@ use tokio::time::interval;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 use tokio_tungstenite::{WebSocketStream, tungstenite::Message as WsMessage};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 pub async fn handle_tunnel_management_connection(
@@ -73,16 +74,22 @@ pub async fn handle_tunnel_management_connection(
     };
 
     let (ping_tx, mut ping_rx) = mpsc::unbounded_channel::<()>();
+    let cancel_token = CancellationToken::new();
     let ping_handle = start_ping_task(
         tunnel_id.clone(),
         context.tunnels.clone(),
-        context.clone(),
         ping_tx,
+        cancel_token.clone(),
     );
 
     let mut message_count = 0;
     loop {
         tokio::select! {
+            _ = cancel_token.cancelled() => {
+                info!("Tunnel '{}' cancelled by ping task (stale connection)", tunnel_id);
+                break;
+            }
+
             _ = ping_rx.recv() => {
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -251,12 +258,12 @@ pub async fn handle_tunnel_management_connection(
 fn start_ping_task(
     tunnel_id: String,
     tunnels: TunnelMap,
-    context: ServiceContext,
     ping_tx: mpsc::UnboundedSender<()>,
+    cancel_token: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = interval(Duration::from_secs(30));
-        interval.tick().await; // Skip first tick
+        interval.tick().await;
 
         loop {
             interval.tick().await;
@@ -269,16 +276,13 @@ fn start_ping_task(
             match connection {
                 Some(conn) => {
                     if conn.is_stale().await {
-                        warn!("Tunnel '{}' is stale, removing immediately", tunnel_id);
-                        shutdown_tunnel(context.clone(), tunnel_id.clone()).await;
+                        warn!("Tunnel '{}' is stale, cancelling main loop", tunnel_id);
+                        cancel_token.cancel();
                         break;
                     }
 
                     if ping_tx.send(()).is_err() {
-                        warn!(
-                            "Failed to request ping for tunnel '{}', main loop closed",
-                            tunnel_id
-                        );
+                        debug!("Ping task stopping for tunnel '{}', main loop closed", tunnel_id);
                         break;
                     }
                 }

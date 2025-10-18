@@ -52,6 +52,26 @@ pub async fn handle_tunnel_management_connection(
         metrics.tunnel_connected(&tunnel_id);
     }
 
+    struct CleanupGuard {
+        tunnel_id: String,
+        context: ServiceContext,
+    }
+
+    impl Drop for CleanupGuard {
+        fn drop(&mut self) {
+            let tunnel_id = self.tunnel_id.clone();
+            let context = self.context.clone();
+            tokio::spawn(async move {
+                shutdown_tunnel(context, tunnel_id).await;
+            });
+        }
+    }
+
+    let _cleanup_guard = CleanupGuard {
+        tunnel_id: tunnel_id.clone(),
+        context: context.clone(),
+    };
+
     let (ping_tx, mut ping_rx) = mpsc::unbounded_channel::<()>();
     let ping_handle = start_ping_task(
         tunnel_id.clone(),
@@ -222,8 +242,8 @@ pub async fn handle_tunnel_management_connection(
     let _ = ws_sender.close().await;
     info!("WebSocket closed gracefully");
 
-    shutdown_tunnel(context.clone(), tunnel_id.clone()).await;
     ping_handle.abort();
+    drop(_cleanup_guard);
 
     Ok(())
 }
@@ -542,7 +562,7 @@ async fn handle_websocket_close(
 }
 
 pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool {
-    let result = {
+    let tunnel_existed = {
         let mut tunnels_guard = context.tunnels.write().await;
         if tunnels_guard.remove(&tunnel_id).is_some() {
             info!(
@@ -553,73 +573,70 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
         } else {false}
     };
 
-    if result {
-        let requests_to_cleanup = {
-            let requests = context.active_requests.read().await;
-            requests
-                .iter()
-                .filter(|(_, req)| req.tunnel_id == tunnel_id)
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>()
-        };
+    let requests_to_cleanup = {
+        let requests = context.active_requests.read().await;
+        requests
+            .iter()
+            .filter(|(_, req)| req.tunnel_id == tunnel_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>()
+    };
 
-        for request_id in requests_to_cleanup {
-            if let Some(request) = context.active_requests.write().await.remove(&request_id) {
-                request.client_disconnected.store(true, Ordering::Relaxed);
-                let _ = request
-                    .response_tx
-                    .send(ResponseEvent::Error("Tunnel disconnected".to_string()))
-                    .await;
-            }
+    for request_id in requests_to_cleanup {
+        if let Some(request) = context.active_requests.write().await.remove(&request_id) {
+            request.client_disconnected.store(true, Ordering::Relaxed);
+            let _ = request
+                .response_tx
+                .send(ResponseEvent::Error("Tunnel disconnected".to_string()))
+                .await;
         }
+    }
 
-        let websocket_connections_to_cleanup = {
-            let websockets = context.active_websockets.read().await;
-            websockets
-                .iter()
-                .filter(|(_, conn)| conn.tunnel_id == tunnel_id)
-                .map(|(id, _)| id.clone())
-                .collect::<Vec<_>>()
-        };
+    let websocket_connections_to_cleanup = {
+        let websockets = context.active_websockets.read().await;
+        websockets
+            .iter()
+            .filter(|(_, conn)| conn.tunnel_id == tunnel_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>()
+    };
 
-        if !websocket_connections_to_cleanup.is_empty() {
-            info!(
-            "Cleaning up {} WebSocket connections",
-            websocket_connections_to_cleanup.len()
-        );
-            for connection_id in websocket_connections_to_cleanup {
-                if let Some(connection) = context
-                    .active_websockets
-                    .write()
-                    .await
-                    .remove(&connection_id)
-                {
-                    debug!("Cleaned up WebSocket connection: {}", connection_id);
+    if !websocket_connections_to_cleanup.is_empty() {
+        info!(
+        "Cleaning up {} WebSocket connections",
+        websocket_connections_to_cleanup.len()
+    );
+        for connection_id in websocket_connections_to_cleanup {
+            if let Some(connection) = context
+                .active_websockets
+                .write()
+                .await
+                .remove(&connection_id)
+            {
+                debug!("Cleaned up WebSocket connection: {}", connection_id);
 
-                    if let Some(metrics) = &context.metrics {
-                        metrics.websocket_disconnected(&tunnel_id);
-                    }
+                if let Some(metrics) = &context.metrics {
+                    metrics.websocket_disconnected(&tunnel_id);
+                }
 
-                    if let Some(ws_tx) = &connection.ws_tx {
-                        let close_msg = WsMessage::Close(Some(
-                            tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                                code: 1001u16.into(),
-                                reason: "ExposeME client disconnected".into(),
-                            },
-                        ));
-                        if let Err(e) = ws_tx.send(close_msg) {
-                            warn!("Failed to close browser WebSocket {}: {}", connection_id, e);
-                        }
+                if let Some(ws_tx) = &connection.ws_tx {
+                    let close_msg = WsMessage::Close(Some(
+                        tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                            code: 1001u16.into(),
+                            reason: "ExposeME client disconnected".into(),
+                        },
+                    ));
+                    if let Err(e) = ws_tx.send(close_msg) {
+                        warn!("Failed to close browser WebSocket {}: {}", connection_id, e);
                     }
                 }
             }
         }
-
-        // AFTER WebSocket cleanup
-        if let Some(metrics) = &context.metrics {
-            metrics.tunnel_disconnected(&tunnel_id);
-        }
     }
 
-    result
+    if let Some(metrics) = &context.metrics {
+        metrics.tunnel_disconnected(&tunnel_id);
+    }
+
+    tunnel_existed
 }

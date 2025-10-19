@@ -1,6 +1,27 @@
 # ExposeME
 
-A fast, secure HTTP tunneling solution written in Rust that exposes local services to the internet through WebSocket connections.
+Secure HTTP tunneling solution written in Rust that exposes local services to the internet through WebSocket connections.
+
+## Table of Contents
+
+- [Introduction](#introduction)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Quick Start (Test Server)](#quick-start-test-server)
+- [Production Setup (Your Server)](#production-setup-your-server)
+- [Web UI Dashboard](#web-ui-dashboard)
+- [Architecture](#architecture)
+- [Authentication & Security](#authentication--security)
+- [Routing Modes](#routing-modes)
+- [Certificate Management](#certificate-management)
+- [DNS Provider Setup](#dns-provider-setup)
+- [Configuration Reference](#configuration-reference)
+- [API Endpoints](#api-endpoints)
+- [Building from Source](#building-from-source)
+- [Troubleshooting](#troubleshooting)
+- [Version Compatibility](#version-compatibility)
+- [Changelog](#changelog)
+- [License](#license)
 
 ## Introduction
 
@@ -21,103 +42,19 @@ ExposeME lets you share your local development server with the outside world by 
 - **Flexible SSL** - Let's Encrypt (auto), bring your own certificates, or self-signed for development
 - **Multi-client Support** - Multiple tunnels with unique identifiers
 
-## Web UI Dashboard
+## Prerequisites
 
-ExposeME includes a web dashboard built with Leptos (Rust WASM) for real-time monitoring and management.
+Before setting up your own production server, ensure you have:
 
-### Access
+- **Domain name** - A registered domain with DNS management access
+- **VPS or server** - A server with a public IP address and ports 80/443 accessible
+- **DNS configuration** - Ability to create A records pointing to your server
+- **SSL requirements** - Email address for Let's Encrypt, or your own certificates
+- **For subdomain routing** - DNS provider API access (Cloudflare, DigitalOcean, Azure, or Hetzner)
 
-Visit `https://yourdomain.com/` when no tunnel routes match. 
+> **Note:** If you just want to try ExposeME without setting up infrastructure, use the [Quick Start (Test Server)](#quick-start-test-server) option below.
 
-## Architecture
-
-ExposeME creates secure HTTP tunnels to expose local services:
-
-- **Tunnel Setup**: Client connects to server via WebSocket upgrade on `/tunnel-ws` (configurable) to establish a persistent tunnel
-- **Request Forwarding**: When users visit your public URL, the server forwards their HTTP requests through the existing WebSocket tunnel to your local service using a binary protocol
-- **Flow**: Internet User → Server (HTTP(S)) → WebSocket Tunnel → Client → Local Service → Response back
-
-### Connection Types
-- **HTTP mode**: Client connects to `ws://your-domain.com/tunnel-ws`
-- **HTTPS mode**: Client connects to `wss://your-domain.com/tunnel-ws`
-- **Custom path**: Configurable via `tunnel_path` setting
-
-### Protocol
-ExposeME uses a binary protocol over WebSocket connections for efficient communication between client and server. The protocol handles HTTP request/response streaming, WebSocket proxying, and authentication.
-
-## Authentication & Security
-
-ExposeME uses **token-based authentication** to control access. Configure your server with one or more tokens, and clients must provide a valid token to create tunnels.
-
-**Security features:**
-- **Token authentication**: Only clients with valid tokens can create tunnels
-- **Tunnel isolation**: Each tunnel has a unique ID and operates independently
-- **Transport encryption**: All tunnel communication is encrypted when SSL is enabled
-- **Private URLs**: Tunnel URLs are only known to those who create them
-- **Binary protocol**: Efficient binary communication reduces overhead
-
-```bash
-# Generate a secure token
-openssl rand -base64 32
-# Use this as your EXPOSEME_AUTH_TOKEN
-```
-
-## Routing Modes
-
-ExposeME supports three routing modes:
-
-### 1. Path-based Routing (default)
-```
-https://your-domain.com/tunnel-id/path
-```
-*Uses single-domain certificates with HTTP challenges (no DNS provider needed)*
-
-### 2. Subdomain Routing
-```
-https://tunnel-id.your-domain.com/path
-```
-*Requires wildcard certificates with DNS challenges (DNS provider required)*
-
-### 3. Both (recommended)
-Supports both routing methods simultaneously
-*Requires wildcard certificates with DNS challenges (DNS provider required)*
-
-## Certificate Management
-
-To use HTTPS, your server needs an SSL certificate. ExposeME gives you three ways to get one:
-
-### 1. Automatic Let's Encrypt (recommended)
-Let's Encrypt provides free SSL certificates that ExposeME can get and renew automatically. Perfect for most users.
-
-- **Simple setup**: Works with just your domain name and email
-- **Completely free**: No cost, ever
-- **Auto-renewal**: New certificates every 90 days, handled automatically
-- **Two modes**: Regular certificates (easy) or wildcard certificates (requires DNS setup)
-
-### 2. Bring Your Own Certificate
-Already have an SSL certificate from another provider? Just drop the files in the right folder and ExposeME will use them.
-
-- **Full control**: Use certificates from any provider (Cloudflare, Namecheap, etc.)
-- **Your responsibility**: You handle renewals and configuration
-- **Any provider**: Works with commercial SSL providers
-
-**File naming:** Place your certificate files in the cache directory with these exact names:
-- **Regular certificate**: `your-domain-com.pem` and `your-domain-com.key`
-- **Wildcard certificate**: `wildcard-your-domain-com.pem` and `wildcard-your-domain-com.key`
-- **Example**: For `example.com` → `example-com.pem` and `example-com.key`
-
-**Cache directory:** By default `/etc/exposeme/certs`, but configurable via `cert_cache_dir` setting.
-
-### 3. Self-Signed Certificate (development only)
-ExposeME can create its own certificate for local development. Browsers will show warnings, but it works for testing.
-
-- **Development only**: Don't use this for real websites
-- **No setup required**: Works immediately, no domain or DNS needed
-- **Browser warnings**: Visitors will see "not secure" warnings
-
-## Quick Start
-
-### Option 1: Try the Test Server (No Setup Required)
+## Quick Start (Test Server)
 
 Want to test ExposeME quickly without setting up your own server? Use our public test server:
 
@@ -139,7 +76,7 @@ curl -O https://raw.githubusercontent.com/arch7tect/exposeme/master/config/clien
 mv client.toml.template client.toml
 
 # Edit only these two lines in client.toml:
-tunnel_id = "my-tunnel"     # Choose a unique tunnel name  
+tunnel_id = "my-tunnel"     # Choose a unique tunnel name
 local_target = "http://host.docker.internal:3000"  # Your local service port
 
 # Run the client
@@ -148,12 +85,12 @@ docker run -it --rm -v ./client.toml:/etc/exposeme/client.toml ghcr.io/arch7tect
 
 Your service will be accessible at: `https://my-tunnel.exposeme.org/`
 
-**Test Server Limitations:**
-- **No uptime guarantee** - service may be unavailable
-- **Testing only** - not suitable for production use
-- **No support** - use at your own risk
+> **Warning:** Test Server Limitations:
+> - No uptime guarantee - service may be unavailable
+> - Testing only - not suitable for production use
+> - No support - use at your own risk
 
-### Option 2: Set Up Your Own Server (Recommended for Production)
+## Production Setup (Your Server)
 
 ### DNS Setup
 
@@ -167,23 +104,32 @@ Configure DNS records for your domain:
 
 Wait for DNS propagation before proceeding (test with `nslookup your-domain.com`).
 
-### Quick VPS Setup
+### Server Installation
 
-For rapid deployment on a fresh Ubuntu VPS, create and run this setup script:
+For rapid deployment on a fresh Ubuntu VPS:
+
+**Step 1: Install Docker**
 
 ```bash
-#!/bin/bash
-# vps.sh - Quick VPS setup script
 sudo apt update
 sudo apt install apt-transport-https ca-certificates curl software-properties-common git
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
 sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable"
-apt-cache policy docker-ce
 sudo apt install docker-ce
+```
+
+**Step 2: Clone and Configure**
+
+```bash
 git clone https://github.com/arch7tect/exposeme.git
 cd exposeme
 mkdir -p certs && chmod 777 certs
 cp config/server.toml.template config/server.toml
+```
+
+**Step 3: Create Environment Configuration**
+
+```bash
 cat > .env <<EOF
 EXPOSEME_DOMAIN=<your-domain.com>
 EXPOSEME_EMAIL=<admin@your-domain.com>
@@ -194,9 +140,10 @@ EXPOSEME_ADMIN_TOKEN=<your-secure-admin-token-here>
 RUST_LOG=info
 EOF
 ```
-**Important:** Replace the placeholders <...> in `.env` with your actual values!
 
-### Start the server
+> **Important:** Replace all placeholders `<...>` with your actual values!
+
+**Step 4: Start the Server**
 
 ```bash
 docker compose pull
@@ -206,7 +153,7 @@ docker compose logs -f
 
 ### Client Setup
 
-**Option A: Using command line only (no config file needed):**
+**Option A: Command line only (no config file needed):**
 
 ```bash
 docker run -it --rm ghcr.io/arch7tect/exposeme-client:latest \
@@ -218,12 +165,11 @@ docker run -it --rm ghcr.io/arch7tect/exposeme-client:latest \
 
 **Option B: Using config file:**
 
-1. **Create client configuration:**
+Create `client.toml`:
 
 ```toml
-# client.toml
 [client]
-server_url = "wss://example.com/tunnel-ws"  # Uses WebSocket upgrade on HTTPS
+server_url = "wss://example.com/tunnel-ws"
 auth_token = "your_secure_auth_token"
 tunnel_id = "my-app"
 local_target = "http://host.docker.internal:3000"
@@ -232,7 +178,7 @@ reconnect_delay_secs = 5
 insecure = false  # Set to true for self-signed certificates (development only)
 ```
 
-2. **Run the client:**
+Run the client:
 
 ```bash
 docker run -it --rm \
@@ -240,65 +186,171 @@ docker run -it --rm \
   ghcr.io/arch7tect/exposeme-client:latest
 ```
 
-3. **Access your service:**
-   - Subdomain: `https://my-app.example.com/`
-   - Path-based: `https://example.com/my-app/`
+Access your service:
+- **Subdomain:** `https://my-app.example.com/`
+- **Path-based:** `https://example.com/my-app/`
+
+## Web UI Dashboard
+
+ExposeME includes a web dashboard built with Leptos (Rust WASM) for real-time monitoring and management.
+
+**Access:** Visit `https://yourdomain.com/` when no tunnel routes match.
+
+The dashboard provides:
+- Real-time tunnel status and metrics
+- Traffic visualization and statistics
+- Certificate management and renewal controls
+- Active connection monitoring
+
+## Architecture
+
+ExposeME creates secure HTTP tunnels to expose local services:
+
+- **Tunnel Setup**: Client connects to server via WebSocket upgrade on `/tunnel-ws` (configurable) to establish a persistent tunnel
+- **Request Forwarding**: When users visit your public URL, the server forwards their HTTP requests through the existing WebSocket tunnel to your local service using a binary protocol
+- **Flow**: Internet User → Server (HTTP(S)) → WebSocket Tunnel → Client → Local Service → Response back
+
+### Connection Types
+- **HTTP mode**: Client connects to `ws://your-domain.com/tunnel-ws`
+- **HTTPS mode**: Client connects to `wss://your-domain.com/tunnel-ws`
+- **Custom path**: Configurable via `tunnel_path` setting
+
+### Protocol
+ExposeME uses a binary protocol over WebSocket connections for efficient communication between client and server. The protocol handles HTTP request/response streaming, WebSocket proxying, and authentication.
+
+## Authentication & Security
+
+ExposeME uses **token-based authentication** to control access. Configure your server with one or more tokens, and clients must provide a valid token to create tunnels.
+
+**Generate a secure token:**
+
+```bash
+openssl rand -base64 32
+```
+
+**Security features:**
+- **Token authentication**: Only clients with valid tokens can create tunnels
+- **Tunnel isolation**: Each tunnel has a unique ID and operates independently
+- **Transport encryption**: All tunnel communication is encrypted when SSL is enabled
+- **Private URLs**: Tunnel URLs are only known to those who create them
+- **Binary protocol**: Efficient binary communication reduces overhead
+
+## Routing Modes
+
+ExposeME supports three routing modes. Choose based on your certificate setup and URL preferences.
+
+### Path-based Routing (default)
+```
+https://your-domain.com/tunnel-id/path
+```
+- Single-domain SSL certificate
+- HTTP-01 challenges (no DNS provider needed)
+- Simpler setup
+
+### Subdomain Routing
+```
+https://tunnel-id.your-domain.com/path
+```
+- Wildcard SSL certificate required
+- DNS-01 challenges (DNS provider required)
+- Cleaner URLs
+
+### Both (recommended)
+Supports both routing methods simultaneously.
+- Wildcard SSL certificate required
+- DNS-01 challenges (DNS provider required)
+- Maximum flexibility
+
+## Certificate Management
+
+ExposeME supports three certificate options:
+
+### 1. Automatic Let's Encrypt (recommended)
+
+Free SSL certificates with automatic renewal.
+
+- Works with just domain name and email
+- Auto-renewal every 90 days
+- Supports both regular and wildcard certificates
+
+### 2. Bring Your Own Certificate
+
+Use certificates from any provider (Cloudflare, Namecheap, etc.).
+
+**File naming convention:**
+- Regular: `your-domain-com.pem` and `your-domain-com.key`
+- Wildcard: `wildcard-your-domain-com.pem` and `wildcard-your-domain-com.key`
+- Example: For `example.com` → `example-com.pem` and `example-com.key`
+
+**Location:** Place files in cert cache directory (default: `/etc/exposeme/certs`)
+
+### 3. Self-Signed Certificate (development only)
+
+For local development and testing.
+
+> **Warning:** Browsers will show security warnings. Not suitable for production.
 
 ## DNS Provider Setup
 
-**DNS providers are only required for automatic Let's Encrypt wildcard certificates** (subdomain routing). For path-based routing with single-domain certificates, ExposeME uses HTTP-01 challenges and no DNS provider configuration is needed. Wildcard certificates require DNS-01 challenges which need a DNS provider.
-
-If you're using manual certificates or self-signed certificates, DNS providers are not needed regardless of routing mode.
+> **Note:** DNS providers are only required for automatic Let's Encrypt wildcard certificates (subdomain routing). Path-based routing uses HTTP-01 challenges and requires no DNS provider. Manual or self-signed certificates don't require DNS providers regardless of routing mode.
 
 ### DigitalOcean
-1. **Create API token** at https://cloud.digitalocean.com/account/api/tokens
-2. **Add your domain** to DigitalOcean Domains
-3. **Set environment variables:**
-   ```bash
-   EXPOSEME_DNS_PROVIDER=digitalocean
-   EXPOSEME_DIGITALOCEAN_TOKEN=your_do_token
-   ```
+
+1. Create API token at https://cloud.digitalocean.com/account/api/tokens
+2. Add your domain to DigitalOcean Domains
+3. Set environment variables:
+
+```bash
+EXPOSEME_DNS_PROVIDER=digitalocean
+EXPOSEME_DIGITALOCEAN_TOKEN=your_do_token
+```
 
 ### Cloudflare
-1. **Create API token** at https://dash.cloudflare.com/profile/api-tokens with:
+
+1. Create API token at https://dash.cloudflare.com/profile/api-tokens with:
    - **Zone:Zone:Read** permissions
    - **Zone:DNS:Edit** permissions
-   - **Include: All zones** (or specific zones you want to manage)
-2. **Add your domain** to Cloudflare
-3. **Set environment variables:**
-   ```bash
-   EXPOSEME_DNS_PROVIDER=cloudflare
-   EXPOSEME_CLOUDFLARE_TOKEN=your_cf_token
-   ```
+   - **Include: All zones** (or specific zones)
+2. Add your domain to Cloudflare
+3. Set environment variables:
+
+```bash
+EXPOSEME_DNS_PROVIDER=cloudflare
+EXPOSEME_CLOUDFLARE_TOKEN=your_cf_token
+```
 
 ### Hetzner DNS
-1. **Create API token** at https://dns.hetzner.com/ (Console → API tokens)
-2. **Add your domain** to Hetzner DNS
-3. **Set environment variables:**
-   ```bash
-   EXPOSEME_DNS_PROVIDER=hetzner
-   EXPOSEME_HETZNER_TOKEN=your_hetzner_token
-   ```
+
+1. Create API token at https://dns.hetzner.com/ (Console → API tokens)
+2. Add your domain to Hetzner DNS
+3. Set environment variables:
+
+```bash
+EXPOSEME_DNS_PROVIDER=hetzner
+EXPOSEME_HETZNER_TOKEN=your_hetzner_token
+```
 
 ### Azure DNS
-1. **Create a Service Principal** with DNS Zone Contributor role:
-   ```bash
-   # Create service principal
-   az ad sp create-for-rbac --name "exposeme-dns" \
-     --role "DNS Zone Contributor" \
-     --scopes "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/YOUR_RG"
-   ```
 
-2. **Add your domain** to Azure DNS (create DNS zone)
-3. **Set environment variables:**
-   ```bash
-   EXPOSEME_DNS_PROVIDER=azure
-   EXPOSEME_AZURE_SUBSCRIPTION_ID=your_subscription_id
-   EXPOSEME_AZURE_RESOURCE_GROUP=your_resource_group_with_dns_zone
-   EXPOSEME_AZURE_CLIENT_ID=your_service_principal_client_id
-   EXPOSEME_AZURE_CLIENT_SECRET=your_service_principal_secret
-   EXPOSEME_AZURE_TENANT_ID=your_azure_tenant_id
-   ```
+1. Create a Service Principal with DNS Zone Contributor role:
+
+```bash
+az ad sp create-for-rbac --name "exposeme-dns" \
+  --role "DNS Zone Contributor" \
+  --scopes "/subscriptions/YOUR_SUBSCRIPTION_ID/resourceGroups/YOUR_RG"
+```
+
+2. Add your domain to Azure DNS (create DNS zone)
+3. Set environment variables:
+
+```bash
+EXPOSEME_DNS_PROVIDER=azure
+EXPOSEME_AZURE_SUBSCRIPTION_ID=your_subscription_id
+EXPOSEME_AZURE_RESOURCE_GROUP=your_resource_group_with_dns_zone
+EXPOSEME_AZURE_CLIENT_ID=your_service_principal_client_id
+EXPOSEME_AZURE_CLIENT_SECRET=your_service_principal_secret
+EXPOSEME_AZURE_TENANT_ID=your_azure_tenant_id
+```
 
 ## Configuration Reference
 
@@ -313,6 +365,7 @@ ExposeME uses a **layered configuration system** where higher priority sources o
 ### Available Command Line Arguments
 
 #### Server Arguments
+
 ```bash
 ./exposeme-server [OPTIONS]
 
@@ -320,7 +373,7 @@ OPTIONS:
     -c, --config <FILE>           Configuration file path [default: server.toml]
         --http-bind <IP>          HTTP bind address
         --http-port <PORT>        HTTP port
-        --https-port <PORT>       HTTPS port  
+        --https-port <PORT>       HTTPS port
         --tunnel-path <PATH>      WebSocket upgrade path [default: /tunnel-ws]
         --domain <DOMAIN>         Server domain name
         --enable-https            Enable HTTPS
@@ -336,6 +389,7 @@ OPTIONS:
 ```
 
 #### Client Arguments
+
 ```bash
 ./exposeme-client [OPTIONS]
 
@@ -349,12 +403,12 @@ OPTIONS:
         --generate-config         Generate default configuration file
     -v, --verbose                 Enable verbose logging
     -h, --help                    Print help information
-        
+
     # Connection Management
         --auto-reconnect              Enable automatic reconnection on disconnect
         --no-auto-reconnect           Disable automatic reconnection on disconnect
         --reconnect-delay-secs <SECS> Delay before reconnection attempts [default: 5]
-        
+
     # WebSocket Configuration
         --websocket-cleanup-interval <SECS>    Cleanup check interval [default: 60]
         --websocket-connection-timeout <SECS>  Connection timeout [default: 10]
@@ -399,19 +453,19 @@ OPTIONS:
 
 ### Environment Variables
 
-| Variable | Description                                   | Example                   |
-|----------|-----------------------------------------------|---------------------------|
-| `EXPOSEME_DOMAIN` | Your domain                                   | `example.com`             |
-| `EXPOSEME_EMAIL` | Contact email for Let's Encrypt               | `admin@example.com`       |
-| `EXPOSEME_STAGING` | Use staging certificates                      | `false`                   |
-| `EXPOSEME_WILDCARD` | Enable wildcard certificates                  | `true`                    |
-| `EXPOSEME_ROUTING_MODE` | Routing mode                                  | `both`                    |
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `EXPOSEME_DOMAIN` | Your domain | `example.com` |
+| `EXPOSEME_EMAIL` | Contact email for Let's Encrypt | `admin@example.com` |
+| `EXPOSEME_STAGING` | Use staging certificates | `false` |
+| `EXPOSEME_WILDCARD` | Enable wildcard certificates | `true` |
+| `EXPOSEME_ROUTING_MODE` | Routing mode | `both` |
 | `EXPOSEME_DNS_PROVIDER` | DNS provider (only for wildcard certificates) | `digitalocean`, `cloudflare`, `azure`, or `hetzner` |
-| `EXPOSEME_AUTH_TOKEN` | Authentication token                          | `secure_token`            |
-| `EXPOSEME_ADMIN_TOKEN` | Admin token for observability API             | `admin_secure_token`      |
-| `EXPOSEME_REQUEST_TIMEOUT` | HTTP request timeout in seconds               | `30`                      |
-| `RUST_LOG` | Logging level (e.g., `info`, `debug`)                 | `info`                    |
-| `TRACING_LOG` | Advanced file logging configuration              | See below                 |
+| `EXPOSEME_AUTH_TOKEN` | Authentication token | `secure_token` |
+| `EXPOSEME_ADMIN_TOKEN` | Admin token for observability API | `admin_secure_token` |
+| `EXPOSEME_REQUEST_TIMEOUT` | HTTP request timeout in seconds | `30` |
+| `RUST_LOG` | Logging level | `info`, `debug` |
+| `TRACING_LOG` | Advanced file logging configuration | See below |
 
 ### File Logging with TRACING_LOG
 
@@ -439,6 +493,7 @@ export TRACING_LOG="level=info,file=/var/log/exposeme/server.log"
 **Rotated file naming:** Files rotate as `app.log`, `app.log.1`, `app.log.2`, etc.
 
 **Docker compose example:**
+
 ```yaml
 environment:
   - TRACING_LOG=level=info,file=/var/log/exposeme/server.log,max_size=10M,max_files=7
@@ -447,12 +502,13 @@ volumes:
 ```
 
 **Permissions:**
-If using `TRACING_LOG`, ensure the logs directory has proper permissions:
+
 ```bash
 mkdir -p logs && chmod 777 logs/
 ```
 
 **Viewing logs:**
+
 ```bash
 tail -f logs/server.log
 ```
@@ -464,16 +520,19 @@ ExposeME provides REST API endpoints for health monitoring, certificate manageme
 ### Public API Endpoints (No Authentication)
 
 **Health Check** - `GET /api/health`
+
 ```bash
 curl https://your-domain.com/api/health
 ```
 
 **Certificate Status** - `GET /api/certificates`
+
 ```bash
 curl https://your-domain.com/api/certificates
 ```
 
 Response:
+
 ```json
 {
    "domain": "your-domain.com",
@@ -487,11 +546,13 @@ Response:
 ```
 
 **View Metrics** - `GET /api/metrics`
+
 ```bash
 curl https://your-domain.com/api/metrics
 ```
 
 Returns comprehensive server and per-tunnel statistics:
+
 ```json
 {
   "server": {
@@ -499,7 +560,7 @@ Returns comprehensive server and per-tunnel statistics:
     "active_tunnels": 2,
     "total_requests": 1250,
     "total_bytes_in": 450000,
-    "total_bytes_out": 890000, 
+    "total_bytes_out": 890000,
     "websocket_connections": 3,
     "websocket_bytes_in": 12000,
     "websocket_bytes_out": 8500,
@@ -522,6 +583,7 @@ Returns comprehensive server and per-tunnel statistics:
 ```
 
 **Stream Metrics (SSE)** - `GET /api/metrics/stream`
+
 ```bash
 curl https://your-domain.com/api/metrics/stream
 ```
@@ -533,17 +595,20 @@ Streams the same metrics data in real-time via Server-Sent Events.
 Set the admin token via environment variable or TOML config:
 
 **Environment variable:**
+
 ```bash
 export EXPOSEME_ADMIN_TOKEN="your-secure-admin-token"
 ```
 
 **Or in server.toml:**
+
 ```toml
 [auth]
 admin_token = "your-secure-admin-token"
 ```
 
-**Force Disconnect Tunnel** - `DELETE /admin/tunnels/<tunnel-id>`  
+**Force Disconnect Tunnel** - `DELETE /admin/tunnels/<tunnel-id>`
+
 ```bash
 curl -X DELETE \
   -H "Authorization: Bearer your-secure-admin-token" \
@@ -551,7 +616,8 @@ curl -X DELETE \
 ```
 
 **Renew SSL Certificate** - `POST /admin/ssl/renew`
-```bash  
+
+```bash
 curl -X POST \
   -H "Authorization: Bearer your-secure-admin-token" \
   https://your-domain.com/admin/ssl/renew
@@ -560,6 +626,7 @@ curl -X POST \
 ## Building from Source
 
 ### Prerequisites
+
 - Rust 1.88+
 - Docker (optional)
 - cargo-leptos (for UI builds)
@@ -573,13 +640,6 @@ cd exposeme
 
 # Basic build (no UI)
 cargo build --release
-
-# Build with Web UI Dashboard
-./scripts/build-with-ui.sh
-# OR manually:
-# cargo install cargo-leptos
-# cargo leptos build --project ui --release  
-# cargo build --release --features ui
 ```
 
 ### Docker Build
@@ -593,33 +653,34 @@ docker build -t exposeme-client --target client .
 ./scripts/build-and-push.sh [version]
 ```
 
-### Web UI Dashboard
-
-When built with UI support (`--features ui`), the server includes a web dashboard:
-
-- **Access**: Visit `https://yourdomain.com/` when no tunnels match the path
-- **Features**: Real-time metrics, server status, SSL certificate monitoring
-- **Technology**: Leptos WASM for <300KB bundle size
-- **API**: Uses existing `/api/health`, `/api/metrics`, `/api/metrics/stream` endpoints
-
 ## Troubleshooting
 
-**DNS issues:** Verify `nslookup your-domain.com` resolves to your server IP
+**DNS issues:**
+
+```bash
+nslookup your-domain.com  # Should resolve to your server IP
+```
 
 **Permission denied:**
+
 ```bash
 docker exec -it exposeme-server id  # Check UID
 sudo chown -R <uid>:<gid> ./certs
 docker compose restart
 ```
 
-**View logs:** `docker compose logs -f exposeme-server`
+**View logs:**
+
+```bash
+docker compose logs -f exposeme-server
+```
 
 ### Self-Signed Certificates
 
 When using self-signed certificates for development, the client may fail to connect due to TLS verification errors. Use the `insecure` option to skip certificate verification:
 
 **Configuration:**
+
 ```toml
 [client]
 server_url = "wss://your-domain.com/tunnel-ws"
@@ -627,11 +688,12 @@ insecure = true  # Skip TLS verification for self-signed certificates
 ```
 
 **Command line:**
+
 ```bash
 ./exposeme-client --insecure --server-url wss://localhost/tunnel-ws
 ```
 
-**Security Warning**: The `insecure` option should only be used for development with self-signed certificates as it disables TLS certificate verification.
+> **Warning:** The `insecure` option should only be used for development with self-signed certificates as it disables TLS certificate verification.
 
 ## Version Compatibility
 
@@ -641,36 +703,71 @@ ExposeME uses a binary protocol for communication between client and server. Bot
 - **Patch versions are compatible** within the same major.minor release
 - **Protocol changes** require both client and server updates
 
-## New in v1.4.34
+### Upgrading from Previous Versions
+
+**Protocol Breaking Change**: Version 1.4 includes connection management improvements that require both server and client to be updated together.
+
+```bash
+# Update server
+docker compose pull
+docker compose down
+docker compose up -d
+
+# Update client
+docker pull ghcr.io/arch7tect/exposeme-client:latest
+docker run -it --rm \
+  -v ./client.toml:/etc/exposeme/client.toml \
+  ghcr.io/arch7tect/exposeme-client:latest
+```
+
+## Changelog
+
+### v1.4.57
+
+**New Features**
+- File Logging with rotation via TRACING_LOG
+- GitHub Releases with automated builds and GHCR support
+
+**Fixes**
+- Stale connection handling with cancellation tokens
+- Reliable tunnel cleanup on disconnect (RAII guards)
+- WebSocket connection counter accuracy
+- RWLock panic prevention (removed .unwrap() calls)
+
+**Improvements**
+- Tailwind build-time compilation (replaced CDN)
+- WASM optimization (wasm-opt + compression)
+
+### v1.4.34
 
 **GitHub Container Registry Migration**
 - Migrated Docker images from Docker Hub to GitHub Container Registry (ghcr.io)
 - Automated CI/CD builds now publish directly to GitHub Packages
 
-## New in v1.4.20
+### v1.4.20
 
 **Modern Web UI Dashboard**
 - Modern Leptos WASM UI with TailwindCSS styling
 - Real-time traffic visualization and metrics charts
 - Enhanced certificate management with ACME renewal controls
 
-## New in v1.4.9
+### v1.4.9
 
 **Observability & Admin Features**
 - Built-in metrics collection (server stats, per-tunnel analytics)
 - Admin API with Bearer token authentication (`/admin/tunnels/<id>`, `/admin/ssl/renew`)
 
-## New in v1.4
+### v1.4
 
 **CLI-First Experience & Enhanced Reliability**
-- **No config files required** - run with command line arguments only
-- **Public test server** - try ExposeME instantly without setup (exposeme.org)
-- **Faster network detection** - 60s ping timeout detects connection issues sooner
-- **Better resource cleanup** - improved tunnel and connection management
-- **Enhanced streaming** - fixed client disconnection handling for large uploads
+- No config files required - run with command line arguments only
+- Public test server - try ExposeME instantly without setup (exposeme.org)
+- Faster network detection - 60s ping timeout detects connection issues sooner
+- Better resource cleanup - improved tunnel and connection management
+- Enhanced streaming - fixed client disconnection handling for large uploads
 - **Important**: Requires both server and client to be v1.4+
 
-## New in v1.3
+### v1.3
 
 **Binary Protocol Implementation**
 - Replaced JSON protocol with efficient binary protocol using bincode
@@ -678,7 +775,7 @@ ExposeME uses a binary protocol for communication between client and server. Bot
 - Maintained backward compatibility checking
 - **Important**: Requires both server and client to be v1.3+
 
-## New in v1.1
+### v1.1
 
 **Enhanced Streaming Support**
 - Full HTTP request/response streaming without memory buffering
@@ -691,23 +788,6 @@ ExposeME uses a binary protocol for communication between client and server. Bot
 **Protocol Improvements**
 - Enhanced client-server protocol for streaming support
 - **Important**: Requires both server and client to be v1.1+
-
-### Upgrading from Previous Versions
-
-**Protocol Breaking Change**: Version 1.4 includes connection management improvements that require both server and client to be updated together.
-
-```bash
-# Update server
-docker compose pull
-docker compose down
-docker compose up -d
-
-# Update client - ghcr.io/arch7tect/exposeme-client:1.4 == ghcr.io/arch7tect/exposeme-client:latest
-docker pull ghcr.io/arch7tect/exposeme-client:latest
-docker run -it --rm \
-  -v ./client.toml:/etc/exposeme/client.toml \
-  ghcr.io/arch7tect/exposeme-client:latest
-```
 
 ## License
 

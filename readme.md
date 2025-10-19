@@ -726,7 +726,6 @@ docker run -it --rm \
 
 **New Features**
 - File Logging with rotation via TRACING_LOG
-- GitHub Releases with automated builds and GHCR support
 
 **Fixes**
 - Stale connection handling with cancellation tokens

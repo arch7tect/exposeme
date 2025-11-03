@@ -53,25 +53,9 @@ pub async fn handle_tunnel_management_connection(
         metrics.tunnel_connected(&tunnel_id);
     }
 
-    struct CleanupGuard {
-        tunnel_id: String,
-        context: ServiceContext,
-    }
-
-    impl Drop for CleanupGuard {
-        fn drop(&mut self) {
-            let tunnel_id = self.tunnel_id.clone();
-            let context = self.context.clone();
-            tokio::spawn(async move {
-                shutdown_tunnel(context, tunnel_id).await;
-            });
-        }
-    }
-
-    let _cleanup_guard = CleanupGuard {
-        tunnel_id: tunnel_id.clone(),
-        context: context.clone(),
-    };
+    let _cleanup_guard = guard!(tunnel_id, context => {
+        shutdown_tunnel(context, tunnel_id).await;
+    });
 
     let (ping_tx, mut ping_rx) = mpsc::unbounded_channel::<()>();
     let cancel_token = CancellationToken::new();

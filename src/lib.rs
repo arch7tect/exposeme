@@ -1,3 +1,6 @@
+#[macro_use]
+mod macros;
+
 pub mod protocol;
 pub mod config;
 mod ssl;

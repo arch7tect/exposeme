@@ -237,7 +237,7 @@ async fn main() -> Result<(), BoxError> {
 
     println!("Simple SSE Test Server running on http://{}", addr);
     println!("Open http://{} in your browser", addr);
-    println!("");
+    println!();
 
     loop {
         let (stream, _) = listener.accept().await?;

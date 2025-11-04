@@ -307,8 +307,8 @@ impl SslManager {
         domain: &str,
         auth_no: i32,
     ) -> Result<DnsCleanupInfo, Box<dyn Error + Send + Sync>> {
-        let record_domain = if domain.starts_with("*.") {
-            domain[2..].to_string()
+        let record_domain = if let Some(stripped) = domain.strip_prefix("*.") {
+            stripped.to_string()
         } else {
             domain.to_string()
         };

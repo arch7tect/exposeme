@@ -64,17 +64,14 @@ impl Default for ServerSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum RoutingMode {
+    #[default]
     Path,      // /tunnel-id/path
     Subdomain, // tunnel-id.domain.com/path
     Both,      
 }
 
-impl Default for RoutingMode {
-    fn default() -> Self {
-        RoutingMode::Path
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -96,17 +93,14 @@ pub struct DnsProviderConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum SslProvider {
+    #[default]
     LetsEncrypt,
     Manual,
     SelfSigned,
 }
 
-impl Default for SslProvider {
-    fn default() -> Self {
-        SslProvider::LetsEncrypt
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthSettings {
@@ -122,6 +116,7 @@ pub struct LimitSettings {
 
 /// Client configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ClientConfig {
     pub client: ClientSettings,
 }
@@ -160,13 +155,6 @@ impl Default for ClientSettings {
     }
 }
 
-impl Default for ClientConfig {
-    fn default() -> Self {
-        Self {
-            client: ClientSettings::default(),
-        }
-    }
-}
 
 #[derive(Parser, Debug)]
 #[command(name = "exposeme-server")]
@@ -458,12 +446,10 @@ impl ServerConfig {
             } else {
                 format!("https://{}:{}", self.server.domain, self.server.https_port)
             }
+        } else if self.server.http_port == 80 {
+            format!("http://{}", self.server.domain)
         } else {
-            if self.server.http_port == 80 {
-                format!("http://{}", self.server.domain)
-            } else {
-                format!("http://{}:{}", self.server.domain, self.server.http_port)
-            }
+            format!("http://{}:{}", self.server.domain, self.server.http_port)
         }
     }
 
@@ -476,12 +462,10 @@ impl ServerConfig {
                     } else {
                         format!("https://{}.{}:{}", tunnel_id, self.server.domain, self.server.https_port)
                     }
+                } else if self.server.http_port == 80 {
+                    format!("http://{}.{}", tunnel_id, self.server.domain)
                 } else {
-                    if self.server.http_port == 80 {
-                        format!("http://{}.{}", tunnel_id, self.server.domain)
-                    } else {
-                        format!("http://{}.{}:{}", tunnel_id, self.server.domain, self.server.http_port)
-                    }
+                    format!("http://{}.{}:{}", tunnel_id, self.server.domain, self.server.http_port)
                 }
             },
             RoutingMode::Path => {
@@ -494,12 +478,10 @@ impl ServerConfig {
                     } else {
                         format!("https://{}.{}:{}", tunnel_id, self.server.domain, self.server.https_port)
                     }
+                } else if self.server.http_port == 80 {
+                    format!("http://{}.{}", tunnel_id, self.server.domain)
                 } else {
-                    if self.server.http_port == 80 {
-                        format!("http://{}.{}", tunnel_id, self.server.domain)
-                    } else {
-                        format!("http://{}.{}:{}", tunnel_id, self.server.domain, self.server.http_port)
-                    }
+                    format!("http://{}.{}:{}", tunnel_id, self.server.domain, self.server.http_port)
                 }
             }
         }

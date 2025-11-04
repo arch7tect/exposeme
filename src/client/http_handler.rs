@@ -53,7 +53,7 @@ impl HttpHandler {
         let local_target = self.local_target.clone();
         let to_server_tx = self.to_server_tx.clone();
 
-        if is_complete == true {
+        if is_complete {
             debug!("Processing complete request: {} {} ({} bytes)", method, path, initial_data.len());
 
             tokio::spawn(async move {

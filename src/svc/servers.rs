@@ -18,6 +18,7 @@ use tower_http::compression::CompressionLayer;
 use tracing::{error, info};
 
 /// Start the HTTP server (handles redirects and ACME challenges)
+#[allow(clippy::too_many_arguments)]
 pub async fn start_http_server(
     config: ServerConfig,
     tunnels: TunnelMap,
@@ -74,6 +75,7 @@ pub async fn start_http_server(
 }
 
 /// Start the HTTPS server (handles secure tunneled requests)
+#[allow(clippy::too_many_arguments)]
 pub async fn start_https_server(
     config: ServerConfig,
     tunnels: TunnelMap,

@@ -23,20 +23,20 @@ pub async fn handle_api(
 
     match (method, path) {
         (&hyper::Method::GET, "/api/certificates") => {
-            handle_certificate_status(ssl_manager, config).await.map(|resp| Some(resp))
+            handle_certificate_status(ssl_manager, config).await.map(Some)
         }
 
         (&hyper::Method::GET, "/api/certificates/info") => {
-            handle_certificate_info(ssl_manager, config).await.map(|resp| Some(resp))
+            handle_certificate_info(ssl_manager, config).await.map(Some)
         }
 
         (&hyper::Method::GET, "/api/health") => {
-            handle_extended_health_check(ssl_manager, config).await.map(|resp| Some(resp))
+            handle_extended_health_check(ssl_manager, config).await.map(Some)
         }
 
         (&hyper::Method::GET, "/api/metrics") => {
             if let Some(ctx) = context {
-                handle_metrics_endpoint(ctx).await.map(|resp| Some(resp))
+                handle_metrics_endpoint(ctx).await.map(Some)
             } else {
                 Ok(Some(Response::builder()
                     .status(StatusCode::SERVICE_UNAVAILABLE)
@@ -47,7 +47,7 @@ pub async fn handle_api(
 
         (&hyper::Method::GET, "/api/metrics/stream") => {
             if let Some(ctx) = context {
-                handle_metrics_stream_endpoint(ctx.clone()).await.map(|resp| Some(resp))
+                handle_metrics_stream_endpoint(ctx.clone()).await.map(Some)
             } else {
                 Ok(Some(Response::builder()
                     .status(StatusCode::SERVICE_UNAVAILABLE)
@@ -111,10 +111,7 @@ async fn handle_certificate_info(
 ) -> Result<Response<ResponseBody>, BoxError> {
     let manager = ssl_manager.read().await;
 
-    let cert_info = match manager.get_certificate_info().await {
-        Ok(info) => Some(info),
-        Err(_) => None,
-    };
+    let cert_info = (manager.get_certificate_info().await).ok();
 
     let response = json!({
         "domain": config.server.domain,

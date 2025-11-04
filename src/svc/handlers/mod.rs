@@ -103,27 +103,25 @@ async fn route_request(
 
     if context.is_https {
         tunnel::handle_tunnel_request(req, context.clone()).await
+    } else if context.config.ssl.enabled {
+        let host = req.headers()
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or(&context.config.server.domain);
+
+        let https_url = format!(
+            "https://{}{}",
+            host,
+            req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("")
+        );
+
+        Ok(Response::builder()
+            .status(StatusCode::MOVED_PERMANENTLY)
+            .header("Location", https_url)
+            .body(boxed_body("Redirecting to HTTPS"))
+            .unwrap())
     } else {
-        if context.config.ssl.enabled {
-            let host = req.headers()
-                .get("host")
-                .and_then(|h| h.to_str().ok())
-                .unwrap_or(&context.config.server.domain);
-
-            let https_url = format!(
-                "https://{}{}",
-                host,
-                req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or("")
-            );
-
-            Ok(Response::builder()
-                .status(StatusCode::MOVED_PERMANENTLY)
-                .header("Location", https_url)
-                .body(boxed_body("Redirecting to HTTPS"))
-                .unwrap())
-        } else {
-            debug!("Processing tunneled HTTP request via HTTP (SSL disabled)");
-            tunnel::handle_tunnel_request(req, context).await
-        }
+        debug!("Processing tunneled HTTP request via HTTP (SSL disabled)");
+        tunnel::handle_tunnel_request(req, context).await
     }
 }

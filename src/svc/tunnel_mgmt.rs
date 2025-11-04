@@ -410,7 +410,7 @@ async fn handle_http_response_start(
     );
 
     if let Some(request) = context.active_requests.read().await.get(&id) {
-        if is_complete == true {
+        if is_complete {
             let complete_event = ResponseEvent::Complete {
                 status,
                 headers,
@@ -516,14 +516,10 @@ async fn handle_websocket_close(
             connection.status_summary()
         );
         if let Some(ws_tx) = &connection.ws_tx {
-            let close_frame = if let Some(code) = code {
-                Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+            let close_frame = code.map(|code| tokio_tungstenite::tungstenite::protocol::CloseFrame {
                     code: code.into(),
                     reason: reason.unwrap_or_default().into(),
-                })
-            } else {
-                None
-            };
+                });
 
             if let Err(e) = ws_tx.send(WsMessage::Close(close_frame)) {
                 error!("Failed to send close frame for {}: {:?}", connection_id, e);

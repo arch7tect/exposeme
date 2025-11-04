@@ -77,6 +77,7 @@ impl WebSocketHandler {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_websocket_upgrade(
     local_target: &str,
     to_server_tx: &mpsc::UnboundedSender<Message>,

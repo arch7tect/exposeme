@@ -68,7 +68,7 @@ async fn route_request(
         }
     }
 
-    if path.starts_with("/admin/") && context.metrics.is_some() {
+    if path.starts_with("/admin/") {
         if let Some(response) = admin::handle_admin_request(&req, context.clone(), path).await? {
             return Ok(response);
         }

@@ -49,9 +49,7 @@ pub async fn handle_tunnel_management_connection(
     }
     debug!("Authentication successful for tunnel '{}'", tunnel_id);
 
-    if let Some(metrics) = &context.metrics {
-        metrics.tunnel_connected(&tunnel_id);
-    }
+    context.metrics.tunnel_connected(&tunnel_id);
 
     let _cleanup_guard = guard!(tunnel_id, context => {
         shutdown_tunnel(context, tunnel_id).await;
@@ -83,9 +81,7 @@ pub async fn handle_tunnel_management_connection(
 
                 if let Err(e) = ws_sender.send(WsMessage::Ping(ping_payload.into())).await {
                     error!("Failed to send ping to tunnel '{}': {}", tunnel_id, e);
-                    if let Some(metrics) = &context.metrics {
-                        metrics.record_error(Some(&tunnel_id));
-                    }
+                    context.metrics.record_error(Some(&tunnel_id));
                     break;
                 }
 
@@ -103,17 +99,13 @@ pub async fn handle_tunnel_management_connection(
                     Ok(bytes) => {
                         if let Err(e) = ws_sender.send(WsMessage::Binary(bytes.into())).await {
                             error!("Failed to send WS message to client: {}", e);
-                            if let Some(metrics) = &context.metrics {
-                                metrics.record_error(Some(&tunnel_id));
-                            }
+                            context.metrics.record_error(Some(&tunnel_id));
                             break;
                         }
                     }
                     Err(e) => {
                         error!("Failed to serialize message to bincode: {}", e);
-                        if let Some(metrics) = &context.metrics {
-                            metrics.record_error(Some(&tunnel_id));
-                        }
+                        context.metrics.record_error(Some(&tunnel_id));
                     }
                 }
             }
@@ -188,18 +180,14 @@ pub async fn handle_tunnel_management_connection(
                             }
                             Err(e) => {
                                 error!("Failed to parse bincode message: {}", e);
-                                if let Some(metrics) = &context.metrics {
-                                    metrics.record_error(Some(&tunnel_id));
-                                }
+                                context.metrics.record_error(Some(&tunnel_id));
                             }
                         }
                     }
                     Ok(WsMessage::Text(text)) => {
                         error!("Received unexpected text message (protocol requires binary): {} chars", text.len());
                         error!("Please ensure both client and server are using the same protocol version");
-                        if let Some(metrics) = &context.metrics {
-                            metrics.record_error(Some(&tunnel_id));
-                        }
+                        context.metrics.record_error(Some(&tunnel_id));
                     }
                     Ok(WsMessage::Pong(_)) => {
                         debug!("Received native WebSocket pong from tunnel '{}'", tunnel_id);
@@ -213,9 +201,7 @@ pub async fn handle_tunnel_management_connection(
                     }
                     Err(e) => {
                         error!("Tunnel management WebSocket error: {}", e);
-                        if let Some(metrics) = &context.metrics {
-                            metrics.record_error(Some(&tunnel_id));
-                        }
+                        context.metrics.record_error(Some(&tunnel_id));
                         break;
                     }
                     _ => {}
@@ -487,9 +473,7 @@ async fn handle_websocket_data(connection_id: String, data: Vec<u8>, context: &S
             data.len()
         );
 
-        if let Some(metrics) = &context.metrics {
-            metrics.record_websocket_traffic(&connection.tunnel_id, 0, data.len() as u64);
-        }
+        context.metrics.record_websocket_traffic(&connection.tunnel_id, 0, data.len() as u64);
         if let Some(ws_tx) = &connection.ws_tx {
             let ws_message = if let Ok(text) = String::from_utf8(data.clone()) {
                 WsMessage::Text(text.into())
@@ -603,9 +587,7 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
             {
                 debug!("Cleaned up WebSocket connection: {}", connection_id);
 
-                if let Some(metrics) = &context.metrics {
-                    metrics.websocket_disconnected(&tunnel_id);
-                }
+                context.metrics.websocket_disconnected(&tunnel_id);
 
                 if let Some(ws_tx) = &connection.ws_tx {
                     let close_msg = WsMessage::Close(Some(
@@ -622,9 +604,7 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
         }
     }
 
-    if let Some(metrics) = &context.metrics {
-        metrics.tunnel_disconnected(&tunnel_id);
-    }
+    context.metrics.tunnel_disconnected(&tunnel_id);
 
     tunnel_existed
 }

@@ -142,5 +142,5 @@ pub struct ServiceContext {
     pub challenge_store: ChallengeStore,
     pub ssl_manager: Arc<RwLock<SslManager>>,
     pub is_https: bool,
-    pub metrics: Option<Arc<MetricsCollector>>,
+    pub metrics: Arc<MetricsCollector>,
 }

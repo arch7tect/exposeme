@@ -44,9 +44,7 @@ pub async fn handle_tunnel_request(
         Some(sender) => sender,
         None => {
             warn!("Tunnel '{}' not found", tunnel_id);
-            if let Some(metrics) = &context.metrics {
-                metrics.record_error(Some(&tunnel_id));
-            }
+            context.metrics.record_error(Some(&tunnel_id));
             return Ok(Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
                 .body(boxed_body("Tunnel not available"))
@@ -157,7 +155,7 @@ pub async fn handle_tunnel_request(
         }
     }
 
-    build_response(request_id, response_rx, context.active_requests, context.metrics.as_ref(), &tunnel_id, request_size).await
+    build_response(request_id, response_rx, context.active_requests, &context.metrics, &tunnel_id, request_size).await
 }
 
 /// Response builder that adds SSE-specific headers when needed
@@ -165,7 +163,7 @@ async fn build_response(
     request_id: String,
     mut response_rx: mpsc::Receiver<ResponseEvent>,
     active_requests: ActiveRequests,
-    metrics: Option<&Arc<crate::observability::MetricsCollector>>,
+    metrics: &Arc<crate::observability::MetricsCollector>,
     tunnel_id: &str,
     request_size: u64,
 ) -> Result<Response<ResponseBody>, BoxError> {
@@ -175,9 +173,7 @@ async fn build_response(
             active_requests.write().await.remove(&request_id);
             
             // Record actual request/response bytes in metrics
-            if let Some(metrics) = metrics {
-                metrics.record_request(tunnel_id, request_size, body.len() as u64);
-            }
+            metrics.record_request(tunnel_id, request_size, body.len() as u64);
 
             if headers.get("content-type")
                 .map(|ct| ct.contains("text/event-stream"))
@@ -203,9 +199,7 @@ async fn build_response(
             info!("{} response: {} (initial: {} bytes)", response_type, status, initial_data.len());
             
             // Record streaming request in metrics (initial bytes only, as total is unknown)
-            if let Some(metrics) = metrics {
-                metrics.record_request(tunnel_id, request_size, initial_data.len() as u64);
-            }
+            metrics.record_request(tunnel_id, request_size, initial_data.len() as u64);
 
             if is_sse_response {
                 debug!("Adding SSE-specific response headers");
@@ -219,7 +213,7 @@ async fn build_response(
 
             let active_requests_for_stream = active_requests.clone();
             let request_id_for_stream = request_id.clone();
-            let metrics_for_stream = metrics.cloned();
+            let metrics_for_stream = metrics.clone();
             let tunnel_id_for_stream = tunnel_id.to_string();
 
             let body_stream = stream! {
@@ -240,11 +234,9 @@ async fn build_response(
                         ResponseEvent::StreamEnd => {
                             debug!("Stream ended {} (total: {} bytes)", request_id_for_stream, total_streaming_bytes);
                             // Record total streaming bytes in metrics (subtract initial data since it was already counted)
-                            if let Some(ref metrics) = metrics_for_stream {
-                                let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
-                                if additional_bytes > 0 {
-                                    metrics.record_request(&tunnel_id_for_stream, 0, additional_bytes);
-                                }
+                            let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
+                            if additional_bytes > 0 {
+                                metrics_for_stream.record_request(&tunnel_id_for_stream, 0, additional_bytes);
                             }
                             active_requests_for_stream.write().await.remove(&request_id_for_stream);
                             break;
@@ -252,11 +244,9 @@ async fn build_response(
                         ResponseEvent::Error(e) => {
                             error!("Stream error {} (streamed: {} bytes): {}", request_id_for_stream, total_streaming_bytes, e);
                             // Record partial streaming bytes even on error
-                            if let Some(ref metrics) = metrics_for_stream {
-                                let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
-                                if additional_bytes > 0 {
-                                    metrics.record_request(&tunnel_id_for_stream, 0, additional_bytes);
-                                }
+                            let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
+                            if additional_bytes > 0 {
+                                metrics_for_stream.record_request(&tunnel_id_for_stream, 0, additional_bytes);
                             }
                             active_requests_for_stream.write().await.remove(&request_id_for_stream);
                             yield Err(e.into());
@@ -269,11 +259,9 @@ async fn build_response(
                 if active_requests_for_stream.write().await.remove(&request_id_for_stream).is_some() {
                     debug!("Final cleanup for streaming request {} (streamed: {} bytes)", request_id_for_stream, total_streaming_bytes);
                     // Record final bytes if we didn't hit StreamEnd/Error
-                    if let Some(ref metrics) = metrics_for_stream {
-                        let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
-                        if additional_bytes > 0 {
-                            metrics.record_request(&tunnel_id_for_stream, 0, additional_bytes);
-                        }
+                    let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
+                    if additional_bytes > 0 {
+                        metrics_for_stream.record_request(&tunnel_id_for_stream, 0, additional_bytes);
                     }
                 }
             };

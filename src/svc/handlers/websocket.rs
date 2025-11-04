@@ -87,9 +87,7 @@ pub async fn handle_websocket_upgrade_request(
         Some(sender) => sender,
         None => {
             warn!("Tunnel '{}' not found for WebSocket upgrade", tunnel_id);
-            if let Some(metrics) = &context.metrics {
-                metrics.record_error(Some(&tunnel_id));
-            }
+            context.metrics.record_error(Some(&tunnel_id));
             return Ok(Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
                 .body(boxed_body("Tunnel not available"))
@@ -222,8 +220,8 @@ async fn handle_websocket_proxy_connection(
         let websockets = context.active_websockets.read().await;
         websockets.get(&connection_id).map(|conn| conn.tunnel_id.clone())
     };
-    if let (Some(metrics), Some(tunnel_id)) = (&context.metrics, tunnel_id_for_metrics) {
-        metrics.websocket_connected(&tunnel_id);
+    if let Some(tunnel_id) = tunnel_id_for_metrics {
+        context.metrics.websocket_connected(&tunnel_id);
     }
 
     let connection_id_clone = connection_id.clone();
@@ -240,11 +238,9 @@ async fn handle_websocket_proxy_connection(
                     };
 
                     // Record WebSocket traffic (client -> server -> tunnel)
-                    if let Some(metrics) = &context_clone.metrics {
-                        if let Some(tunnel_id) = context_clone.active_websockets.read().await
-                            .get(&connection_id_clone).map(|conn| conn.tunnel_id.clone()) {
-                            metrics.record_websocket_traffic(&tunnel_id, data.len() as u64, 0);
-                        }
+                    if let Some(tunnel_id) = context_clone.active_websockets.read().await
+                        .get(&connection_id_clone).map(|conn| conn.tunnel_id.clone()) {
+                        context_clone.metrics.record_websocket_traffic(&tunnel_id, data.len() as u64, 0);
                     }
 
                     if let Err(e) = send_to_tunnel(
@@ -265,11 +261,9 @@ async fn handle_websocket_proxy_connection(
                     };
 
                     // Record WebSocket traffic (client -> server -> tunnel)
-                    if let Some(metrics) = &context_clone.metrics {
-                        if let Some(tunnel_id) = context_clone.active_websockets.read().await
-                            .get(&connection_id_clone).map(|conn| conn.tunnel_id.clone()) {
-                            metrics.record_websocket_traffic(&tunnel_id, data.len() as u64, 0);
-                        }
+                    if let Some(tunnel_id) = context_clone.active_websockets.read().await
+                        .get(&connection_id_clone).map(|conn| conn.tunnel_id.clone()) {
+                        context_clone.metrics.record_websocket_traffic(&tunnel_id, data.len() as u64, 0);
                     }
 
                     if let Err(e) = send_to_tunnel(
@@ -363,8 +357,8 @@ async fn handle_websocket_proxy_connection(
     };
 
     // Record WebSocket disconnection in metrics
-    if let (Some(metrics), Some(tunnel_id)) = (&context.metrics, tunnel_id) {
-        metrics.websocket_disconnected(&tunnel_id);
+    if let Some(tunnel_id) = tunnel_id {
+        context.metrics.websocket_disconnected(&tunnel_id);
     }
 
     info!(
@@ -396,17 +390,13 @@ pub async fn send_to_tunnel(
         match tunnels_guard.get(&tunnel_id).map(|conn| conn.sender.clone()) {
             Some(tunnel_sender) => {
                 if let Err(e) = tunnel_sender.send(message) {
-                    if let Some(metrics) = &context.metrics {
-                        metrics.record_error(Some(&tunnel_id));
-                    }
+                    context.metrics.record_error(Some(&tunnel_id));
                     return Err(format!("Failed to send: {}", e).into());
                 }
             }
             None => {
                 debug!("Tunnel {} disconnected, ignoring message for connection {}", tunnel_id, connection_id);
-                if let Some(metrics) = &context.metrics {
-                    metrics.record_error(Some(&tunnel_id));
-                }
+                context.metrics.record_error(Some(&tunnel_id));
                 return Ok(());
             }
         }

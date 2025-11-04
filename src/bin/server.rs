@@ -83,7 +83,7 @@ async fn main() -> Result<(), BoxError> {
     let config_http = config.clone();
     let challenge_store_http = challenge_store.clone();
     let ssl_manager_http = ssl_manager.clone();
-    let metrics_http = Some(metrics.clone());
+    let metrics_http = metrics.clone();
 
     let http_handle = tokio::spawn(async move {
         if let Err(e) = start_http_server(
@@ -111,7 +111,7 @@ async fn main() -> Result<(), BoxError> {
         let config_https = config.clone();
         let ssl_config_for_https = ssl_manager.read().await.get_rustls_config().unwrap();
         let ssl_manager_https = ssl_manager.clone();
-        let metrics_https = Some(metrics.clone());
+        let metrics_https = metrics.clone();
 
         Some(tokio::spawn(async move {
             if let Err(e) = start_https_server(

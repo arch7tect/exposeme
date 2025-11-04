@@ -25,7 +25,7 @@ pub async fn start_http_server(
     active_websockets: ActiveWebSockets,
     challenge_store: ChallengeStore,
     ssl_manager: Arc<RwLock<SslManager>>,
-    metrics: Option<Arc<MetricsCollector>>,
+    metrics: Arc<MetricsCollector>,
     shutdown_token: CancellationToken,
 ) -> Result<(), BoxError> {
     let addr: std::net::SocketAddr = config.http_addr().parse()?;
@@ -81,7 +81,7 @@ pub async fn start_https_server(
     active_websockets: ActiveWebSockets,
     ssl_manager: Arc<RwLock<SslManager>>,
     tls_config: Arc<RustlsConfig>,
-    metrics: Option<Arc<MetricsCollector>>,
+    metrics: Arc<MetricsCollector>,
     shutdown_token: CancellationToken,
 ) -> Result<(), BoxError> {
     let tls_acceptor = TlsAcceptor::from(tls_config);

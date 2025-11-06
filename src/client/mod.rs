@@ -379,7 +379,7 @@ impl ExposeMeClient {
 
                 let current_count = active_websockets.read().await.len();
                 if current_count > 0 || cleaned > 0 {
-                    info!(
+                    debug!(
                         "WebSocket status: {} active connections, {} cleaned up (max_idle: {}s, check_interval: {}s)",
                         current_count,
                         cleaned,

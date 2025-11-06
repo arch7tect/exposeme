@@ -163,7 +163,7 @@ async fn handle_websocket_upgrade(
                                     warn!("WebSocket {}: Connection timeout detected ({})", connection.connection_id, connection.status_summary().await);
                                     true
                                 } else {
-                                    info!("WebSocket {}: Health check: {}", connection.connection_id, connection.status_summary().await);
+                                    debug!("WebSocket {}: Health check: {}", connection.connection_id, connection.status_summary().await);
                                     false
                                 }
                             } else {

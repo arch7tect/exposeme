@@ -3,16 +3,14 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::info;
 
-use crate::dns::{DnsProvider, DnsProviderFactory, ConfigHelper, ZoneInfo};
+use crate::dns::{ConfigHelper, DnsProvider, DnsProviderFactory, ZoneInfo};
 
-/// Hetzner DNS provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HetznerConfig {
     pub api_token: String,
     pub timeout_seconds: Option<u64>,
 }
 
-/// Hetzner DNS API response structures
 #[derive(Debug, Deserialize)]
 struct ZonesResponse {
     zones: Vec<Zone>,
@@ -58,7 +56,6 @@ struct RecordsResponse {
     records: Vec<DnsRecord>,
 }
 
-/// Hetzner DNS provider implementation
 pub struct HetznerProvider {
     config: HetznerConfig,
     client: reqwest::Client,
@@ -75,6 +72,19 @@ impl HetznerProvider {
 
         info!("Hetzner DNS provider initialized");
         Self { config, client }
+    }
+
+    async fn ensure_success(
+        &self,
+        response: reqwest::Response,
+        context: &str,
+    ) -> Result<reqwest::Response, Box<dyn std::error::Error + Send + Sync>> {
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        let error_text = response.text().await?;
+        Err(format!("{}: {}", context, error_text).into())
     }
 }
 
@@ -124,16 +134,13 @@ impl DnsProvider for HetznerProvider {
             .send()
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Hetzner API error ({}): {}", status, error_text).into());
-        }
-
+        let response = self
+            .ensure_success(response, "Hetzner API error")
+            .await?;
         let zones_response: ZonesResponse = response.json().await?;
         let zone_infos: Vec<ZoneInfo> = zones_response.zones
             .into_iter()
-            .map(|zone| ZoneInfo::new(zone.id, zone.name)) // Store both ID and name
+            .map(|zone| ZoneInfo::new(zone.id, zone.name))
             .collect();
 
         info!("Found {} zones", zone_infos.len());
@@ -154,12 +161,9 @@ impl DnsProvider for HetznerProvider {
             .send()
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Hetzner API error ({}): {}", status, error_text).into());
-        }
-
+        let response = self
+            .ensure_success(response, "Hetzner API error")
+            .await?;
         let records_response: RecordsResponse = response.json().await?;
         let matching_record_ids: Vec<String> = records_response.records
             .iter()
@@ -182,7 +186,7 @@ impl DnsProvider for HetznerProvider {
         info!("Creating TXT record: {} in zone {} = {}", name, zone.name, value);
 
         let create_request = CreateRecordRequest {
-            zone_id: zone.id.clone(), // No extra lookup needed
+            zone_id: zone.id.clone(),
             record_type: "TXT".to_string(),
             name: name.to_string(),
             value: value.to_string(),
@@ -197,12 +201,9 @@ impl DnsProvider for HetznerProvider {
             .send()
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Hetzner API error ({}): {}", status, error_text).into());
-        }
-
+        let response = self
+            .ensure_success(response, "Hetzner API error")
+            .await?;
         let create_response: CreateRecordResponse = response.json().await?;
         let record_id = create_response.record.id;
 
@@ -212,7 +213,7 @@ impl DnsProvider for HetznerProvider {
 
     async fn delete_txt_record_impl(
         &mut self,
-        _zone: &ZoneInfo, // Zone not needed for Hetzner delete
+        _zone: &ZoneInfo,
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Deleting TXT record {}", record_id);
@@ -225,11 +226,7 @@ impl DnsProvider for HetznerProvider {
             .send()
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Failed to delete record ({}): {}", status, error_text).into());
-        }
+        self.ensure_success(response, "Failed to delete record").await?;
 
         info!("Deleted TXT record {}", record_id);
         Ok(())
@@ -238,7 +235,7 @@ impl DnsProvider for HetznerProvider {
 
     async fn delete_txt_record(
         &mut self,
-        _domain: &str, // Domain not needed for Hetzner delete
+        _domain: &str,
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let dummy_zone = ZoneInfo::from_name("unused".to_string());

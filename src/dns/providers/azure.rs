@@ -1,12 +1,11 @@
-use std::error::Error;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
 use std::time::Duration;
-use tracing::{info};
+use tracing::info;
 
-use crate::dns::{DnsProvider, DnsProviderFactory, ConfigHelper, ZoneInfo};
+use crate::dns::{ConfigHelper, DnsProvider, DnsProviderFactory, ZoneInfo};
 
-/// Azure DNS provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AzureConfig {
     pub subscription_id: String,
@@ -17,7 +16,6 @@ pub struct AzureConfig {
     pub timeout_seconds: Option<u64>,
 }
 
-/// Azure DNS API response structures
 #[derive(Debug, Deserialize)]
 struct AccessTokenResponse {
     access_token: String,
@@ -31,8 +29,8 @@ struct ZonesListResponse {
 
 #[derive(Debug, Deserialize)]
 struct AzureZone {
-    id: String,   // Full resource ID like "/subscriptions/.../dnsZones/example.com"
-    name: String, // Zone name like "example.com"
+    id: String,
+    name: String,
     #[allow(dead_code)]
     #[serde(rename = "type")]
     zone_type: String,
@@ -85,7 +83,6 @@ struct TxtRecordInfo {
     value: Vec<String>,
 }
 
-/// Azure DNS provider implementation
 pub struct AzureProvider {
     config: AzureConfig,
     client: reqwest::Client,
@@ -111,7 +108,6 @@ impl AzureProvider {
         }
     }
 
-    /// Get Azure access token using Service Principal
     async fn get_access_token(&mut self) -> Result<String, Box<dyn Error + Send + Sync>> {
         if let (Some(token), Some(expires_at)) = (&self.access_token, self.token_expires_at) {
             if std::time::Instant::now() < expires_at {
@@ -153,6 +149,19 @@ impl AzureProvider {
 
         info!("Azure access token obtained");
         Ok(token_response.access_token)
+    }
+
+    async fn ensure_success(
+        &self,
+        response: reqwest::Response,
+        context: &str,
+    ) -> Result<reqwest::Response, Box<dyn Error + Send + Sync>> {
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        let error_text = response.text().await?;
+        Err(format!("{}: {}", context, error_text).into())
     }
 }
 
@@ -221,15 +230,13 @@ impl DnsProvider for AzureProvider {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Azure DNS zones list error: {}", error_text).into());
-        }
-
+        let response = self
+            .ensure_success(response, "Azure DNS zones list error")
+            .await?;
         let zones_response: ZonesListResponse = response.json().await?;
         let zone_infos: Vec<ZoneInfo> = zones_response.value
             .into_iter()
-            .map(|zone| ZoneInfo::new(zone.id, zone.name)) // Both resource ID and name
+            .map(|zone| ZoneInfo::new(zone.id, zone.name))
             .collect();
 
         info!("Found {} zones", zone_infos.len());
@@ -249,7 +256,7 @@ impl DnsProvider for AzureProvider {
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/recordsets?api-version=2018-05-01&$filter=recordType eq 'TXT'",
             self.config.subscription_id,
             self.config.resource_group,
-            zone.name // Uses zone.name for API path
+            zone.name
         );
 
         let response = self.client
@@ -258,11 +265,9 @@ impl DnsProvider for AzureProvider {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Azure DNS records list error: {}", error_text).into());
-        }
-
+        let response = self
+            .ensure_success(response, "Azure DNS records list error")
+            .await?;
         let recordsets_response: RecordSetsResponse = response.json().await?;
 
         let matching_record_ids: Vec<String> = recordsets_response.value
@@ -300,7 +305,7 @@ impl DnsProvider for AzureProvider {
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/TXT/{}?api-version=2018-05-01",
             self.config.subscription_id,
             self.config.resource_group,
-            zone.name, // Uses zone.name for API path
+            zone.name,
             name
         );
 
@@ -312,10 +317,8 @@ impl DnsProvider for AzureProvider {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Azure DNS record creation error: {}", error_text).into());
-        }
+        self.ensure_success(response, "Azure DNS record creation error")
+            .await?;
 
         info!("Created TXT record: {}", name);
         Ok(name.to_string())
@@ -334,7 +337,7 @@ impl DnsProvider for AzureProvider {
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/TXT/{}?api-version=2018-05-01",
             self.config.subscription_id,
             self.config.resource_group,
-            zone.name, // Uses zone.name for API path
+            zone.name,
             record_id
         );
 
@@ -344,10 +347,7 @@ impl DnsProvider for AzureProvider {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Failed to delete record: {}", error_text).into());
-        }
+        self.ensure_success(response, "Failed to delete record").await?;
 
         info!("Deleted TXT record {}", record_id);
         Ok(())

@@ -5,14 +5,12 @@ use tracing::info;
 
 use crate::dns::{ConfigHelper, DnsProvider, DnsProviderFactory, ZoneInfo};
 
-/// DigitalOcean DNS provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DigitalOceanConfig {
     pub api_token: String,
     pub timeout_seconds: Option<u64>,
 }
 
-/// DigitalOcean DNS API response structures
 #[derive(Debug, Deserialize)]
 struct DomainsResponse {
     domains: Vec<Domain>,
@@ -53,7 +51,6 @@ struct RecordsResponse {
     domain_records: Vec<DnsRecord>,
 }
 
-/// DigitalOcean DNS provider implementation
 pub struct DigitalOceanProvider {
     config: DigitalOceanConfig,
     client: reqwest::Client,
@@ -70,6 +67,19 @@ impl DigitalOceanProvider {
 
         info!("DigitalOcean DNS provider initialized");
         Self { config, client }
+    }
+
+    async fn ensure_success(
+        &self,
+        response: reqwest::Response,
+        context: &str,
+    ) -> Result<reqwest::Response, Box<dyn std::error::Error + Send + Sync>> {
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        let error_text = response.text().await?;
+        Err(format!("{}: {}", context, error_text).into())
     }
 }
 
@@ -119,16 +129,13 @@ impl DnsProvider for DigitalOceanProvider {
             .send()
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("DigitalOcean API error ({}): {}", status, error_text).into());
-        }
-
+        let response = self
+            .ensure_success(response, "DigitalOcean API error")
+            .await?;
         let domains_response: DomainsResponse = response.json().await?;
         let zone_infos: Vec<ZoneInfo> = domains_response.domains
             .into_iter()
-            .map(|domain| ZoneInfo::from_name(domain.name)) // ID = name for DigitalOcean
+            .map(|domain| ZoneInfo::from_name(domain.name))
             .collect();
 
         info!("Found {} domains", zone_infos.len());
@@ -149,12 +156,9 @@ impl DnsProvider for DigitalOceanProvider {
             .send()
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("DigitalOcean API error ({}): {}", status, error_text).into());
-        }
-
+        let response = self
+            .ensure_success(response, "DigitalOcean API error")
+            .await?;
         let records_response: RecordsResponse = response.json().await?;
         let matching_record_ids: Vec<String> = records_response.domain_records
             .iter()
@@ -192,12 +196,9 @@ impl DnsProvider for DigitalOceanProvider {
             .send()
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("DigitalOcean API error ({}): {}", status, error_text).into());
-        }
-
+        let response = self
+            .ensure_success(response, "DigitalOcean API error")
+            .await?;
         let create_response: CreateRecordResponse = response.json().await?;
         let record_id = create_response.domain_record.id
             .ok_or("No record ID returned from DigitalOcean")?;
@@ -225,11 +226,7 @@ impl DnsProvider for DigitalOceanProvider {
             .send()
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Failed to delete record ({}): {}", status, error_text).into());
-        }
+        self.ensure_success(response, "Failed to delete record").await?;
 
         info!("Deleted TXT record {}", record_id);
         Ok(())

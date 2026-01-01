@@ -5,14 +5,12 @@ use tracing::info;
 
 use crate::dns::{DnsProvider, DnsProviderFactory, ConfigHelper, ZoneInfo};
 
-/// Cloudflare DNS provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudflareConfig {
     pub api_token: String,
     pub timeout_seconds: Option<u64>,
 }
 
-/// Cloudflare DNS API response structures
 #[derive(Debug, Deserialize)]
 struct CloudflareResponse<T> {
     success: bool,
@@ -61,7 +59,6 @@ struct CreateRecordRequest {
     ttl: u32,
 }
 
-/// Cloudflare DNS provider implementation
 pub struct CloudflareProvider {
     config: CloudflareConfig,
     client: reqwest::Client,
@@ -83,22 +80,27 @@ impl CloudflareProvider {
     async fn handle_cloudflare_response<T>(
         &self,
         response: reqwest::Response,
-    ) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
+    ) -> Result<Option<T>, Box<dyn std::error::Error + Send + Sync>>
     where
         T: for<'de> Deserialize<'de>,
     {
         let status = response.status();
-        let response_text = response.text().await?;
+        let text = response.text().await?;
 
         if !status.is_success() {
-            return Err(format!("Cloudflare API error ({}): {}", status, response_text).into());
+            return Err(format!("Cloudflare API error ({}): {}", status, text).into());
         }
 
-        let cf_response: CloudflareResponse<T> = serde_json::from_str(&response_text)
+        if text.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let cf_response: CloudflareResponse<T> = serde_json::from_str(&text)
             .map_err(|e| format!("Failed to parse Cloudflare response: {}", e))?;
 
         if !cf_response.messages.is_empty() {
-            let info_messages: Vec<String> = cf_response.messages
+            let info_messages: Vec<String> = cf_response
+                .messages
                 .iter()
                 .map(|m| format!("Code {}: {}", m.code, m.message))
                 .collect();
@@ -106,16 +108,15 @@ impl CloudflareProvider {
         }
 
         if !cf_response.success {
-            let error_messages: Vec<String> = cf_response.errors
+            let error_messages: Vec<String> = cf_response
+                .errors
                 .iter()
                 .map(|e| format!("Code {}: {}", e.code, e.message))
                 .collect();
             return Err(format!("Cloudflare API errors: {}", error_messages.join(", ")).into());
         }
 
-        cf_response.result.ok_or_else(|| {
-            "Cloudflare API returned success but no result data".into()
-        })
+        Ok(cf_response.result)
     }
 }
 
@@ -166,11 +167,14 @@ impl DnsProvider for CloudflareProvider {
             .send()
             .await?;
 
-        let zones: Vec<CloudflareZone> = self.handle_cloudflare_response(response).await?;
+        let zones: Vec<CloudflareZone> = self
+            .handle_cloudflare_response(response)
+            .await?
+            .ok_or("Cloudflare API returned success but no result data")?;
 
         let zone_infos: Vec<ZoneInfo> = zones
             .into_iter()
-            .filter(|zone| zone.status == "active") // Only include active zones
+            .filter(|zone| zone.status == "active")
             .map(|zone| ZoneInfo::new(zone.id, zone.name))
             .collect();
 
@@ -198,7 +202,10 @@ impl DnsProvider for CloudflareProvider {
             .send()
             .await?;
 
-        let records: Vec<CloudflareDnsRecord> = self.handle_cloudflare_response(response).await?;
+        let records: Vec<CloudflareDnsRecord> = self
+            .handle_cloudflare_response(response)
+            .await?
+            .ok_or("Cloudflare API returned success but no result data")?;
 
         let matching_record_ids: Vec<String> = records
             .iter()
@@ -237,7 +244,10 @@ impl DnsProvider for CloudflareProvider {
             .send()
             .await?;
 
-        let record: CloudflareDnsRecord = self.handle_cloudflare_response(response).await?;
+        let record: CloudflareDnsRecord = self
+            .handle_cloudflare_response(response)
+            .await?
+            .ok_or("Cloudflare API returned success but no result data")?;
         let record_id = record.id.ok_or("No record ID returned from Cloudflare")?;
 
         info!("Created TXT record with ID: {}", record_id);
@@ -264,33 +274,7 @@ impl DnsProvider for CloudflareProvider {
             .send()
             .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await?;
-            return Err(format!("Failed to delete record ({}): {}", status, error_text).into());
-        }
-
-        let response_text = response.text().await?;
-        if !response_text.is_empty() {
-            let cf_response: CloudflareResponse<serde_json::Value> = serde_json::from_str(&response_text)
-                .map_err(|e| format!("Failed to parse Cloudflare delete response: {}", e))?;
-
-            if !cf_response.messages.is_empty() {
-                let info_messages: Vec<String> = cf_response.messages
-                    .iter()
-                    .map(|m| format!("Code {}: {}", m.code, m.message))
-                    .collect();
-                info!("Cloudflare delete messages: {}", info_messages.join(", "));
-            }
-
-            if !cf_response.success {
-                let error_messages: Vec<String> = cf_response.errors
-                    .iter()
-                    .map(|e| format!("Code {}: {}", e.code, e.message))
-                    .collect();
-                return Err(format!("Cloudflare delete errors: {}", error_messages.join(", ")).into());
-            }
-        }
+        self.handle_cloudflare_response::<serde_json::Value>(response).await?;
 
         info!("Deleted TXT record {}", record_id);
         Ok(())

@@ -41,18 +41,18 @@ path = "examples/sse_test_server.rs"
 
 [dependencies]
 # Async runtime
-tokio = { version = "1.47", features = ["full"] }
+tokio = { version = "1.48", features = ["full"] }
 tokio-util = "0.7"
 
 # WebSocket support
-tokio-tungstenite = { version = "0.27", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # HTTP server/client
 hyper = { version = "1.7", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.13", features = ["json", "rustls", "stream", "form"] }
 
 # HTTPS/TLS support
 tokio-rustls = "0.26"

@@ -50,7 +50,6 @@ async fn route_request(
     let is_websocket = is_websocket_upgrade(&req);
 
     info!(
-        event = "http.request",
         scheme = if context.is_https { "https" } else { "http" },
         method = %method,
         path,
@@ -60,7 +59,6 @@ async fn route_request(
 
     if path.starts_with("/.well-known/acme-challenge/") {
         info!(
-            event = "acme.challenge.route",
             scheme = if context.is_https { "https" } else { "http" },
             "ACME challenge routed to handler."
         );
@@ -82,14 +80,12 @@ async fn route_request(
     if is_websocket {
         return if path == context.config.server.tunnel_path {
             debug!(
-                event = "ws.tunnel_mgmt.route",
                 scheme = if context.is_https { "https" } else { "http" },
                 "Tunnel management WebSocket request routed."
             );
             websocket::handle_tunnel_management_websocket(req, context).await
         } else {
             debug!(
-                event = "ws.tunnel.route",
                 scheme = if context.is_https { "https" } else { "http" },
                 "Routed tunneled WebSocket request."
             );
@@ -106,7 +102,7 @@ async fn route_request(
 
         if host_without_port == context.config.server.domain {
             if let Some(response) = UIAssets::serve_asset(path) {
-                debug!(event = "ui.asset.serve", path, "UI asset served.");
+                debug!(path, "UI asset served.");
                 return Ok(response);
             }
         }
@@ -132,7 +128,7 @@ async fn route_request(
             .body(boxed_body("Redirecting to HTTPS"))
             .unwrap())
     } else {
-        debug!(event = "http.tunnel.insecure", "HTTP tunnel used without SSL.");
+        debug!("HTTP tunnel used without SSL.");
         tunnel::handle_tunnel_request(req, context).await
     }
 }

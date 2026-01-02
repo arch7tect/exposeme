@@ -21,7 +21,6 @@ impl UIAssets {
     /// Handle UI asset requests
     pub fn serve_asset(path: &str) -> Option<Response<ResponseBody>> {
         debug!(
-            event = "ui.asset.request",
             path,
             "UI asset requested."
         );
@@ -53,7 +52,6 @@ impl UIAssets {
                 .unwrap();
 
             debug!(
-                event = "ui.asset.serve",
                 path,
                 lookup_path,
                 "UI asset served."
@@ -61,7 +59,6 @@ impl UIAssets {
             Some(response)
         } else {
             debug!(
-                event = "ui.asset.miss",
                 path,
                 lookup_path,
                 "UI asset not found in embedded assets."
@@ -118,7 +115,6 @@ impl UIAssets {
 
         if path == "/favicon.ico" {
             debug!(
-                event = "ui.asset.favicon",
                 path,
                 "Favicon requested."
             );
@@ -129,22 +125,19 @@ impl UIAssets {
 
         if !result {
             debug!(
-                event = "ui.asset.miss",
                 path,
                 lookup_path,
                 "UI asset not found in embedded assets."
             );
-            debug!(event = "ui.asset.available", "Listing available UI assets.");
+            debug!("Listing available UI assets.");
             for file in UIAssets::iter() {
                 debug!(
-                    event = "ui.asset.available_item",
                     file = %file.as_ref(),
                     "UI asset listed in debug output."
                 );
             }
         } else {
             debug!(
-                event = "ui.asset.hit",
                 path,
                 lookup_path,
                 "UI asset found in embedded assets."

@@ -33,7 +33,6 @@ pub async fn start_http_server(
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     info!(
-        event = "server.http.listen",
         addr = %config.http_addr(),
         "HTTP server listening."
     );
@@ -41,7 +40,7 @@ pub async fn start_http_server(
     loop {
         tokio::select! {
             _ = shutdown_token.cancelled() => {
-                info!(event = "server.http.shutdown", "HTTP server shutting down.");
+                info!("HTTP server shutting down.");
                 break;
             }
             result = listener.accept() => {
@@ -69,7 +68,6 @@ pub async fn start_http_server(
                         .await
                     {
                         error!(
-                            event = "server.http.connection_error",
                             error = %err,
                             "HTTP connection handling failed."
                         );
@@ -99,7 +97,6 @@ pub async fn start_https_server(
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     info!(
-        event = "server.https.listen",
         addr = %config.https_addr(),
         "HTTPS server listening."
     );
@@ -107,7 +104,7 @@ pub async fn start_https_server(
     loop {
         tokio::select! {
             _ = shutdown_token.cancelled() => {
-                info!(event = "server.https.shutdown", "HTTPS server shutting down.");
+                info!("HTTPS server shutting down.");
                 break;
             }
             result = listener.accept() => {
@@ -139,7 +136,6 @@ pub async fn start_https_server(
                                 .await
                             {
                                 error!(
-                                    event = "server.https.connection_error",
                                     error = %e,
                                     "HTTPS connection handling failed."
                                 );
@@ -147,7 +143,6 @@ pub async fn start_https_server(
                         }
                         Err(e) => {
                             error!(
-                                event = "server.https.tls_error",
                                 error = %e,
                                 "TLS handshake failed."
                             );

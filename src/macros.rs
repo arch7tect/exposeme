@@ -11,7 +11,6 @@ macro_rules! guard {
                         async move { $cleanup }
                     ).await {
                         tracing::error!(
-                            event = "guard.cleanup.timeout",
                             module = module_path!(),
                             "Async cleanup guard timed out."
                         );

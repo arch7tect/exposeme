@@ -79,11 +79,10 @@ pub trait DnsProvider: Send + Sync {
     }
 
     async fn get_zone_info(&mut self, domain: &str) -> Result<ZoneInfo, Box<dyn std::error::Error + Send + Sync>> {
-        info!(event = "dns.zone.lookup", domain, "Looking up DNS zone for domain.");
+        info!(domain, "Looking up DNS zone for domain.");
 
         let available_zones = self.list_zones_impl().await?;
         info!(
-            event = "dns.zones.available",
             count = available_zones.len(),
             "Available DNS zones listed."
         );
@@ -96,7 +95,6 @@ pub trait DnsProvider: Send + Sync {
                 best_match = Some(zone.clone());
                 best_length = zone.name.len();
                 info!(
-                    event = "dns.zone.match",
                     zone = %zone.name,
                     "Better DNS zone match found."
                 );
@@ -106,7 +104,6 @@ pub trait DnsProvider: Send + Sync {
         match best_match {
             Some(zone) => {
                 info!(
-                    event = "dns.zone.selected",
                     zone = %zone.name,
                     zone_id = %zone.id,
                     "DNS zone selected for domain."
@@ -142,7 +139,6 @@ pub trait DnsProvider: Send + Sync {
         name: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(
-            event = "dns.txt.cleanup.start",
             name,
             domain,
             "TXT cleanup started."
@@ -151,19 +147,17 @@ pub trait DnsProvider: Send + Sync {
         match self.list_txt_records(domain, name).await {
             Ok(existing_records) => {
                 if existing_records.is_empty() {
-                    info!(event = "dns.txt.cleanup.empty", "No TXT records to clean up.");
+                    info!("No TXT records to clean up.");
                     return Ok(());
                 }
 
                 info!(
-                    event = "dns.txt.cleanup.found",
                     count = existing_records.len(),
                     "Existing TXT records found for cleanup."
                 );
 
                 for record_id in existing_records {
                     info!(
-                        event = "dns.txt.cleanup.delete",
                         record_id,
                         "Deleting old TXT record."
                     );
@@ -171,14 +165,12 @@ pub trait DnsProvider: Send + Sync {
                     match self.delete_txt_record(domain, &record_id).await {
                         Ok(_) => {
                             info!(
-                                event = "dns.txt.cleanup.deleted",
                                 record_id,
                                 "Old TXT record deleted."
                             );
                         }
                         Err(e) => {
                             warn!(
-                                event = "dns.txt.cleanup.error",
                                 record_id,
                                 error = %e,
                                 "Failed to delete TXT record during cleanup."
@@ -187,16 +179,15 @@ pub trait DnsProvider: Send + Sync {
                     }
                 }
 
-                info!(event = "dns.txt.cleanup.done", "TXT cleanup completed.");
+                info!("TXT cleanup completed.");
                 Ok(())
             }
             Err(e) => {
                 warn!(
-                    event = "dns.txt.cleanup.list_error",
                     error = %e,
                     "Failed to list TXT records for cleanup."
                 );
-                warn!(event = "dns.txt.cleanup.skip", "Skipping TXT cleanup after list failure.");
+                warn!("Skipping TXT cleanup after list failure.");
                 Ok(())
             }
         }
@@ -209,7 +200,6 @@ pub trait DnsProvider: Send + Sync {
         value: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(
-            event = "dns.propagation.wait",
             name,
             domain,
             "Waiting for DNS propagation."
@@ -221,7 +211,6 @@ pub trait DnsProvider: Send + Sync {
         const RETRY_DELAY: u64 = 15;
         for attempt in 1..=MAX_ATTEMPTS {
             info!(
-                event = "dns.propagation.check",
                 attempt,
                 max_attempts = MAX_ATTEMPTS,
                 "Checking DNS propagation."
@@ -229,13 +218,12 @@ pub trait DnsProvider: Send + Sync {
 
             match self.check_txt_record(domain, name, value).await {
                 Ok(true) => {
-                    info!(event = "dns.propagation.confirmed", "DNS propagation confirmed.");
+                    info!("DNS propagation confirmed.");
                     return Ok(());
                 }
                 Ok(false) => {
                     if attempt < MAX_ATTEMPTS {
                         info!(
-                            event = "dns.propagation.pending",
                             attempt,
                             retry_delay_secs = RETRY_DELAY,
                             "DNS propagation pending; waiting to retry."
@@ -244,7 +232,6 @@ pub trait DnsProvider: Send + Sync {
                         continue;
                     } else {
                         warn!(
-                            event = "dns.propagation.timeout",
                             minutes = MAX_ATTEMPTS * RETRY_DELAY / 60,
                             "DNS propagation timed out; proceeding anyway."
                         );
@@ -253,7 +240,6 @@ pub trait DnsProvider: Send + Sync {
                 }
                 Err(e) => {
                     warn!(
-                        event = "dns.propagation.error",
                         error = %e,
                         "DNS propagation check failed."
                     );
@@ -280,7 +266,6 @@ pub trait DnsProvider: Send + Sync {
                     let record_value = record.to_string().trim_matches('"').to_string();
                     if record_value == expected_value {
                         info!(
-                            event = "dns.txt.match",
                             fqdn = %fqdn,
                             "TXT record match found."
                         );
@@ -288,7 +273,6 @@ pub trait DnsProvider: Send + Sync {
                     }
                 }
                 info!(
-                    event = "dns.txt.miss",
                     fqdn = %fqdn,
                     "TXT record match not found."
                 );
@@ -296,7 +280,6 @@ pub trait DnsProvider: Send + Sync {
             }
             Err(e) => {
                 info!(
-                    event = "dns.txt.lookup_error",
                     fqdn = %fqdn,
                     error = %e,
                     "TXT record lookup failed."

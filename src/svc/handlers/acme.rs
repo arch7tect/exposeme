@@ -18,7 +18,6 @@ pub async fn handle_acme_challenge(
         .unwrap_or("unknown");
 
     info!(
-        event = "acme.challenge.request",
         path,
         method = %req.method(),
         user_agent,
@@ -28,20 +27,18 @@ pub async fn handle_acme_challenge(
 
     if let Some(token) = path.strip_prefix("/.well-known/acme-challenge/") {
         info!(
-            event = "acme.challenge.token",
             token,
             "ACME challenge token extracted."
         );
 
         let store = challenge_store.read().await;
         info!(
-            event = "acme.challenge.tokens",
             tokens = ?store.keys().collect::<Vec<_>>(),
             "ACME challenge tokens listed."
         );
 
         if let Some(key_auth) = store.get(token) {
-            info!(event = "acme.challenge.found", token, "ACME challenge found in store.");
+            info!(token, "ACME challenge found in store.");
             return Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/plain")
@@ -49,14 +46,12 @@ pub async fn handle_acme_challenge(
                 .unwrap());
         } else {
             warn!(
-                event = "acme.challenge.missing",
                 token,
                 "ACME challenge not found in store."
             );
         }
     } else {
         warn!(
-            event = "acme.challenge.invalid_path",
             path,
             "ACME challenge request had an invalid path."
         );

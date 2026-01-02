@@ -70,7 +70,7 @@ impl HetznerProvider {
             .build()
             .expect("Failed to create HTTP client");
 
-        info!(event = "dns.provider.init", provider = "hetzner", "DNS provider initialized.");
+        info!(provider = "hetzner", "DNS provider initialized.");
         Self { config, client }
     }
 
@@ -119,7 +119,6 @@ impl DnsProviderFactory for HetznerProvider {
         };
 
         info!(
-            event = "dns.provider.configured",
             provider = "hetzner",
             source = config_source,
             "DNS provider configured from source."
@@ -131,7 +130,7 @@ impl DnsProviderFactory for HetznerProvider {
 #[async_trait]
 impl DnsProvider for HetznerProvider {
     async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>> {
-        info!(event = "dns.zones.list", provider = "hetzner", "Listing DNS zones from provider.");
+        info!(provider = "hetzner", "Listing DNS zones from provider.");
 
         let response = self.client
             .get("https://dns.hetzner.com/api/v1/zones")
@@ -149,7 +148,6 @@ impl DnsProvider for HetznerProvider {
             .collect();
 
         info!(
-            event = "dns.zones.listed",
             provider = "hetzner",
             count = zone_infos.len(),
             "DNS zones listed."
@@ -163,7 +161,6 @@ impl DnsProvider for HetznerProvider {
         name: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
         info!(
-            event = "dns.txt.list",
             provider = "hetzner",
             name,
             zone = %zone.name,
@@ -190,7 +187,6 @@ impl DnsProvider for HetznerProvider {
             .collect();
 
         info!(
-            event = "dns.txt.listed",
             provider = "hetzner",
             count = matching_record_ids.len(),
             "TXT records listed."
@@ -205,7 +201,6 @@ impl DnsProvider for HetznerProvider {
         value: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         info!(
-            event = "dns.txt.create",
             provider = "hetzner",
             name,
             zone = %zone.name,
@@ -235,7 +230,6 @@ impl DnsProvider for HetznerProvider {
         let record_id = create_response.record.id;
 
         info!(
-            event = "dns.txt.created",
             provider = "hetzner",
             record_id = %record_id,
             "TXT record created."
@@ -249,7 +243,6 @@ impl DnsProvider for HetznerProvider {
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(
-            event = "dns.txt.delete",
             provider = "hetzner",
             record_id,
             "Deleting TXT record."
@@ -266,7 +259,6 @@ impl DnsProvider for HetznerProvider {
         self.ensure_success(response, "Failed to delete record").await?;
 
         info!(
-            event = "dns.txt.deleted",
             provider = "hetzner",
             record_id,
             "TXT record deleted."

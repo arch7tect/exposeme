@@ -65,7 +65,7 @@ impl DigitalOceanProvider {
             .build()
             .expect("Failed to create HTTP client");
 
-        info!(event = "dns.provider.init", provider = "digitalocean", "DNS provider initialized.");
+        info!(provider = "digitalocean", "DNS provider initialized.");
         Self { config, client }
     }
 
@@ -114,7 +114,6 @@ impl DnsProviderFactory for DigitalOceanProvider {
         };
 
         info!(
-            event = "dns.provider.configured",
             provider = "digitalocean",
             source = config_source,
             "DNS provider configured from source."
@@ -126,7 +125,7 @@ impl DnsProviderFactory for DigitalOceanProvider {
 #[async_trait]
 impl DnsProvider for DigitalOceanProvider {
     async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>> {
-        info!(event = "dns.zones.list", provider = "digitalocean", "Listing DNS zones from provider.");
+        info!(provider = "digitalocean", "Listing DNS zones from provider.");
 
         let response = self.client
             .get("https://api.digitalocean.com/v2/domains")
@@ -144,7 +143,6 @@ impl DnsProvider for DigitalOceanProvider {
             .collect();
 
         info!(
-            event = "dns.zones.listed",
             provider = "digitalocean",
             count = zone_infos.len(),
             "DNS zones listed."
@@ -158,7 +156,6 @@ impl DnsProvider for DigitalOceanProvider {
         name: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
         info!(
-            event = "dns.txt.list",
             provider = "digitalocean",
             name,
             zone = %zone.name,
@@ -185,7 +182,6 @@ impl DnsProvider for DigitalOceanProvider {
             .collect();
 
         info!(
-            event = "dns.txt.listed",
             provider = "digitalocean",
             count = matching_record_ids.len(),
             "TXT records listed."
@@ -200,7 +196,6 @@ impl DnsProvider for DigitalOceanProvider {
         value: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         info!(
-            event = "dns.txt.create",
             provider = "digitalocean",
             name,
             zone = %zone.name,
@@ -231,7 +226,6 @@ impl DnsProvider for DigitalOceanProvider {
             .ok_or("No record ID returned from DigitalOcean")?;
 
         info!(
-            event = "dns.txt.created",
             provider = "digitalocean",
             record_id = %record_id,
             "TXT record created."
@@ -245,7 +239,6 @@ impl DnsProvider for DigitalOceanProvider {
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!(
-            event = "dns.txt.delete",
             provider = "digitalocean",
             record_id,
             zone = %zone.name,
@@ -267,7 +260,6 @@ impl DnsProvider for DigitalOceanProvider {
         self.ensure_success(response, "Failed to delete record").await?;
 
         info!(
-            event = "dns.txt.deleted",
             provider = "digitalocean",
             record_id,
             "TXT record deleted."

@@ -34,14 +34,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .expect("Failed to install SIGINT handler");
 
             tokio::select! {
-                _ = sigterm.recv() => info!(event = "shutdown.signal", signal = "SIGTERM", "Shutdown signal received."),
-                _ = sigint.recv() => info!(event = "shutdown.signal", signal = "SIGINT", "Shutdown signal received."),
+                _ = sigterm.recv() => info!(signal = "SIGTERM", "Shutdown signal received."),
+                _ = sigint.recv() => info!(signal = "SIGINT", "Shutdown signal received."),
             }
         }
         #[cfg(not(unix))]
         {
             signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
-            info!(event = "shutdown.signal", signal = "SIGINT", "Shutdown signal received.");
+            info!(signal = "SIGINT", "Shutdown signal received.");
         }
 
         shutdown_token_signal.cancel();
@@ -53,32 +53,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let config = ClientConfig::load(&args)?;
-    info!(event = "config.loaded", path = ?args.config, "Config loaded from path.");
-    info!(event = "client.server.configured", url = %config.client.server_url, "Client server URL configured.");
-    info!(event = "client.tunnel.configured", tunnel_id = %config.client.tunnel_id, "Client tunnel configured.");
-    info!(event = "client.target.configured", target = %config.client.local_target, "Client local target configured.");
-    info!(event = "client.start", version = env!("CARGO_PKG_VERSION"), "Client started.");
+    info!(path = ?args.config, "Config loaded from path.");
+    info!(url = %config.client.server_url, "Client server URL configured.");
+    info!(tunnel_id = %config.client.tunnel_id, "Client tunnel configured.");
+    info!(target = %config.client.local_target, "Client local target configured.");
+    info!(version = env!("CARGO_PKG_VERSION"), "Client started.");
 
     let mut client = ExposeMeClient::new(config);
 
     loop {
         tokio::select! {
             _ = shutdown_token.cancelled() => {
-                info!(event = "shutdown.start", "Graceful shutdown started.");
+                info!("Graceful shutdown started.");
                 break;
             }
             result = client.run(shutdown_token.clone()) => {
                 match result {
                     Ok(_) => {
-                        info!(event = "client.disconnect", clean = true, "Client disconnected cleanly.");
+                        info!(clean = true, "Client disconnected cleanly.");
                         break;
                     }
                     Err(e) => {
-                        error!(event = "client.error", error = %e, "Client run failed.");
+                        error!(error = %e, "Client run failed.");
 
                         if client.config().client.auto_reconnect {
                             info!(
-                                event = "client.reconnect.scheduled",
                                 delay_secs = client.config().client.reconnect_delay_secs,
                                 "Client reconnect scheduled."
                             );

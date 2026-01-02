@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "exposeme"
-version = "1.4.63"
+version = "1.5.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -957,7 +957,7 @@ dependencies = [
 
 [[package]]
 name = "exposeme-ui"
-version = "1.4.63"
+version = "1.5.0"
 dependencies = [
  "chrono",
  "console_error_panic_hook",

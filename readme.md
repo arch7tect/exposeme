@@ -722,6 +722,11 @@ docker run -it --rm \
 
 ## Changelog
 
+### v1.4.63
+
+**Changes**
+- Added structured logging with contextual messages
+
 ### v1.4.57
 
 **New Features**

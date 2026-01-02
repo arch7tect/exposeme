@@ -722,6 +722,11 @@ docker run -it --rm \
 
 ## Changelog
 
+### v1.5.0
+
+**Changes**
+- Switched protocol serialization to bitcode (breaking)
+
 ### v1.4.63
 
 **Changes**
@@ -774,7 +779,7 @@ docker run -it --rm \
 ### v1.3
 
 **Binary Protocol Implementation**
-- Replaced JSON protocol with efficient binary protocol using bincode
+- Replaced JSON protocol with efficient binary protocol using bitcode
 - Reduced protocol overhead for better performance
 - Maintained backward compatibility checking
 - **Important**: Requires both server and client to be v1.3+

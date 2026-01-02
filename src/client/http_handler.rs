@@ -53,13 +53,6 @@ impl HttpHandler {
             complete = is_complete,
             "HTTP request received from server."
         );
-        debug!(
-            method,
-            path,
-            request_id = %id,
-            complete = is_complete,
-            "HTTP request start received from server."
-        );
 
         let http_client = self.http_client.clone();
         let local_target = self.local_target.clone();

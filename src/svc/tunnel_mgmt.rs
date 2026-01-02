@@ -108,24 +108,14 @@ pub async fn handle_tunnel_management_connection(
                 let Some(message) = message else {
                     break;
                 };
-                match message.to_bincode() {
-                    Ok(bytes) => {
-                        if let Err(e) = ws_sender.send(WsMessage::Binary(bytes.into())).await {
-                            error!(
-                                error = %e,
-                                "Failed to send tunnel WebSocket message."
-                            );
-                            context.metrics.record_error(Some(&tunnel_id));
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!(
-                            error = %e,
-                            "Failed to serialize tunnel message."
-                        );
-                        context.metrics.record_error(Some(&tunnel_id));
-                    }
+                let bytes = message.to_bytes();
+                if let Err(e) = ws_sender.send(WsMessage::Binary(bytes.into())).await {
+                    error!(
+                        error = %e,
+                        "Failed to send tunnel WebSocket message."
+                    );
+                    context.metrics.record_error(Some(&tunnel_id));
+                    break;
                 }
             }
 
@@ -151,7 +141,7 @@ pub async fn handle_tunnel_management_connection(
                             "Binary tunnel WebSocket message received."
                         );
 
-                        match Message::from_bincode(&bytes) {
+                        match Message::from_bytes(&bytes) {
                             Ok(msg) => {
                                 trace!(
                                     message_count,
@@ -329,7 +319,7 @@ async fn wait_for_authentication(
 
     match tokio::time::timeout(auth_timeout, ws_receiver.next()).await {
         Ok(Some(Ok(WsMessage::Binary(bytes)))) => {
-            match Message::from_bincode(&bytes) {
+            match Message::from_bytes(&bytes) {
                 Ok(Message::Auth {
                     token,
                     tunnel_id,
@@ -347,7 +337,7 @@ async fn wait_for_authentication(
                                 error: "invalid_tunnel_id".to_string(),
                                 message: format!("Invalid tunnel ID: {}", e),
                             }
-                            .to_bincode()?
+                            .to_bytes()
                             .into(),
                         );
                         ws_sender.send(error_msg).await?;
@@ -360,7 +350,7 @@ async fn wait_for_authentication(
                                 error: "invalid_token".to_string(),
                                 message: "Invalid authentication token".to_string(),
                             }
-                            .to_bincode()?
+                            .to_bytes()
                             .into(),
                         );
                         ws_sender.send(error_msg).await?;
@@ -375,7 +365,7 @@ async fn wait_for_authentication(
                                     error: "tunnel_id_taken".to_string(),
                                     message: format!("Tunnel ID '{}' is already in use", tunnel_id),
                                 }
-                                .to_bincode()?
+                                .to_bytes()
                                 .into(),
                             );
                             ws_sender.send(error_msg).await?;
@@ -398,7 +388,7 @@ async fn wait_for_authentication(
                                     version, our_version,
                                 ),
                             }
-                            .to_bincode()?
+                            .to_bytes()
                             .into(),
                         );
                         ws_sender.send(error_msg).await?;
@@ -410,7 +400,7 @@ async fn wait_for_authentication(
                             tunnel_id: tunnel_id.clone(),
                             public_url: context.config.get_public_url(&tunnel_id),
                         }
-                        .to_bincode()?
+                        .to_bytes()
                         .into(),
                     );
                     ws_sender.send(success_msg).await?;

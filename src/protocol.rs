@@ -1,8 +1,9 @@
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Messages sent between client and server via WebSocket binary frames
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, PartialEq)]
 pub enum Message {
     /// Client authentication request
     Auth {
@@ -67,7 +68,7 @@ pub enum Message {
     /// WebSocket data transfer (bidirectional)
     WebSocketData {
         connection_id: String,
-        data: Vec<u8>, // Binary data handled natively by bincode
+        data: Vec<u8>,
     },
 
     /// WebSocket connection close (bidirectional)
@@ -85,13 +86,88 @@ pub enum Message {
 }
 
 impl Message {
-    /// Serialize message to bincode bytes for WebSocket Binary frames
-    pub fn to_bincode(&self) -> Result<Vec<u8>, bincode::error::EncodeError> {
-        bincode::serde::encode_to_vec(self, bincode::config::standard())
+    /// Serialize message to bytes for WebSocket binary frames.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        bitcode::encode(self)
     }
 
-    /// Deserialize message from bincode bytes from WebSocket Binary frames
-    pub fn from_bincode(bytes: &[u8]) -> Result<Self, bincode::error::DecodeError> {
-        bincode::serde::decode_from_slice(bytes, bincode::config::standard()).map(|(msg, _)| msg)
+    /// Deserialize message from bytes from WebSocket binary frames.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, bitcode::Error> {
+        bitcode::decode(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Message;
+    use std::collections::HashMap;
+
+    fn round_trip(message: Message) {
+        let bytes = message.to_bytes();
+        let decoded = Message::from_bytes(&bytes).expect("decode");
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn message_round_trips() {
+        let mut headers = HashMap::new();
+        headers.insert("x-test".to_string(), "1".to_string());
+
+        round_trip(Message::Auth {
+            token: "token".to_string(),
+            tunnel_id: "tunnel".to_string(),
+            version: "1.5.0".to_string(),
+        });
+        round_trip(Message::AuthSuccess {
+            tunnel_id: "tunnel".to_string(),
+            public_url: "https://example.com".to_string(),
+        });
+        round_trip(Message::AuthError {
+            error: "invalid_token".to_string(),
+            message: "Invalid authentication token".to_string(),
+        });
+        round_trip(Message::HttpRequestStart {
+            id: "req-1".to_string(),
+            method: "GET".to_string(),
+            path: "/".to_string(),
+            headers: headers.clone(),
+            initial_data: vec![],
+            is_complete: true,
+        });
+        round_trip(Message::HttpResponseStart {
+            id: "req-1".to_string(),
+            status: 200,
+            headers: headers.clone(),
+            initial_data: b"ok".to_vec(),
+            is_complete: true,
+        });
+        round_trip(Message::DataChunk {
+            id: "req-1".to_string(),
+            data: vec![0, 1, 2, 3, 4],
+            is_final: false,
+        });
+        round_trip(Message::WebSocketUpgrade {
+            connection_id: "conn-1".to_string(),
+            method: "GET".to_string(),
+            path: "/ws".to_string(),
+            headers: headers.clone(),
+        });
+        round_trip(Message::WebSocketUpgradeResponse {
+            connection_id: "conn-1".to_string(),
+            status: 101,
+            headers: headers.clone(),
+        });
+        round_trip(Message::WebSocketData {
+            connection_id: "conn-1".to_string(),
+            data: vec![9, 8, 7, 6],
+        });
+        round_trip(Message::WebSocketClose {
+            connection_id: "conn-1".to_string(),
+            code: Some(1000),
+            reason: Some("bye".to_string()),
+        });
+        round_trip(Message::Error {
+            message: "oops".to_string(),
+        });
     }
 }

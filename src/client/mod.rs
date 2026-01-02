@@ -70,7 +70,7 @@ impl ExposeMeClient {
             version: env!("CARGO_PKG_VERSION").to_string(),
         };
 
-        let auth_bytes = auth_message.to_bincode()?;
+        let auth_bytes = auth_message.to_bytes();
         ws_sender.send(WsMessage::Binary(auth_bytes.into())).await?;
         info!(
             tunnel_id = %self.config.client.tunnel_id,
@@ -110,54 +110,44 @@ impl ExposeMeClient {
             while let Some(message) = to_server_rx.recv().await {
                 message_count += 1;
 
-                match message.to_bincode() {
-                    Ok(bytes) => {
+                let bytes = message.to_bytes();
+                trace!(
+                    message_count,
+                    bytes = bytes.len(),
+                    "Outgoing message encoded and sent."
+                );
+                let mut sender = ws_sender_for_task.lock().await;
+                if outgoing_shutdown_flag.load(Ordering::Relaxed) {
+                    debug!("Outgoing handler stopped due to shutdown.");
+                    break;
+                }
+                match sender.send(WsMessage::Binary(bytes.into())).await {
+                    Ok(_) => {
                         trace!(
                             message_count,
-                            bytes = bytes.len(),
-                            "Outgoing message encoded and sent."
+                            "Outgoing message sent successfully."
                         );
-                        let mut sender = ws_sender_for_task.lock().await;
-                        if outgoing_shutdown_flag.load(Ordering::Relaxed) {
-                            debug!("Outgoing handler stopped due to shutdown.");
-                            break;
-                        }
-                        match sender.send(WsMessage::Binary(bytes.into())).await {
-                            Ok(_) => {
-                                trace!(
-                                    message_count,
-                                    "Outgoing message sent successfully."
-                                );
-                            }
-                            Err(e) => {
-                                match e {
-                                    tokio_tungstenite::tungstenite::Error::ConnectionClosed |
-                                    tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
-                                        debug!("Outgoing handler stopped; WebSocket closed.");
-                                        break;
-                                    }
-                                    tokio_tungstenite::tungstenite::Error::Protocol(_) => {
-                                        debug!("Outgoing handler stopped; WebSocket protocol error.");
-                                        break;
-                                    }
-                                    tokio_tungstenite::tungstenite::Error::Io(_) => {
-                                        debug!("Outgoing handler stopped; WebSocket I/O error.");
-                                        break;
-                                    }
-                                    _ => {
-                                        error!(error = %e, "Failed to send outgoing message.");
-                                        break;
-                                    }
-                                }
-                            }
-                        }
                     }
                     Err(e) => {
-                        error!(
-                            message_count,
-                            error = %e,
-                            "Failed to serialize outgoing message."
-                        );
+                        match e {
+                            tokio_tungstenite::tungstenite::Error::ConnectionClosed |
+                            tokio_tungstenite::tungstenite::Error::AlreadyClosed => {
+                                debug!("Outgoing handler stopped; WebSocket closed.");
+                                break;
+                            }
+                            tokio_tungstenite::tungstenite::Error::Protocol(_) => {
+                                debug!("Outgoing handler stopped; WebSocket protocol error.");
+                                break;
+                            }
+                            tokio_tungstenite::tungstenite::Error::Io(_) => {
+                                debug!("Outgoing handler stopped; WebSocket I/O error.");
+                                break;
+                            }
+                            _ => {
+                                error!(error = %e, "Failed to send outgoing message.");
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -196,7 +186,7 @@ impl ExposeMeClient {
                                 payload_hex = %bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<String>>().join(" "),
                                 "WebSocket message bytes logged in hex for debugging."
                             );
-                            match Message::from_bincode(&bytes) {
+                            match Message::from_bytes(&bytes) {
                                 Ok(msg) => {
                                     if let Err(e) = self.handle_message(msg, &http_handler, &websocket_handler).await {
                                         error!(error = %e, "Failed to handle incoming server message.");

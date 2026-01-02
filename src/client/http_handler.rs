@@ -47,7 +47,6 @@ impl HttpHandler {
         is_complete: bool,
     ) {
         info!(
-            event = "client.http.request",
             method,
             path,
             request_id = %id,
@@ -55,7 +54,6 @@ impl HttpHandler {
             "HTTP request received from server."
         );
         debug!(
-            event = "client.http.request.start",
             method,
             path,
             request_id = %id,
@@ -69,7 +67,6 @@ impl HttpHandler {
 
         if is_complete {
             debug!(
-                event = "client.http.request.complete",
                 method,
                 path,
                 bytes = initial_data.len(),
@@ -87,7 +84,6 @@ impl HttpHandler {
                 match request.send().await {
                     Ok(response) => {
                         debug!(
-                            event = "client.http.request.complete_ok",
                             method,
                             path,
                             "Complete HTTP request succeeded."
@@ -96,7 +92,6 @@ impl HttpHandler {
                     }
                     Err(e) => {
                         error!(
-                            event = "client.http.request.complete_error",
                             method,
                             path,
                             error = %e,
@@ -108,7 +103,6 @@ impl HttpHandler {
             });
         } else {
             debug!(
-                event = "client.http.request.stream_start",
                 method,
                 path,
                 "Streaming HTTP request started."
@@ -118,7 +112,6 @@ impl HttpHandler {
 
             if !initial_data.is_empty() {
                 debug!(
-                    event = "client.http.request.stream_initial",
                     bytes = initial_data.len(),
                     "Initial bytes sent for streaming HTTP request."
                 );
@@ -130,7 +123,6 @@ impl HttpHandler {
                     body_tx: Some(body_tx.clone()),
                 });
                 debug!(
-                    event = "client.http.request.stream_registered",
                     request_id = %id,
                     "Streaming HTTP request registered."
                 );
@@ -150,7 +142,6 @@ impl HttpHandler {
                 match request.send().await {
                     Ok(response) => {
                         debug!(
-                            event = "client.http.request.stream_ok",
                             method,
                             path,
                             "Streaming HTTP request succeeded."
@@ -159,7 +150,6 @@ impl HttpHandler {
                     }
                     Err(e) => {
                         error!(
-                            event = "client.http.request.stream_error",
                             method,
                             path,
                             error = %e,
@@ -174,7 +164,6 @@ impl HttpHandler {
 
     pub async fn handle_data_chunk(&self, id: String, data: Vec<u8>, is_final: bool) {
         debug!(
-            event = "client.http.data_chunk",
             bytes = data.len(),
             final_chunk = is_final,
             request_id = %id,
@@ -188,14 +177,12 @@ impl HttpHandler {
 
         let Some(tx) = body_tx else {
             warn!(
-                event = "client.http.data_chunk.unknown",
                 request_id = %id,
                 "HTTP request body chunk received for unknown request."
             );
             let requests = self.outgoing_requests.read().await;
             let active_ids: Vec<String> = requests.keys().cloned().collect();
             warn!(
-                event = "client.http.data_chunk.active",
                 active_ids = ?active_ids,
                 "Active HTTP request IDs listed for debugging."
             );
@@ -205,7 +192,6 @@ impl HttpHandler {
         if !data.is_empty() {
             if let Err(e) = tx.send(Ok(data.into())).await {
                 error!(
-                    event = "client.http.data_chunk.send_error",
                     error = %e,
                     "Failed to forward HTTP request body chunk."
                 );
@@ -252,7 +238,6 @@ async fn stream_response_to_server(
     response: reqwest::Response,
 ) {
     trace!(
-        event = "client.http.response.stream.enter",
         request_id = %id,
         "Entered client HTTP response streaming handler."
     );
@@ -261,7 +246,6 @@ async fn stream_response_to_server(
     let headers = extract_response_headers(&response);
 
     debug!(
-        event = "client.http.response.prepare",
         status,
         request_id = %id,
         headers = headers.len(),
@@ -274,7 +258,6 @@ async fn stream_response_to_server(
         None
     );
     debug!(
-        event = "client.http.response.should_stream",
         stream = should_stream,
         sse = is_sse_resp,
         "Determined whether response should stream."
@@ -282,7 +265,6 @@ async fn stream_response_to_server(
 
     if to_server_tx.is_closed() {
         error!(
-            event = "client.http.response.send_closed",
             request_id = %id,
             "WebSocket sender closed before response send."
         );
@@ -291,7 +273,6 @@ async fn stream_response_to_server(
 
     if !should_stream {
         debug!(
-            event = "client.http.response.complete",
             request_id = %id,
             "Sending complete HTTP response."
         );
@@ -309,14 +290,12 @@ async fn stream_response_to_server(
                 match to_server_tx.send(response_msg) {
                     Ok(_) => {
                         trace!(
-                            event = "client.http.response.complete_sent",
                             request_id = %id,
                             "Complete HTTP response sent."
                         );
                     }
                     Err(e) => {
                         error!(
-                            event = "client.http.response.complete_send_error",
                             request_id = %id,
                             error = %e,
                             "Failed to send complete HTTP response."
@@ -326,7 +305,6 @@ async fn stream_response_to_server(
             }
             Err(e) => {
                 error!(
-                    event = "client.http.response.read_error",
                     request_id = %id,
                     error = %e,
                     "Failed to read HTTP response body."
@@ -336,7 +314,6 @@ async fn stream_response_to_server(
         }
     } else {
         debug!(
-            event = "client.http.response.stream_start",
             request_id = %id,
             "Streaming HTTP response started."
         );
@@ -351,7 +328,6 @@ async fn stream_response_to_server(
 
         if let Err(e) = to_server_tx.send(start_msg) {
             error!(
-                event = "client.http.response.stream_send_error",
                 request_id = %id,
                 error = %e,
                 "Failed to send streaming response start."
@@ -371,7 +347,6 @@ async fn stream_response_to_server(
 
                     if chunk_count % 10 == 0 || chunk.len() > 1024 {
                         trace!(
-                            event = "client.http.response.chunk",
                             request_id = %id,
                             chunk = chunk_count,
                             bytes = chunk.len(),
@@ -388,7 +363,6 @@ async fn stream_response_to_server(
 
                     if let Err(e) = to_server_tx.send(chunk_msg) {
                         error!(
-                            event = "client.http.response.chunk_send_error",
                             request_id = %id,
                             error = %e,
                             "Failed to forward HTTP response chunk."
@@ -398,7 +372,6 @@ async fn stream_response_to_server(
                 }
                 Err(e) => {
                     error!(
-                        event = "client.http.response.stream_error",
                         request_id = %id,
                         error = %e,
                         "HTTP response stream error."
@@ -409,7 +382,6 @@ async fn stream_response_to_server(
         }
 
         trace!(
-            event = "client.http.response.final_chunk",
             request_id = %id,
             total_bytes,
             chunks = chunk_count,
@@ -424,7 +396,6 @@ async fn stream_response_to_server(
 
         if let Err(e) = to_server_tx.send(final_msg) {
             error!(
-                event = "client.http.response.final_chunk_error",
                 request_id = %id,
                 error = %e,
                 "Failed to send final HTTP response chunk."
@@ -432,7 +403,6 @@ async fn stream_response_to_server(
         }
 
         debug!(
-            event = "client.http.response.stream_done",
             request_id = %id,
             total_bytes,
             chunks = chunk_count,
@@ -441,7 +411,6 @@ async fn stream_response_to_server(
     }
     
     trace!(
-        event = "client.http.response.stream.exit",
         request_id = %id,
         "Exited client HTTP response streaming handler."
     );
@@ -452,13 +421,6 @@ async fn send_error_response(
     id: String,
     error: String,
 ) {
-    error!(
-        event = "client.http.response.error_send",
-        request_id = %id,
-        error = %error,
-        "Sending HTTP error response to server."
-    );
-
     let error_response = Message::HttpResponseStart {
         id: id.clone(),
         status: 502,
@@ -469,14 +431,12 @@ async fn send_error_response(
 
     if let Err(e) = to_server_tx.send(error_response) {
         error!(
-            event = "client.http.response.error_send_fail",
             request_id = %id,
             error = %e,
             "Failed to send HTTP error response."
         );
     } else {
         info!(
-            event = "client.http.response.error_sent",
             request_id = %id,
             "HTTP error response sent."
         );

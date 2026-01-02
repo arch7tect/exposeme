@@ -32,22 +32,22 @@ async fn main() -> Result<(), BoxError> {
     }
 
     let config = ServerConfig::load(&args)?;
-    info!(event = "config.loaded", path = ?args.config, "Config loaded from path.");
-    info!(event = "server.http.configured", addr = %config.http_addr(), "HTTP server configured.");
+    info!(path = ?args.config, "Config loaded from path.");
+    info!(addr = %config.http_addr(), "HTTP server configured.");
     if config.ssl.enabled {
-        info!(event = "server.https.configured", addr = %config.https_addr(), "HTTPS server configured.");
-        info!(event = "server.domain.configured", domain = %config.server.domain, "Server domain configured.");
-        info!(event = "server.ssl.provider", provider = ?config.ssl.provider, "Server SSL provider configured.");
-        info!(event = "server.ssl.staging", enabled = config.ssl.staging, "Server SSL staging mode configured.");
-        info!(event = "server.ssl.dns_provider", provider = ?config.ssl.dns_provider, "Server SSL DNS provider configured.");
+        info!(addr = %config.https_addr(), "HTTPS server configured.");
+        info!(domain = %config.server.domain, "Server domain configured.");
+        info!(provider = ?config.ssl.provider, "Server SSL provider configured.");
+        info!(enabled = config.ssl.staging, "Server SSL staging mode configured.");
+        info!(provider = ?config.ssl.dns_provider, "Server SSL DNS provider configured.");
     }
-    info!(event = "server.ws.configured", url = %config.tunnel_ws_url(), "WebSocket server configured.");
-    info!(event = "auth.tokens.configured", count = config.auth.tokens.len(), "Authentication tokens configured.");
+    info!(url = %config.tunnel_ws_url(), "WebSocket server configured.");
+    info!(count = config.auth.tokens.len(), "Authentication tokens configured.");
 
     let ssl_manager = Arc::new(RwLock::new(SslManager::new(config.clone())));
     let challenge_store = ssl_manager.read().await.get_challenge_store();
 
-    info!(event = "server.start", version = env!("CARGO_PKG_VERSION"), "Server starting.");
+    info!(version = env!("CARGO_PKG_VERSION"), "Server starting.");
 
     let tunnels: TunnelMap = Arc::new(RwLock::new(HashMap::new()));
     let active_requests: ActiveRequests = Arc::new(RwLock::new(HashMap::new()));
@@ -70,14 +70,14 @@ async fn main() -> Result<(), BoxError> {
                 .expect("Failed to install SIGINT handler");
 
             tokio::select! {
-                _ = sigterm.recv() => info!(event = "shutdown.signal", signal = "SIGTERM", "Shutdown signal received."),
-                _ = sigint.recv() => info!(event = "shutdown.signal", signal = "SIGINT", "Shutdown signal received."),
+                _ = sigterm.recv() => info!(signal = "SIGTERM", "Shutdown signal received."),
+                _ = sigint.recv() => info!(signal = "SIGINT", "Shutdown signal received."),
             }
         }
         #[cfg(not(unix))]
         {
             signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
-            info!(event = "shutdown.signal", signal = "SIGINT", "Shutdown signal received.");
+            info!(signal = "SIGINT", "Shutdown signal received.");
         }
 
         shutdown_token_signal.cancel();
@@ -102,13 +102,16 @@ async fn main() -> Result<(), BoxError> {
             metrics_http,
             shutdown_token_http,
         ).await {
-            error!(event = "server.http.error", error = %e, "HTTP server error.");
+            error!(error = %e, "HTTP server error.");
         }
     });
 
     wait_for_http_server_ready(&config).await?;
 
-    ssl_manager.write().await.initialize().await?;
+    if let Err(e) = ssl_manager.write().await.initialize().await {
+        error!(error = %e, "SSL initialization failed.");
+        return Err(e);
+    }
 
     let https_handle = if config.ssl.enabled {
         let tunnels_https = tunnels.clone();
@@ -130,7 +133,7 @@ async fn main() -> Result<(), BoxError> {
                 metrics_https,
                 shutdown_token_https,
             ).await {
-                error!(event = "server.https.error", error = %e, "HTTPS server error.");
+                error!(error = %e, "HTTPS server error.");
             }
         }))
     } else {
@@ -143,7 +146,6 @@ async fn main() -> Result<(), BoxError> {
             loop {
                 interval.tick().await;
                 info!(
-                    event = "ssl.renew.check",
                     domain = %config.server.domain,
                     "Checked whether certificates need renewal."
                 );
@@ -152,20 +154,19 @@ async fn main() -> Result<(), BoxError> {
                     Ok(info) => {
                         if let Some(days_until_expiry) = info.days_until_expiry {
                             info!(
-                                event = "ssl.certificate.expiry",
                                 domain = %config.server.domain,
                                 days_until_expiry,
                                 "Certificate expiry checked for renewal decision."
                             );
                             if info.needs_renewal {
                                 if let Err(e) = manager.force_renewal().await {
-                                    error!(event = "ssl.renew.error", error = %e, "Certificate renewal failed.");
+                                    error!(error = %e, "Certificate renewal failed.");
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        error!(event = "ssl.certificate.info_error", error = %e, "Failed to read certificate metadata.");
+                        error!(error = %e, "Failed to read certificate metadata.");
                     }
                 }
             }
@@ -176,7 +177,7 @@ async fn main() -> Result<(), BoxError> {
 
     shutdown_token.cancelled().await;
 
-    info!(event = "shutdown.start", "Graceful shutdown started.");
+    info!("Graceful shutdown started.");
 
     graceful_shutdown(tunnels, active_requests, active_websockets, Duration::from_secs(30)).await;
 
@@ -189,7 +190,7 @@ async fn main() -> Result<(), BoxError> {
         handle.abort();
     }
 
-    info!(event = "shutdown.complete", "Shutdown completed.");
+    info!("Shutdown completed.");
     Ok(())
 }
 
@@ -199,7 +200,7 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
         config.server.http_port
     );
 
-    info!(event = "server.http.wait_ready", "Waiting for HTTP server readiness.");
+    info!("Waiting for HTTP server readiness.");
 
     for attempt in 1..=10 {
         match reqwest::get(&test_url).await {
@@ -214,7 +215,6 @@ async fn wait_for_http_server_ready(config: &ServerConfig) -> Result<(), BoxErro
             Err(e) => {
                 if attempt < 10 {
                     info!(
-                        event = "server.http.wait_retry",
                         attempt,
                         error = %e,
                         "HTTP server not ready; retrying."
@@ -243,7 +243,6 @@ async fn graceful_shutdown(
         let mut tunnels = tunnels.write().await;
         let tunnel_count = tunnels.len();
         info!(
-            event = "shutdown.tunnels.drop",
             count = tunnel_count,
             "Active tunnels dropped during shutdown."
         );
@@ -257,7 +256,6 @@ async fn graceful_shutdown(
 
         if ws_count > 0 {
             info!(
-                event = "shutdown.websockets.force_close",
                 count = ws_count,
                 "WebSocket connections force-closed during shutdown."
             );
@@ -273,7 +271,7 @@ async fn graceful_shutdown(
                     let _ = ws_tx.send(close_msg);
                 }
             }
-            info!(event = "shutdown.websockets.close_sent", "WebSocket close frames sent during shutdown.");
+            info!("WebSocket close frames sent during shutdown.");
         }
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -287,13 +285,12 @@ async fn graceful_shutdown(
         };
         
         if active_count == 0 {
-            info!(event = "shutdown.connections.drained", "Active connections drained during shutdown.");
+            info!("Active connections drained during shutdown.");
             break;
         }
 
         if start.elapsed() >= timeout {
             info!(
-                event = "shutdown.timeout",
                 active = active_count,
                 "Graceful shutdown timed out; forcing exit."
             );
@@ -301,12 +298,11 @@ async fn graceful_shutdown(
         }
 
         debug!(
-            event = "shutdown.wait",
             active = active_count,
             "Waiting for active connections to complete."
         );
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     
-    info!(event = "shutdown.done", "Graceful shutdown completed.");
+    info!("Graceful shutdown completed.");
 }

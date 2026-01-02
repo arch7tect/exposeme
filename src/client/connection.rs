@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use crate::Message;
 
 pub type ActiveWebSockets = Arc<RwLock<HashMap<String, ActiveWebSocketConnection>>>;
@@ -83,32 +83,14 @@ impl ActiveWebSocketConnection {
         self.update_activity().await;
         self.to_server_tx
             .send(message)
-            .map_err(|e| {
-                let error_msg = format!("Failed to send message to server: {}", e);
-                error!(
-                    event = "client.websocket.send_error",
-                    connection_id = %self.connection_id,
-                    error = %error_msg,
-                    "Failed to send message over client WebSocket."
-                );
-                error_msg
-            })
+            .map_err(|e| format!("Failed to send message to server: {}", e))
     }
 
     pub async fn send_to_local(&self, data: Vec<u8>) -> Result<(), String> {
         self.update_activity().await;
         self.local_tx
             .send(data)
-            .map_err(|e| {
-                let error_msg = format!("Failed to send data to local WebSocket: {}", e);
-                error!(
-                    event = "client.websocket.send_error",
-                    connection_id = %self.connection_id,
-                    error = %error_msg,
-                    "Failed to send message over client WebSocket."
-                );
-                error_msg
-            })
+            .map_err(|e| format!("Failed to send data to local WebSocket: {}", e))
     }
 }
 
@@ -126,7 +108,6 @@ pub async fn cleanup_expired_connections(
                 let status = connection.status_summary().await;
                 let idle_secs = connection.idle_time().await.as_secs();
                 warn!(
-                    event = "client.websocket.cleanup.mark",
                     connection_id = %connection.connection_id,
                     status = %status,
                     idle_secs,
@@ -140,7 +121,6 @@ pub async fn cleanup_expired_connections(
         for id in to_remove {
             if let Some(connection) = websockets.remove(&id) {
                 info!(
-                    event = "client.websocket.cleanup.connection",
                     connection_id = %connection.connection_id,
                     max_idle_secs = max_idle_time.as_secs(),
                     "WebSocket connection removed during cleanup."
@@ -152,7 +132,6 @@ pub async fn cleanup_expired_connections(
 
     if cleanup_count > 0 {
         info!(
-            event = "client.websocket.cleanup.done",
             count = cleanup_count,
             max_idle_secs = max_idle_time.as_secs(),
             "WebSocket cleanup completed."

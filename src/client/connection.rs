@@ -85,7 +85,12 @@ impl ActiveWebSocketConnection {
             .send(message)
             .map_err(|e| {
                 let error_msg = format!("Failed to send message to server: {}", e);
-                error!("WebSocket {}: {}", self.connection_id, error_msg);
+                error!(
+                    event = "client.websocket.send_error",
+                    connection_id = %self.connection_id,
+                    error = %error_msg,
+                    "Failed to send message over client WebSocket."
+                );
                 error_msg
             })
     }
@@ -96,7 +101,12 @@ impl ActiveWebSocketConnection {
             .send(data)
             .map_err(|e| {
                 let error_msg = format!("Failed to send data to local WebSocket: {}", e);
-                error!("WebSocket {}: {}", self.connection_id, error_msg);
+                error!(
+                    event = "client.websocket.send_error",
+                    connection_id = %self.connection_id,
+                    error = %error_msg,
+                    "Failed to send message over client WebSocket."
+                );
                 error_msg
             })
     }
@@ -113,12 +123,15 @@ pub async fn cleanup_expired_connections(
         let mut websockets = active_websockets.write().await;
         for (id, connection) in websockets.iter() {
             if connection.is_idle(max_idle_time).await {
+                let status = connection.status_summary().await;
+                let idle_secs = connection.idle_time().await.as_secs();
                 warn!(
-                    "WebSocket {}: Marking for cleanup: {} (idle: {}s, max_idle: {}s)",
-                    connection.connection_id,
-                    connection.status_summary().await,
-                    connection.idle_time().await.as_secs(),
-                    max_idle_time.as_secs()
+                    event = "client.websocket.cleanup.mark",
+                    connection_id = %connection.connection_id,
+                    status = %status,
+                    idle_secs,
+                    max_idle_secs = max_idle_time.as_secs(),
+                    "WebSocket connection marked for cleanup."
                 );
                 to_remove.push(id.clone());
             }
@@ -126,14 +139,24 @@ pub async fn cleanup_expired_connections(
 
         for id in to_remove {
             if let Some(connection) = websockets.remove(&id) {
-                info!("WebSocket {}: Cleaned up idle connection (max_idle: {}s)", connection.connection_id, max_idle_time.as_secs());
+                info!(
+                    event = "client.websocket.cleanup.connection",
+                    connection_id = %connection.connection_id,
+                    max_idle_secs = max_idle_time.as_secs(),
+                    "WebSocket connection removed during cleanup."
+                );
                 cleanup_count += 1;
             }
         }
     }
 
     if cleanup_count > 0 {
-        info!("Cleaned up {} idle WebSocket connections (max_idle: {}s)", cleanup_count, max_idle_time.as_secs());
+        info!(
+            event = "client.websocket.cleanup.done",
+            count = cleanup_count,
+            max_idle_secs = max_idle_time.as_secs(),
+            "WebSocket cleanup completed."
+        );
     }
 
     cleanup_count

@@ -17,7 +17,7 @@ pub async fn handle_tunnel_management_websocket(
     req: Request<Incoming>,
     context: ServiceContext,
 ) -> Result<Response<ResponseBody>, BoxError> {
-    info!("Tunnel management WebSocket upgrade request");
+    info!(event = "ws.tunnel_mgmt.upgrade.request", "Tunnel management WebSocket upgrade requested.");
 
     let ws_key = req
         .headers()
@@ -45,13 +45,13 @@ pub async fn handle_tunnel_management_websocket(
     tokio::spawn(async move {
         match hyper::upgrade::on(req).await {
             Ok(upgraded) => {
-                info!("Tunnel management WebSocket upgrade successful");
+                info!(event = "ws.tunnel_mgmt.upgrade.success", "Tunnel management WebSocket upgrade succeeded.");
                 if let Err(e) = handle_tunnel_management_connection(upgraded, context).await {
-                    error!("Tunnel management connection error: {}", e);
+                    error!(event = "ws.tunnel_mgmt.error", error = %e, "Tunnel management WebSocket connection error.");
                 }
             }
             Err(e) => {
-                error!("Tunnel management WebSocket upgrade failed: {}", e);
+                error!(event = "ws.tunnel_mgmt.upgrade.error", error = %e, "Tunnel management WebSocket connection error.");
             }
         }
     });
@@ -69,7 +69,11 @@ pub async fn handle_websocket_upgrade_request(
     let (tunnel_id, forwarded_path) = match extract_tunnel_id_from_request(&req, &context.config) {
         Ok(result) => result,
         Err(e) => {
-            warn!("Failed to extract tunnel ID for WebSocket: {}", e);
+            warn!(
+                event = "ws.upgrade.invalid",
+                error = %e,
+                "Invalid WebSocket upgrade request."
+            );
             return Ok(Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(boxed_body(format!("Invalid WebSocket request: {}", e)))
@@ -78,15 +82,22 @@ pub async fn handle_websocket_upgrade_request(
     };
 
     info!(
-        "WebSocket upgrade for tunnel '{}': {} {}",
-        tunnel_id, method, forwarded_path
+        event = "ws.upgrade.request",
+        tunnel_id,
+        method = %method,
+        path = %forwarded_path,
+        "WebSocket upgrade request received."
     );
 
     let tunnel_sender = context.tunnels.read().await.get(&tunnel_id).map(|conn| conn.sender.clone());
     let tunnel_sender = match tunnel_sender {
         Some(sender) => sender,
         None => {
-            warn!("Tunnel '{}' not found for WebSocket upgrade", tunnel_id);
+            warn!(
+                event = "ws.upgrade.tunnel_missing",
+                tunnel_id,
+                "Tunnel not found for WebSocket upgrade."
+            );
             context.metrics.record_error(Some(&tunnel_id));
             return Ok(Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
@@ -100,8 +111,9 @@ pub async fn handle_websocket_upgrade_request(
     let headers = extract_headers(&req);
 
     debug!(
-        "Processing WebSocket upgrade for connection {}",
-        connection_id
+        event = "ws.upgrade.processing",
+        connection_id,
+        "Processing WebSocket upgrade."
     );
 
     let ws_key = req
@@ -139,8 +151,10 @@ pub async fn handle_websocket_upgrade_request(
 
     if let Err(e) = tunnel_sender.send(upgrade_message) {
         error!(
-            "Failed to send WebSocket upgrade to tunnel '{}': {}",
-            tunnel_id, e
+            event = "ws.upgrade.send_error",
+            tunnel_id,
+            error = %e,
+            "Failed to send WebSocket upgrade to tunnel."
         );
         context.active_websockets.write().await.remove(&connection_id);
         return Ok(Response::builder()
@@ -161,18 +175,22 @@ pub async fn handle_websocket_upgrade_request(
                 )
                     .await
                 {
-                    error!("WebSocket proxy error: {}", e);
+                    error!(event = "ws.proxy.error", error = %e, "WebSocket proxy error.");
                     context_clone.active_websockets.write().await.remove(&connection_id_clone);
                 }
             }
             Err(e) => {
-                error!("Failed to upgrade connection: {}", e);
+                error!(event = "ws.upgrade.error", error = %e, "WebSocket upgrade failed.");
                 context_clone.active_websockets.write().await.remove(&connection_id_clone);
             }
         }
     });
 
-    debug!("WebSocket upgrade response sent for {}", connection_id);
+    debug!(
+        event = "ws.upgrade.response_sent",
+        connection_id,
+        "WebSocket upgrade response sent."
+    );
     Ok(response)
 }
 
@@ -182,7 +200,11 @@ async fn handle_websocket_proxy_connection(
     connection_id: String,
     context: ServiceContext,
 ) -> Result<(), BoxError> {
-    debug!("Starting WebSocket proxy for connection {}", connection_id);
+    debug!(
+        event = "ws.proxy.start",
+        connection_id,
+        "WebSocket proxy started."
+    );
 
     let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<WsMessage>();
 
@@ -213,7 +235,11 @@ async fn handle_websocket_proxy_connection(
             .map(|conn| conn.status_summary())
             .unwrap_or_else(|| "unknown".to_string())
     };
-    info!("WebSocket proxy established: {}", connection_status);
+    info!(
+        event = "ws.proxy.established",
+        connection_status,
+        "WebSocket proxy established."
+    );
 
     // Record WebSocket connection in metrics now that proxy is successfully established
     let tunnel_id_for_metrics = {
@@ -250,7 +276,7 @@ async fn handle_websocket_proxy_connection(
                     )
                         .await
                     {
-                        error!("Failed to send WebSocket text: {}", e);
+                        error!(event = "ws.proxy.send_text_error", error = %e, "Failed to send text frame through proxy.");
                     }
                 }
                 Ok(WsMessage::Binary(bytes)) => {
@@ -273,7 +299,7 @@ async fn handle_websocket_proxy_connection(
                     )
                         .await
                     {
-                        error!("Failed to send WebSocket binary: {}", e);
+                        error!(event = "ws.proxy.send_binary_error", error = %e, "Failed to send binary frame through proxy.");
                     }
                 }
                 Ok(WsMessage::Close(close_frame)) => {
@@ -284,8 +310,11 @@ async fn handle_websocket_proxy_connection(
                     };
 
                     info!(
-                        "WebSocket connection {} closed by server with code={:?}, reason={:?}",
-                        connection_id_clone, code, reason
+                        event = "ws.proxy.close",
+                        connection_id = %connection_id_clone,
+                        code = ?code,
+                        reason = ?reason,
+                        "WebSocket proxy close received."
                     );
 
                     let message = Message::WebSocketClose {
@@ -301,14 +330,16 @@ async fn handle_websocket_proxy_connection(
                     )
                         .await
                     {
-                        error!("Failed to send close message: {}", e);
+                        error!(event = "ws.proxy.close_send_error", error = %e, "Failed to send proxy close message.");
                     }
                     break;
                 }
                 Err(e) => {
                     error!(
-                        "Original WebSocket error for {}: {}",
-                        connection_id_clone, e
+                        event = "ws.proxy.original_error",
+                        connection_id = %connection_id_clone,
+                        error = %e,
+                        "Original WebSocket error in proxy."
                     );
                     break;
                 }
@@ -317,8 +348,9 @@ async fn handle_websocket_proxy_connection(
         }
 
         info!(
-            "Original-to-tunnel task ended for {}",
-            connection_id_clone
+            event = "ws.proxy.original_to_tunnel.done",
+            connection_id = %connection_id_clone,
+            "Proxy forwarding from original to tunnel completed."
         );
     });
 
@@ -327,25 +359,35 @@ async fn handle_websocket_proxy_connection(
         while let Some(ws_message) = ws_rx.recv().await {
             if original_sink.send(ws_message).await.is_err() {
                 error!(
-                    "Failed to send to original WebSocket client for {}",
-                    connection_id_clone
+                    event = "ws.proxy.original_send_error",
+                    connection_id = %connection_id_clone,
+                    "Failed to send to original WebSocket client."
                 );
                 break;
             }
         }
 
         info!(
-            "Tunnel-to-original task ended for {}",
-            connection_id_clone
+            event = "ws.proxy.tunnel_to_original.done",
+            connection_id = %connection_id_clone,
+            "Proxy forwarding from tunnel to original completed."
         );
     });
 
     tokio::select! {
         _ = original_to_tunnel_task => {
-            info!("Original client disconnected for {}", connection_id);
+            info!(
+                event = "ws.proxy.original_disconnected",
+                connection_id,
+                "Original WebSocket client disconnected."
+            );
         }
         _ = tunnel_to_original_task => {
-            info!("Tunnel client disconnected for {}", connection_id);
+            info!(
+                event = "ws.proxy.tunnel_disconnected",
+                connection_id,
+                "Tunnel client disconnected."
+            );
         }
     }
 
@@ -362,8 +404,9 @@ async fn handle_websocket_proxy_connection(
     }
 
     info!(
-        "WebSocket proxy connection {} fully closed",
-        connection_id
+        event = "ws.proxy.closed",
+        connection_id,
+        "WebSocket proxy fully closed."
     );
     Ok(())
 }
@@ -379,7 +422,11 @@ pub async fn send_to_tunnel(
         match websockets.get(connection_id) {
             Some(conn) => conn.tunnel_id.clone(),
             None => {
-                debug!("Connection {} already cleaned up, ignoring message", connection_id);
+                debug!(
+                    event = "ws.proxy.connection_missing",
+                    connection_id,
+                    "WebSocket proxy connection missing."
+                );
                 return Ok(());
             }
         }
@@ -395,7 +442,12 @@ pub async fn send_to_tunnel(
                 }
             }
             None => {
-                debug!("Tunnel {} disconnected, ignoring message for connection {}", tunnel_id, connection_id);
+                debug!(
+                    event = "ws.proxy.tunnel_missing",
+                    tunnel_id,
+                    connection_id,
+                    "Tunnel missing for proxy connection."
+                );
                 context.metrics.record_error(Some(&tunnel_id));
                 return Ok(());
             }

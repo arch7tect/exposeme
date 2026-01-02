@@ -32,12 +32,16 @@ pub async fn start_http_server(
     let addr: std::net::SocketAddr = config.http_addr().parse()?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    info!("HTTP server listening on http://{}", config.http_addr());
+    info!(
+        event = "server.http.listen",
+        addr = %config.http_addr(),
+        "HTTP server listening."
+    );
 
     loop {
         tokio::select! {
             _ = shutdown_token.cancelled() => {
-                info!("HTTP server shutting down gracefully...");
+                info!(event = "server.http.shutdown", "HTTP server shutting down.");
                 break;
             }
             result = listener.accept() => {
@@ -64,7 +68,11 @@ pub async fn start_http_server(
                         .serve_connection_with_upgrades(io, TowerToHyperService::new(service))
                         .await
                     {
-                        error!("Failed to serve HTTP connection: {}", err);
+                        error!(
+                            event = "server.http.connection_error",
+                            error = %err,
+                            "HTTP connection handling failed."
+                        );
                     }
                 });
             }
@@ -90,12 +98,16 @@ pub async fn start_https_server(
     let addr: std::net::SocketAddr = config.https_addr().parse()?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    info!("HTTPS server listening on https://{}", config.https_addr());
+    info!(
+        event = "server.https.listen",
+        addr = %config.https_addr(),
+        "HTTPS server listening."
+    );
 
     loop {
         tokio::select! {
             _ = shutdown_token.cancelled() => {
-                info!("HTTPS server shutting down gracefully...");
+                info!(event = "server.https.shutdown", "HTTPS server shutting down.");
                 break;
             }
             result = listener.accept() => {
@@ -126,11 +138,19 @@ pub async fn start_https_server(
                                 .serve_connection_with_upgrades(io, TowerToHyperService::new(service))
                                 .await
                             {
-                                error!("Failed to serve HTTPS connection: {}", e);
+                                error!(
+                                    event = "server.https.connection_error",
+                                    error = %e,
+                                    "HTTPS connection handling failed."
+                                );
                             }
                         }
                         Err(e) => {
-                            error!("TLS handshake error: {}", e);
+                            error!(
+                                event = "server.https.tls_error",
+                                error = %e,
+                                "TLS handshake failed."
+                            );
                         }
                     }
                 });

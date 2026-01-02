@@ -13,6 +13,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .install_default()
         .expect("Failed to install ring CryptoProvider");
 
+    let args = ClientArgs::parse();
+    initialize_tracing(args.verbose);
+    let _log_span = tracing::info_span!(
+        "exposeme",
+        role = "client",
+        version = env!("CARGO_PKG_VERSION")
+    )
+    .entered();
+
     let shutdown_token = CancellationToken::new();
     let shutdown_token_signal = shutdown_token.clone();
 
@@ -25,21 +34,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .expect("Failed to install SIGINT handler");
 
             tokio::select! {
-                _ = sigterm.recv() => info!("Received SIGTERM, initiating graceful shutdown..."),
-                _ = sigint.recv() => info!("Received SIGINT, initiating graceful shutdown..."),
+                _ = sigterm.recv() => info!(event = "shutdown.signal", signal = "SIGTERM", "Shutdown signal received."),
+                _ = sigint.recv() => info!(event = "shutdown.signal", signal = "SIGINT", "Shutdown signal received."),
             }
         }
         #[cfg(not(unix))]
         {
             signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
-            info!("Received Ctrl+C, initiating graceful shutdown...");
+            info!(event = "shutdown.signal", signal = "SIGINT", "Shutdown signal received.");
         }
 
         shutdown_token_signal.cancel();
     });
-
-    let args = ClientArgs::parse();
-    initialize_tracing(args.verbose);
 
     if args.generate_config {
         ClientConfig::generate_default_file(&args.config)?;
@@ -47,34 +53,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let config = ClientConfig::load(&args)?;
-    info!("Loaded configuration from {:?}", args.config);
-    info!("Server: {}", config.client.server_url);
-    info!("Tunnel ID: {}", config.client.tunnel_id);
-    info!("Local target: {}", config.client.local_target);
-
-    info!("Starting ExposeME Client (v {})...", env!("CARGO_PKG_VERSION"));
+    info!(event = "config.loaded", path = ?args.config, "Config loaded from path.");
+    info!(event = "client.server.configured", url = %config.client.server_url, "Client server URL configured.");
+    info!(event = "client.tunnel.configured", tunnel_id = %config.client.tunnel_id, "Client tunnel configured.");
+    info!(event = "client.target.configured", target = %config.client.local_target, "Client local target configured.");
+    info!(event = "client.start", version = env!("CARGO_PKG_VERSION"), "Client started.");
 
     let mut client = ExposeMeClient::new(config);
 
     loop {
         tokio::select! {
             _ = shutdown_token.cancelled() => {
-                info!("Graceful shutdown initiated...");
+                info!(event = "shutdown.start", "Graceful shutdown started.");
                 break;
             }
             result = client.run(shutdown_token.clone()) => {
                 match result {
                     Ok(_) => {
-                        info!("Client disconnected normally");
+                        info!(event = "client.disconnect", clean = true, "Client disconnected cleanly.");
                         break;
                     }
                     Err(e) => {
-                        error!("Client error: {}", e);
+                        error!(event = "client.error", error = %e, "Client run failed.");
 
                         if client.config().client.auto_reconnect {
                             info!(
-                                "Reconnecting in {} seconds...",
-                                client.config().client.reconnect_delay_secs
+                                event = "client.reconnect.scheduled",
+                                delay_secs = client.config().client.reconnect_delay_secs,
+                                "Client reconnect scheduled."
                             );
                             tokio::time::sleep(Duration::from_secs(client.config().client.reconnect_delay_secs))
                                 .await;

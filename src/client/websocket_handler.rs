@@ -43,7 +43,13 @@ impl WebSocketHandler {
         path: String,
         headers: HashMap<String, String>,
     ) {
-        info!("Received WebSocketUpgrade: {} {} (connection: {})", method, path, connection_id);
+        info!(
+            event = "client.ws.upgrade.received",
+            method,
+            path,
+            connection_id = %connection_id,
+            "WebSocket upgrade request received."
+        );
 
         let local_target = self.local_target.clone();
         let to_server_tx = self.to_server_tx.clone();
@@ -67,12 +73,23 @@ impl WebSocketHandler {
     }
 
     pub async fn handle_data(&self, connection_id: String, data: Vec<u8>) {
-        debug!("Received WebSocketData: {} ({} bytes)", connection_id, data.len());
+        debug!(
+            event = "client.ws.data.received",
+            connection_id = %connection_id,
+            bytes = data.len(),
+            "WebSocket data received for a client connection."
+        );
         handle_websocket_data(self.active_websockets.clone(), connection_id, data).await;
     }
 
     pub async fn handle_close(&self, connection_id: String, code: Option<u16>, reason: Option<String>) {
-        debug!("Received WebSocketClose: {} (code: {:?}, reason: {:?})", connection_id, code, reason);
+        debug!(
+            event = "client.ws.close.received",
+            connection_id = %connection_id,
+            code = ?code,
+            reason = ?reason,
+            "WebSocket close frame received from server."
+        );
         handle_websocket_close(self.active_websockets.clone(), connection_id, code, reason).await;
     }
 }
@@ -89,8 +106,18 @@ async fn handle_websocket_upgrade(
     config: &ClientConfig,
     shutdown_flag: Arc<AtomicBool>,
 ) {
-    info!("Processing WebSocket upgrade for connection {}", connection_id);
-    info!("Request: {} {} (headers: {})", method, path, headers.len());
+    info!(
+        event = "client.ws.upgrade.start",
+        connection_id = %connection_id,
+        "WebSocket upgrade processing started."
+    );
+    info!(
+        event = "client.ws.upgrade.request",
+        method,
+        path,
+        headers = headers.len(),
+        "WebSocket upgrade request details logged."
+    );
 
     let ws_url = if local_target.starts_with("http://") {
         local_target.replace("http://", "ws://") + &path
@@ -100,13 +127,21 @@ async fn handle_websocket_upgrade(
         format!("ws://{}{}", local_target, path)
     };
 
-    debug!("Connecting to local WebSocket: {}", ws_url);
+    debug!(
+        event = "client.ws.local.connecting",
+        url = %ws_url,
+        "Connecting to local WebSocket service."
+    );
     let connect_timeout = Duration::from_secs(config.client.websocket_connection_timeout_secs);
     let connect_result = timeout(connect_timeout, connect_async(&ws_url)).await;
 
     match connect_result {
         Ok(Ok((local_ws, response))) => {
-            debug!("Connected to local WebSocket service for {}", connection_id);
+            debug!(
+                event = "client.ws.local.connected",
+                connection_id = %connection_id,
+                "Connected to local WebSocket service."
+            );
 
             let mut response_headers = HashMap::new();
             for (name, value) in response.headers() {
@@ -123,7 +158,12 @@ async fn handle_websocket_upgrade(
             };
 
             if let Err(e) = to_server_tx.send(upgrade_response) {
-                error!("Failed to send WebSocket upgrade response for {}: {}", connection_id, e);
+                error!(
+                    event = "client.ws.upgrade.send_error",
+                    connection_id = %connection_id,
+                    error = %e,
+                    "Failed to send WebSocket upgrade response."
+                );
                 return;
             }
 
@@ -137,7 +177,11 @@ async fn handle_websocket_upgrade(
             );
             let connection_clone = connection.clone();
 
-            info!("WebSocket {}: WebSocket connection established", connection.connection_id);
+            info!(
+                event = "client.ws.connection.established",
+                connection_id = %connection.connection_id,
+                "Client WebSocket connection established to local target."
+            );
 
             {
                 let mut websockets = active_websockets.write().await;
@@ -159,11 +203,22 @@ async fn handle_websocket_upgrade(
                         let should_cleanup = {
                             let websockets = active_websockets.read().await;
                             if let Some(connection) = websockets.get(&connection_id) {
+                                let status = connection.status_summary().await;
                                 if connection.is_idle(max_idle).await {
-                                    warn!("WebSocket {}: Connection timeout detected ({})", connection.connection_id, connection.status_summary().await);
+                                    warn!(
+                                        event = "client.ws.monitor.timeout",
+                                        connection_id = %connection.connection_id,
+                                        status = %status,
+                                        "WebSocket monitor detected idle timeout."
+                                    );
                                     true
                                 } else {
-                                    debug!("WebSocket {}: Health check: {}", connection.connection_id, connection.status_summary().await);
+                                    debug!(
+                                        event = "client.ws.monitor.health",
+                                        connection_id = %connection.connection_id,
+                                        status = %status,
+                                        "WebSocket health check recorded."
+                                    );
                                     false
                                 }
                             } else {
@@ -176,7 +231,11 @@ async fn handle_websocket_upgrade(
                         }
                     }
 
-                    info!("Monitoring task ended for {}", connection_id);
+                    info!(
+                        event = "client.ws.monitor.done",
+                        connection_id = %connection_id,
+                        "WebSocket monitor task ended."
+                    );
                 })
             };
 
@@ -188,35 +247,61 @@ async fn handle_websocket_upgrade(
                 let connection_id = connection_id_clone.clone();
 
                 tokio::spawn(async move {
-                    debug!("WebSocket {}: Started local-to-server forwarding task", connection.connection_id);
+                    debug!(
+                        event = "client.ws.forward.local_to_server.start",
+                        connection_id = %connection.connection_id,
+                        "Local-to-server WebSocket forwarding started."
+                    );
 
                     while let Some(msg) = local_stream.next().await {
                         if shutdown_flag.load(Ordering::Relaxed) {
-                            debug!("Shutdown detected, stopping message forwarding for {}", connection.connection_id);
+                            debug!(
+                                event = "client.ws.forward.local_to_server.shutdown",
+                                connection_id = %connection.connection_id,
+                                "Local-to-server forwarding stopped due to shutdown."
+                            );
                             break;
                         }
                         match msg {
                             Ok(WsMessage::Text(text)) => {
-                                trace!("WebSocket {}: Forwarding text to server: {} chars", connection.connection_id, text.len());
+                                trace!(
+                                    event = "client.ws.forward.local_to_server.text",
+                                    connection_id = %connection.connection_id,
+                                    chars = text.len(),
+                                    "Text frame forwarded to server."
+                                );
                                 let message = Message::WebSocketData {
                                     connection_id: connection.connection_id.clone(),
                                     data: text.as_bytes().to_vec(),
                                 };
 
                                 if connection.send_to_server(message).await.is_err() {
-                                    error!("WebSocket {}: Failed to send text message to server, terminating", connection.connection_id);
+                                    error!(
+                                        event = "client.ws.forward.local_to_server.text_error",
+                                        connection_id = %connection.connection_id,
+                                        "Failed to forward text frame to server."
+                                    );
                                     break;
                                 }
                             }
                             Ok(WsMessage::Binary(bytes)) => {
-                                trace!("WebSocket {}: Forwarding binary to server: {} bytes", connection.connection_id, bytes.len());
+                                trace!(
+                                    event = "client.ws.forward.local_to_server.binary",
+                                    connection_id = %connection.connection_id,
+                                    bytes = bytes.len(),
+                                    "Binary frame forwarded to server."
+                                );
                                 let message = Message::WebSocketData {
                                     connection_id: connection.connection_id.clone(),
                                     data: bytes.to_vec(),
                                 };
 
                                 if connection.send_to_server(message).await.is_err() {
-                                    error!("WebSocket {}: Failed to send binary message to server, terminating", connection.connection_id);
+                                    error!(
+                                        event = "client.ws.forward.local_to_server.binary_error",
+                                        connection_id = %connection.connection_id,
+                                        "Failed to forward binary frame to server."
+                                    );
                                     break;
                                 }
                             }
@@ -227,7 +312,13 @@ async fn handle_websocket_upgrade(
                                     (None, None)
                                 };
 
-                                info!("WebSocket {}: Local WebSocket closed: code={:?}, reason={:?}", connection.connection_id, code, reason);
+                                info!(
+                                    event = "client.ws.local.closed",
+                                    connection_id = %connection.connection_id,
+                                    code = ?code,
+                                    reason = ?reason,
+                                    "Local WebSocket closed."
+                                );
 
                                 let message = Message::WebSocketClose {
                                     connection_id: connection.connection_id.clone(),
@@ -238,7 +329,12 @@ async fn handle_websocket_upgrade(
                                 break;
                             }
                             Err(e) => {
-                                error!("WebSocket {}: Local WebSocket error: {}", connection.connection_id, e);
+                                error!(
+                                    event = "client.ws.local.error",
+                                    connection_id = %connection.connection_id,
+                                    error = %e,
+                                    "Local WebSocket error."
+                                );
                                 break;
                             }
                             _ => {}
@@ -255,7 +351,11 @@ async fn handle_websocket_upgrade(
                     };
 
                     active_websockets_clone.write().await.remove(&connection_id);
-                    debug!("Local-to-server task ended: {}", final_status);
+                    debug!(
+                        event = "client.ws.forward.local_to_server.done",
+                        status = %final_status,
+                        "Local-to-server forwarding task ended."
+                    );
                 })
             };
 
@@ -263,7 +363,11 @@ async fn handle_websocket_upgrade(
                 let connection = connection_clone.clone();
 
                 tokio::spawn(async move {
-                    debug!("WebSocket {}: Started server-to-local forwarding task", connection.connection_id);
+                    debug!(
+                        event = "client.ws.forward.server_to_local.start",
+                        connection_id = %connection.connection_id,
+                        "Server-to-local WebSocket forwarding started."
+                    );
 
                     while let Some(data) = local_rx.recv().await {
                         let ws_message = if let Ok(text) = String::from_utf8(data.clone()) {
@@ -273,42 +377,83 @@ async fn handle_websocket_upgrade(
                         };
 
                         if local_sink.send(ws_message).await.is_err() {
-                            error!("WebSocket {}: Failed to send to local WebSocket, terminating", connection.connection_id);
+                            error!(
+                                event = "client.ws.forward.server_to_local.error",
+                                connection_id = %connection.connection_id,
+                                "Failed to forward frame to local WebSocket."
+                            );
                             break;
                         }
                     }
 
-                    info!("WebSocket {}: Server-to-local task ended ({})", connection.connection_id, connection.status_summary().await);
+                    let status = connection.status_summary().await;
+                    info!(
+                        event = "client.ws.forward.server_to_local.done",
+                        connection_id = %connection.connection_id,
+                        status = %status,
+                        "Server-to-local forwarding task ended."
+                    );
                 })
             };
 
             tokio::select! {
                 _ = monitoring_task => {
-                    info!("Monitoring task completed for {}", connection_id);
+                    info!(
+                        event = "client.ws.monitor.completed",
+                        connection_id = %connection_id,
+                        "WebSocket monitor task completed."
+                    );
                 }
                 _ = local_to_server_task => {
-                    info!("Local-to-server task completed for {}", connection_id);
+                    info!(
+                        event = "client.ws.forward.local_to_server.completed",
+                        connection_id = %connection_id,
+                        "Local-to-server forwarding task completed."
+                    );
                 }
                 _ = server_to_local_task => {
-                    info!("Server-to-local task completed for {}", connection_id);
+                    info!(
+                        event = "client.ws.forward.server_to_local.completed",
+                        connection_id = %connection_id,
+                        "Server-to-local forwarding task completed."
+                    );
                 }
             }
 
             {
                 let mut websockets = active_websockets.write().await;
                 if let Some(connection) = websockets.remove(&connection_id) {
-                    info!("WebSocket {}: Final cleanup: {}", connection.connection_id, connection.status_summary().await);
+                    let status = connection.status_summary().await;
+                    info!(
+                        event = "client.ws.cleanup.final",
+                        connection_id = %connection.connection_id,
+                        status = %status,
+                        "Final WebSocket cleanup completed for the client connection."
+                    );
                 }
             }
 
-            info!("WebSocket connection {} fully closed", connection_id);
+            info!(
+                event = "client.ws.closed",
+                connection_id = %connection_id,
+                "WebSocket closed."
+            );
         }
         Ok(Err(e)) => {
-            error!("Failed to connect to local WebSocket service {}: {}", connection_id, e);
+            error!(
+                event = "client.ws.local.connect_error",
+                connection_id = %connection_id,
+                error = %e,
+                "Failed to connect to local WebSocket service."
+            );
             send_websocket_error_response(to_server_tx, connection_id, 502, "Connection failed").await;
         }
         Err(_) => {
-            error!("Connection timeout for WebSocket {}", connection_id);
+            error!(
+                event = "client.ws.local.timeout",
+                connection_id = %connection_id,
+                "Local WebSocket connection timed out."
+            );
             send_websocket_error_response(to_server_tx, connection_id, 504, "Connection timeout").await;
         }
     }
@@ -330,7 +475,11 @@ async fn send_websocket_error_response(
     };
 
     if let Err(e) = to_server_tx.send(error_response) {
-        error!("Failed to send WebSocket error response: {}", e);
+        error!(
+            event = "client.ws.error_response.send_error",
+            error = %e,
+            "Failed to send WebSocket error response to server."
+        );
     }
 }
 
@@ -344,13 +493,26 @@ async fn handle_websocket_data(
         let data_size = data.len();
 
         if connection.send_to_local(data).await.is_ok() {
-            debug!("WebSocket {}: Forwarded {} bytes to local WebSocket", connection.connection_id, data_size);
+            debug!(
+                event = "client.ws.local.forwarded",
+                connection_id = %connection.connection_id,
+                bytes = data_size,
+                "Frame forwarded to local WebSocket."
+            );
         } else {
             active_websockets.write().await.remove(&connection_id);
-            error!("WebSocket {}: Failed to forward data to local WebSocket", connection.connection_id);
+            error!(
+                event = "client.ws.local.forward_error",
+                connection_id = %connection.connection_id,
+                "Failed to forward frame to local WebSocket."
+            );
         }
     } else {
-        warn!("Received data for unknown WebSocket connection: {}", connection_id);
+        warn!(
+            event = "client.ws.unknown_connection",
+            connection_id = %connection_id,
+            "WebSocket message for unknown connection."
+        );
     }
 }
 
@@ -361,11 +523,20 @@ async fn handle_websocket_close(
     reason: Option<String>,
 ) {
     if let Some(connection) = active_websockets.write().await.remove(&connection_id) {
+        let status = connection.status_summary().await;
         info!(
-            "WebSocket {}: WebSocket closed by server: code={:?}, reason={:?}, final_status={}",
-            connection.connection_id, code, reason, connection.status_summary().await
+            event = "client.ws.server_closed",
+            connection_id = %connection.connection_id,
+            code = ?code,
+            reason = ?reason,
+            status = %status,
+            "Server closed WebSocket connection."
         );
     } else {
-        debug!("Connection {} already cleaned up, ignoring close message", connection_id);
+        debug!(
+            event = "client.ws.close.ignored",
+            connection_id = %connection_id,
+            "Ignored WebSocket close for unknown client connection."
+        );
     }
 }

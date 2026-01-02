@@ -29,13 +29,13 @@ pub async fn handle_tunnel_management_connection(
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
-    debug!("Waiting for authentication message...");
+    debug!(event = "tunnel.auth.wait", "Waiting for tunnel authentication message.");
 
     let tunnel_id =
         match wait_for_authentication(&mut ws_receiver, &mut ws_sender, &context).await? {
             Some(info) => info,
             None => {
-                info!("Authentication failed or connection closed");
+                info!(event = "tunnel.auth.failed", "Tunnel authentication failed or connection closed.");
                 return Ok(());
             }
         };
@@ -47,7 +47,11 @@ pub async fn handle_tunnel_management_connection(
         let mut tunnels_guard = context.tunnels.write().await;
         tunnels_guard.insert(tunnel_id.clone(), tunnel_connection);
     }
-    debug!("Authentication successful for tunnel '{}'", tunnel_id);
+    debug!(
+        event = "tunnel.auth.success",
+        tunnel_id,
+        "Tunnel authentication succeeded."
+    );
 
     context.metrics.tunnel_connected(&tunnel_id);
 
@@ -68,7 +72,11 @@ pub async fn handle_tunnel_management_connection(
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => {
-                info!("Tunnel '{}' cancelled by ping task (stale connection)", tunnel_id);
+                info!(
+                    event = "tunnel.ping.cancelled",
+                    tunnel_id,
+                    "Ping task cancelled due to stale connection."
+                );
                 break;
             }
 
@@ -80,7 +88,12 @@ pub async fn handle_tunnel_management_connection(
                 let ping_payload = timestamp.to_be_bytes().to_vec();
 
                 if let Err(e) = ws_sender.send(WsMessage::Ping(ping_payload.into())).await {
-                    error!("Failed to send ping to tunnel '{}': {}", tunnel_id, e);
+                    error!(
+                        event = "tunnel.ping.send_error",
+                        tunnel_id,
+                        error = %e,
+                        "Failed to send ping to tunnel client."
+                    );
                     context.metrics.record_error(Some(&tunnel_id));
                     break;
                 }
@@ -88,7 +101,11 @@ pub async fn handle_tunnel_management_connection(
                 if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
                     connection.record_ping_sent().await;
                 }
-                debug!("Sent native WebSocket ping to tunnel '{}'", tunnel_id);
+                debug!(
+                    event = "tunnel.ping.sent",
+                    tunnel_id,
+                    "Ping sent to tunnel client."
+                );
             }
 
             message = rx.recv() => {
@@ -98,13 +115,21 @@ pub async fn handle_tunnel_management_connection(
                 match message.to_bincode() {
                     Ok(bytes) => {
                         if let Err(e) = ws_sender.send(WsMessage::Binary(bytes.into())).await {
-                            error!("Failed to send WS message to client: {}", e);
+                            error!(
+                                event = "tunnel.ws.send_error",
+                                error = %e,
+                                "Failed to send tunnel WebSocket message."
+                            );
                             context.metrics.record_error(Some(&tunnel_id));
                             break;
                         }
                     }
                     Err(e) => {
-                        error!("Failed to serialize message to bincode: {}", e);
+                        error!(
+                            event = "tunnel.message.serialize_error",
+                            error = %e,
+                            "Failed to serialize tunnel message."
+                        );
                         context.metrics.record_error(Some(&tunnel_id));
                     }
                 }
@@ -115,7 +140,11 @@ pub async fn handle_tunnel_management_connection(
                     break;
                 };
                 message_count += 1;
-                trace!("Server: Received WebSocket message #{}", message_count);
+                trace!(
+                    event = "tunnel.ws.message",
+                    message_count,
+                    "Tunnel WebSocket message received."
+                );
 
                 if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
                     connection.update_activity().await;
@@ -123,11 +152,20 @@ pub async fn handle_tunnel_management_connection(
 
                 match message {
                     Ok(WsMessage::Binary(bytes)) => {
-                        trace!("Server: Processing binary message #{} ({} bytes)", message_count, bytes.len());
+                        trace!(
+                            event = "tunnel.ws.message.binary",
+                            message_count,
+                            bytes = bytes.len(),
+                            "Binary tunnel WebSocket message received."
+                        );
 
                         match Message::from_bincode(&bytes) {
                             Ok(msg) => {
-                                trace!("Server: Successfully parsed message #{}: {:?}", message_count, std::mem::discriminant(&msg));
+                                trace!(
+                                    event = "tunnel.ws.message.parsed",
+                                    message_count,
+                                    "Tunnel WebSocket message parsed."
+                                );
 
                                 match msg {
                                     Message::HttpResponseStart {
@@ -152,8 +190,10 @@ pub async fn handle_tunnel_management_connection(
                                         headers: _,
                                     } => {
                                         debug!(
-                                            "WebSocket upgrade response: {} (status: {})",
-                                            connection_id, status
+                                            event = "tunnel.ws.upgrade_response",
+                                            connection_id,
+                                            status,
+                                            "Tunnel WebSocket upgrade response received."
                                         );
                                     }
 
@@ -174,33 +214,49 @@ pub async fn handle_tunnel_management_connection(
 
 
                                     _ => {
-                                        warn!("Unexpected message type from tunnel client");
+                                        warn!(event = "tunnel.message.unexpected", "Unexpected message from tunnel client.");
                                     }
                                 }
                             }
                             Err(e) => {
-                                error!("Failed to parse bincode message: {}", e);
+                                error!(
+                                    event = "tunnel.message.parse_error",
+                                    error = %e,
+                                    "Failed to parse tunnel message."
+                                );
                                 context.metrics.record_error(Some(&tunnel_id));
                             }
                         }
                     }
                     Ok(WsMessage::Text(text)) => {
-                        error!("Received unexpected text message (protocol requires binary): {} chars", text.len());
-                        error!("Please ensure both client and server are using the same protocol version");
+                        error!(
+                            event = "tunnel.message.unexpected_text",
+                            chars = text.len(),
+                            "Unexpected text message received from tunnel client."
+                        );
+                        error!(event = "tunnel.protocol.mismatch", "Tunnel protocol mismatch detected.");
                         context.metrics.record_error(Some(&tunnel_id));
                     }
                     Ok(WsMessage::Pong(_)) => {
-                        debug!("Received native WebSocket pong from tunnel '{}'", tunnel_id);
+                        debug!(
+                            event = "tunnel.pong.received",
+                            tunnel_id,
+                            "Pong received from tunnel client."
+                        );
                         if let Some(connection) = context.tunnels.read().await.get(&tunnel_id) {
                             connection.update_activity().await;
                         }
                     }
                     Ok(WsMessage::Close(_)) => {
-                        info!("Tunnel management WebSocket closed");
+                        info!(event = "tunnel.ws.closed", "Tunnel WebSocket closed.");
                         break;
                     }
                     Err(e) => {
-                        error!("Tunnel management WebSocket error: {}", e);
+                        error!(
+                            event = "tunnel.ws.error",
+                            error = %e,
+                            "Tunnel WebSocket error."
+                        );
                         context.metrics.record_error(Some(&tunnel_id));
                         break;
                     }
@@ -210,14 +266,14 @@ pub async fn handle_tunnel_management_connection(
         }
     }
 
-    info!("Sending WebSocket close frame to client");
+    info!(event = "tunnel.ws.close_send", "Sending close frame to tunnel client.");
     let close_frame = tokio_tungstenite::tungstenite::protocol::CloseFrame {
         code: CloseCode::Away,
         reason: "Server shutting down".into(),
     };
     let _ = ws_sender.send(WsMessage::Close(Some(close_frame))).await;
     let _ = ws_sender.close().await;
-    info!("WebSocket closed gracefully");
+    info!(event = "tunnel.ws.close_done", "Tunnel WebSocket closed cleanly.");
 
     ping_handle.abort();
     drop(_cleanup_guard);
@@ -246,24 +302,40 @@ fn start_ping_task(
             match connection {
                 Some(conn) => {
                     if conn.is_stale().await {
-                        warn!("Tunnel '{}' is stale, cancelling main loop", tunnel_id);
+                        warn!(
+                            event = "tunnel.ping.stale",
+                            tunnel_id,
+                            "Tunnel marked stale by ping task."
+                        );
                         cancel_token.cancel();
                         break;
                     }
 
                     if ping_tx.send(()).is_err() {
-                        debug!("Ping task stopping for tunnel '{}', main loop closed", tunnel_id);
+                        debug!(
+                            event = "tunnel.ping.stop",
+                            tunnel_id,
+                            "Ping task stopped; main loop closed."
+                        );
                         break;
                     }
                 }
                 None => {
-                    debug!("Tunnel '{}' no longer exists, stopping ping", tunnel_id);
+                    debug!(
+                        event = "tunnel.ping.missing",
+                        tunnel_id,
+                        "Tunnel missing; stopping ping task."
+                    );
                     break;
                 }
             }
         }
 
-        info!("Ping task ended for tunnel '{}'", tunnel_id);
+        info!(
+            event = "tunnel.ping.ended",
+            tunnel_id,
+            "Ping task ended."
+        );
     })
 }
 
@@ -282,7 +354,12 @@ async fn wait_for_authentication(
                     tunnel_id,
                     version,
                 }) => {
-                    info!("Auth request for tunnel '{}'", tunnel_id);
+                    info!(
+                        event = "tunnel.auth.request",
+                        tunnel_id,
+                        version,
+                        "Tunnel authentication request received."
+                    );
 
                     if let Err(e) = context.config.validate_tunnel_id(&tunnel_id) {
                         let error_msg = WsMessage::Binary(
@@ -361,33 +438,41 @@ async fn wait_for_authentication(
                     Ok(Some(tunnel_id))
                 }
                 Ok(_) => {
-                    warn!("Expected authentication message, got different message type");
+                    warn!(event = "tunnel.auth.unexpected_message", "Unexpected message during tunnel authentication.");
                     Ok(None)
                 }
                 Err(e) => {
-                    error!("Failed to parse authentication message: {}", e);
+                    error!(
+                        event = "tunnel.auth.parse_error",
+                        error = %e,
+                        "Failed to parse tunnel authentication message."
+                    );
                     Ok(None)
                 }
             }
         }
         Ok(Some(Ok(WsMessage::Close(_)))) => {
-            info!("WebSocket closed before authentication");
+            info!(event = "tunnel.auth.closed", "Tunnel WebSocket closed before authentication.");
             Ok(None)
         }
         Ok(Some(Err(e))) => {
-            error!("WebSocket error during authentication: {}", e);
+            error!(event = "tunnel.auth.error", error = %e, "Tunnel WebSocket error during authentication.");
             Ok(None)
         }
         Ok(None) => {
-            info!("WebSocket stream ended before authentication");
+            info!(event = "tunnel.auth.ended", "Tunnel WebSocket ended before authentication.");
             Ok(None)
         }
         Err(_) => {
-            warn!("Authentication timeout after {}s", auth_timeout.as_secs());
+            warn!(
+                event = "tunnel.auth.timeout",
+                seconds = auth_timeout.as_secs(),
+                "Tunnel authentication timed out."
+            );
             Ok(None)
         }
         _ => {
-            warn!("Unexpected message type during authentication");
+            warn!(event = "tunnel.auth.unexpected_message", "Unexpected message during tunnel authentication.");
             Ok(None)
         }
     }
@@ -402,11 +487,12 @@ async fn handle_http_response_start(
     context: &ServiceContext,
 ) {
     debug!(
-        "Response: {} (id: {}, complete: {:?}, {} bytes)",
+        event = "tunnel.response.start",
         status,
         id,
-        is_complete,
-        initial_data.len()
+        complete = is_complete,
+        bytes = initial_data.len(),
+        "Tunnel response started."
     );
 
     if let Some(request) = context.active_requests.read().await.get(&id) {
@@ -418,8 +504,13 @@ async fn handle_http_response_start(
             };
 
             match request.response_tx.send(complete_event).await {
-                Ok(_) => debug!("Complete response queued for {}", id),
-                Err(e) => error!("Failed to queue complete response for {}: {}", id, e),
+                Ok(_) => debug!(event = "tunnel.response.queued", id, "Tunnel response queued."),
+                Err(e) => error!(
+                    event = "tunnel.response.queue_error",
+                    id,
+                    error = %e,
+                    "Failed to queue tunnel response."
+                ),
             }
         } else {
             let stream_start = ResponseEvent::StreamStart {
@@ -429,9 +520,14 @@ async fn handle_http_response_start(
             };
 
             match request.response_tx.send(stream_start).await {
-                Ok(_) => debug!("Stream started for {}", id),
+                Ok(_) => debug!(event = "tunnel.stream.started", id, "Tunnel streaming task started."),
                 Err(e) => {
-                    error!("Failed to start stream for {}: {}", id, e);
+                    error!(
+                        event = "tunnel.stream.start_error",
+                        id,
+                        error = %e,
+                        "Failed to start tunnel streaming task."
+                    );
                     context.active_requests.write().await.remove(&id);
                 }
             }
@@ -441,10 +537,11 @@ async fn handle_http_response_start(
 
 async fn handle_data_chunk(id: String, data: Vec<u8>, is_final: bool, context: &ServiceContext) {
     debug!(
-        "DataChunk: {} bytes, final={} (id: {})",
-        data.len(),
-        is_final,
-        id
+        event = "tunnel.data_chunk",
+        bytes = data.len(),
+        final_chunk = is_final,
+        id,
+        "Tunnel data chunk received."
     );
 
     if let Some(request) = context.active_requests.read().await.get(&id) {
@@ -457,20 +554,25 @@ async fn handle_data_chunk(id: String, data: Vec<u8>, is_final: bool, context: &
 
         if is_final {
             let _ = request.response_tx.send(ResponseEvent::StreamEnd).await;
-            debug!("Stream ended for {}", id);
+            debug!(event = "tunnel.stream.ended", id, "Tunnel streaming task ended.");
         }
     } else {
-        warn!("Received DataChunk for unknown request: {}", id);
+        warn!(
+            event = "tunnel.data_chunk.unknown",
+            id,
+            "Data chunk received for unknown request."
+        );
     }
 }
 
 async fn handle_websocket_data(connection_id: String, data: Vec<u8>, context: &ServiceContext) {
     if let Some(connection) = context.active_websockets.read().await.get(&connection_id) {
         debug!(
-            "Received data for {} (age: {}, {} bytes)",
+            event = "tunnel.ws.data",
             connection_id,
-            connection.age_info(),
-            data.len()
+            age = %connection.age_info(),
+            bytes = data.len(),
+            "Tunnel WebSocket data received."
         );
 
         context.metrics.record_websocket_traffic(&connection.tunnel_id, 0, data.len() as u64);
@@ -483,15 +585,18 @@ async fn handle_websocket_data(connection_id: String, data: Vec<u8>, context: &S
 
             if let Err(e) = ws_tx.send(ws_message) {
                 error!(
-                    "Failed to forward WebSocket data to client {}: {}",
-                    connection_id, e
+                    event = "tunnel.ws.forward_error",
+                    connection_id,
+                    error = %e,
+                    "Failed to forward tunnel WebSocket data."
                 );
             }
         }
     } else {
         warn!(
-            "Received data for unknown WebSocket connection: {}",
-            connection_id
+            event = "tunnel.ws.unknown_connection",
+            connection_id,
+            "Tunnel WebSocket connection not found."
         );
     }
 }
@@ -509,11 +614,12 @@ async fn handle_websocket_close(
         .remove(&connection_id)
     {
         info!(
-            "Close for {}: code={:?}, reason={:?}, final_status={}",
+            event = "tunnel.ws.close",
             connection_id,
-            code,
-            reason,
-            connection.status_summary()
+            code = ?code,
+            reason = ?reason,
+            final_status = %connection.status_summary(),
+            "Tunnel WebSocket close received."
         );
         if let Some(ws_tx) = &connection.ws_tx {
             let close_frame = code.map(|code| tokio_tungstenite::tungstenite::protocol::CloseFrame {
@@ -522,10 +628,19 @@ async fn handle_websocket_close(
                 });
 
             if let Err(e) = ws_tx.send(WsMessage::Close(close_frame)) {
-                error!("Failed to send close frame for {}: {:?}", connection_id, e);
+                error!(
+                    event = "tunnel.ws.close_send_error",
+                    connection_id,
+                    error = ?e,
+                    "Failed to send tunnel close frame."
+                );
             };
         }
-        info!("Cleaned up WebSocket connection {}", connection_id);
+        info!(
+            event = "tunnel.ws.cleaned",
+            connection_id,
+            "Tunnel WebSocket connection cleaned."
+        );
     }
 }
 
@@ -534,8 +649,9 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
         let mut tunnels_guard = context.tunnels.write().await;
         if tunnels_guard.remove(&tunnel_id).is_some() {
             info!(
-                "ExposeME client disconnected. Tunnel '{}' removed",
-                tunnel_id
+                event = "tunnel.disconnected",
+                tunnel_id,
+                "Tunnel client disconnected."
             );
             true
         } else {false}
@@ -571,9 +687,10 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
 
     if !websocket_connections_to_cleanup.is_empty() {
         info!(
-        "Cleaning up {} WebSocket connections",
-        websocket_connections_to_cleanup.len()
-    );
+            event = "tunnel.ws.cleanup.start",
+            count = websocket_connections_to_cleanup.len(),
+            "Tunnel WebSocket cleanup started."
+        );
         for connection_id in websocket_connections_to_cleanup {
             if let Some(connection) = context
                 .active_websockets
@@ -581,7 +698,11 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
                 .await
                 .remove(&connection_id)
             {
-                debug!("Cleaned up WebSocket connection: {}", connection_id);
+                debug!(
+                    event = "tunnel.ws.cleanup.connection",
+                    connection_id,
+                    "Tunnel WebSocket connection marked for cleanup."
+                );
 
                 context.metrics.websocket_disconnected(&tunnel_id);
 
@@ -593,7 +714,12 @@ pub async fn shutdown_tunnel(context: ServiceContext, tunnel_id: String) -> bool
                         },
                     ));
                     if let Err(e) = ws_tx.send(close_msg) {
-                        warn!("Failed to close browser WebSocket {}: {}", connection_id, e);
+                        warn!(
+                            event = "tunnel.ws.cleanup.close_error",
+                            connection_id,
+                            error = %e,
+                            "Failed to send close frame during tunnel WebSocket cleanup."
+                        );
                     }
                 }
             }

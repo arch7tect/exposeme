@@ -70,7 +70,7 @@ impl HetznerProvider {
             .build()
             .expect("Failed to create HTTP client");
 
-        info!("Hetzner DNS provider initialized");
+        info!(event = "dns.provider.init", provider = "hetzner", "DNS provider initialized.");
         Self { config, client }
     }
 
@@ -118,7 +118,12 @@ impl DnsProviderFactory for HetznerProvider {
             "TOML configuration"
         };
 
-        info!("Hetzner DNS provider configured from {}", config_source);
+        info!(
+            event = "dns.provider.configured",
+            provider = "hetzner",
+            source = config_source,
+            "DNS provider configured from source."
+        );
         Ok(Box::new(Self::new(config)))
     }
 }
@@ -126,7 +131,7 @@ impl DnsProviderFactory for HetznerProvider {
 #[async_trait]
 impl DnsProvider for HetznerProvider {
     async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Listing available zones from Hetzner DNS");
+        info!(event = "dns.zones.list", provider = "hetzner", "Listing DNS zones from provider.");
 
         let response = self.client
             .get("https://dns.hetzner.com/api/v1/zones")
@@ -143,7 +148,12 @@ impl DnsProvider for HetznerProvider {
             .map(|zone| ZoneInfo::new(zone.id, zone.name))
             .collect();
 
-        info!("Found {} zones", zone_infos.len());
+        info!(
+            event = "dns.zones.listed",
+            provider = "hetzner",
+            count = zone_infos.len(),
+            "DNS zones listed."
+        );
         Ok(zone_infos)
     }
 
@@ -152,7 +162,13 @@ impl DnsProvider for HetznerProvider {
         zone: &ZoneInfo,
         name: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Listing TXT records: {} in zone {}", name, zone.name);
+        info!(
+            event = "dns.txt.list",
+            provider = "hetzner",
+            name,
+            zone = %zone.name,
+            "Listing TXT records."
+        );
 
         let url = format!("https://dns.hetzner.com/api/v1/records?zone_id={}", zone.id);
         let response = self.client
@@ -173,7 +189,12 @@ impl DnsProvider for HetznerProvider {
             .map(|record| record.id.clone())
             .collect();
 
-        info!("Found {} existing TXT records", matching_record_ids.len());
+        info!(
+            event = "dns.txt.listed",
+            provider = "hetzner",
+            count = matching_record_ids.len(),
+            "TXT records listed."
+        );
         Ok(matching_record_ids)
     }
 
@@ -183,7 +204,13 @@ impl DnsProvider for HetznerProvider {
         name: &str,
         value: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Creating TXT record: {} in zone {} = {}", name, zone.name, value);
+        info!(
+            event = "dns.txt.create",
+            provider = "hetzner",
+            name,
+            zone = %zone.name,
+            "Creating TXT record."
+        );
 
         let create_request = CreateRecordRequest {
             zone_id: zone.id.clone(),
@@ -207,7 +234,12 @@ impl DnsProvider for HetznerProvider {
         let create_response: CreateRecordResponse = response.json().await?;
         let record_id = create_response.record.id;
 
-        info!("Created TXT record with ID: {}", record_id);
+        info!(
+            event = "dns.txt.created",
+            provider = "hetzner",
+            record_id = %record_id,
+            "TXT record created."
+        );
         Ok(record_id)
     }
 
@@ -216,7 +248,12 @@ impl DnsProvider for HetznerProvider {
         _zone: &ZoneInfo,
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Deleting TXT record {}", record_id);
+        info!(
+            event = "dns.txt.delete",
+            provider = "hetzner",
+            record_id,
+            "Deleting TXT record."
+        );
 
         let url = format!("https://dns.hetzner.com/api/v1/records/{}", record_id);
 
@@ -228,7 +265,12 @@ impl DnsProvider for HetznerProvider {
 
         self.ensure_success(response, "Failed to delete record").await?;
 
-        info!("Deleted TXT record {}", record_id);
+        info!(
+            event = "dns.txt.deleted",
+            provider = "hetzner",
+            record_id,
+            "TXT record deleted."
+        );
         Ok(())
     }
 

@@ -50,15 +50,20 @@ async fn route_request(
     let is_websocket = is_websocket_upgrade(&req);
 
     info!(
-        "{} request: {} {} (WebSocket: {})",
-        if context.is_https { "HTTPS" } else { "HTTP" },
-        method,
+        event = "http.request",
+        scheme = if context.is_https { "https" } else { "http" },
+        method = %method,
         path,
-        is_websocket
+        websocket = is_websocket,
+        "Incoming HTTP request received."
     );
 
     if path.starts_with("/.well-known/acme-challenge/") {
-        info!("ACME challenge via {}", if context.is_https { "HTTPS" } else { "HTTP" });
+        info!(
+            event = "acme.challenge.route",
+            scheme = if context.is_https { "https" } else { "http" },
+            "ACME challenge routed to handler."
+        );
         return acme::handle_acme_challenge(req, context.challenge_store).await;
     }
 
@@ -76,12 +81,18 @@ async fn route_request(
 
     if is_websocket {
         return if path == context.config.server.tunnel_path {
-            debug!("Tunnel management WebSocket via {}",
-                  if context.is_https { "HTTPS" } else { "HTTP" });
+            debug!(
+                event = "ws.tunnel_mgmt.route",
+                scheme = if context.is_https { "https" } else { "http" },
+                "Tunnel management WebSocket request routed."
+            );
             websocket::handle_tunnel_management_websocket(req, context).await
         } else {
-            debug!("Tunneled WebSocket via {}",
-                  if context.is_https { "HTTPS" } else { "HTTP" });
+            debug!(
+                event = "ws.tunnel.route",
+                scheme = if context.is_https { "https" } else { "http" },
+                "Routed tunneled WebSocket request."
+            );
             websocket::handle_websocket_upgrade_request(req, context).await
         };
     }
@@ -95,7 +106,7 @@ async fn route_request(
 
         if host_without_port == context.config.server.domain {
             if let Some(response) = UIAssets::serve_asset(path) {
-                debug!("Serving UI asset on main domain: {}", path);
+                debug!(event = "ui.asset.serve", path, "UI asset served.");
                 return Ok(response);
             }
         }
@@ -121,7 +132,7 @@ async fn route_request(
             .body(boxed_body("Redirecting to HTTPS"))
             .unwrap())
     } else {
-        debug!("Processing tunneled HTTP request via HTTP (SSL disabled)");
+        debug!(event = "http.tunnel.insecure", "HTTP tunnel used without SSL.");
         tunnel::handle_tunnel_request(req, context).await
     }
 }

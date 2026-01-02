@@ -268,7 +268,7 @@ impl ServerConfig {
             let content = fs::read_to_string(&args.config)?;
             toml::from_str(&content)?
         } else {
-            tracing::info!("Config file {:?} not found, using defaults", args.config);
+            tracing::info!(event = "config.missing", path = ?args.config, "Config file missing; using defaults.");
             Self::default()
         };
 
@@ -316,7 +316,7 @@ impl ServerConfig {
 
         if let Ok(domain) = std::env::var("EXPOSEME_DOMAIN") {
             config.server.domain = domain;
-            tracing::info!("Domain set from EXPOSEME_DOMAIN environment variable");
+            tracing::info!(event = "config.env.domain", source = "EXPOSEME_DOMAIN", "Domain set from environment.");
         }
 
         if let Ok(http_bind) = std::env::var("EXPOSEME_HTTP_BIND") {
@@ -341,17 +341,17 @@ impl ServerConfig {
 
         if let Ok(email) = std::env::var("EXPOSEME_EMAIL") {
             config.ssl.email = email;
-            tracing::info!("Email set from EXPOSEME_EMAIL environment variable");
+            tracing::info!(event = "config.env.email", source = "EXPOSEME_EMAIL", "Email set from environment.");
         }
 
         if let Ok(staging) = std::env::var("EXPOSEME_STAGING") {
             config.ssl.staging = staging.parse().unwrap_or(false);
-            tracing::info!("Staging set from EXPOSEME_STAGING environment variable");
+            tracing::info!(event = "config.env.staging", source = "EXPOSEME_STAGING", "Staging mode set from environment.");
         }
 
         if let Ok(wildcard) = std::env::var("EXPOSEME_WILDCARD") {
             config.ssl.wildcard = wildcard.parse().unwrap_or(false);
-            tracing::info!("Wildcard certificates enabled from EXPOSEME_WILDCARD");
+            tracing::info!(event = "config.env.wildcard", source = "EXPOSEME_WILDCARD", "Wildcard enabled from environment.");
         }
 
         if let Ok(routing_mode) = std::env::var("EXPOSEME_ROUTING_MODE") {
@@ -360,11 +360,19 @@ impl ServerConfig {
                 "subdomain" => RoutingMode::Subdomain,
                 "both" => RoutingMode::Both,
                 _ => {
-                    tracing::warn!("Invalid EXPOSEME_ROUTING_MODE: {}, using default", routing_mode);
+                    tracing::warn!(
+                        event = "config.env.routing_mode.invalid",
+                        value = %routing_mode,
+                        "Invalid routing mode value in environment."
+                    );
                     RoutingMode::Path
                 }
             };
-            tracing::info!("Routing mode set to {:?} from EXPOSEME_ROUTING_MODE", config.server.routing_mode);
+            tracing::info!(
+                event = "config.env.routing_mode",
+                mode = ?config.server.routing_mode,
+                "Routing mode set from environment."
+            );
         }
 
         if let Ok(dns_provider) = std::env::var("EXPOSEME_DNS_PROVIDER") {
@@ -372,33 +380,45 @@ impl ServerConfig {
                 provider: dns_provider.clone(),
                 config: serde_json::Value::Null, // Empty config - providers will use env vars
             });
-            tracing::info!("DNS provider set to '{}' from EXPOSEME_DNS_PROVIDER", dns_provider);
-            tracing::info!("DNS provider will be configured from its specific environment variables");
+            tracing::info!(
+                event = "config.env.dns_provider",
+                provider = %dns_provider,
+                "DNS provider set from environment."
+            );
+            tracing::info!(event = "config.env.dns_provider_config", source = "env", "DNS provider configured from environment.");
         }
 
         if let Ok(token) = std::env::var("EXPOSEME_AUTH_TOKEN") {
             config.auth.tokens = vec![token];
-            tracing::info!("Authentication token set from EXPOSEME_AUTH_TOKEN");
+            tracing::info!(event = "config.env.auth_token", source = "EXPOSEME_AUTH_TOKEN", "Auth token set from environment.");
         }
 
         if let Ok(admin_token) = std::env::var("EXPOSEME_ADMIN_TOKEN") {
             config.auth.admin_token = Some(admin_token);
-            tracing::info!("Admin token set from EXPOSEME_ADMIN_TOKEN");
+            tracing::info!(event = "config.env.admin_token", source = "EXPOSEME_ADMIN_TOKEN", "Admin token set from environment.");
         }
 
         if let Ok(timeout) = std::env::var("EXPOSEME_REQUEST_TIMEOUT") {
             if let Ok(secs) = timeout.parse::<u64>() {
                 config.limits.request_timeout_secs = secs;
-                tracing::info!("Request timeout set to {} seconds from EXPOSEME_REQUEST_TIMEOUT", secs);
+                tracing::info!(
+                    event = "config.env.request_timeout",
+                    seconds = secs,
+                    "Request timeout set from environment."
+                );
             } else {
-                tracing::warn!("Invalid EXPOSEME_REQUEST_TIMEOUT value: {}", timeout);
+                tracing::warn!(
+                    event = "config.env.request_timeout.invalid",
+                    value = %timeout,
+                    "Invalid request timeout value in environment."
+                );
             }
         }
 
         if matches!(config.server.routing_mode, RoutingMode::Subdomain | RoutingMode::Both) {
             if config.ssl.enabled && !config.ssl.wildcard {
-                tracing::warn!("Subdomain routing with SSL requires wildcard certificates");
-                tracing::warn!("Setting wildcard = true automatically");
+                tracing::warn!(event = "ssl.wildcard.required", "Wildcard certificate required by domain.");
+                tracing::warn!(event = "ssl.wildcard.autoset", enabled = true, "Wildcard certificate requirement auto-detected.");
                 config.ssl.wildcard = true;
             }
 
@@ -414,7 +434,7 @@ impl ServerConfig {
         let config = Self::default();
         let content = toml::to_string_pretty(&config)?;
         fs::write(path, content)?;
-        tracing::info!("Generated default server config: {:?}", path);
+        tracing::info!(event = "config.server.generated", path = ?path, "Default server config generated.");
         Ok(())
     }
 
@@ -499,10 +519,10 @@ impl ClientConfig {
             let content = fs::read_to_string(&args.config)?;
             toml::from_str(&content)?
         } else if can_skip_config {
-            tracing::info!("All required parameters provided via CLI, skipping config file");
+            tracing::info!(event = "config.client.cli_only", "Client config skipped because CLI args provided.");
             Self::default()
         } else {
-            tracing::info!("Config file {:?} not found, using defaults", args.config);
+            tracing::info!(event = "config.client.missing", path = ?args.config, "Client config file missing; using defaults.");
             Self::default()
         };
 
@@ -563,7 +583,7 @@ impl ClientConfig {
         let config = Self::default();
         let content = toml::to_string_pretty(&config)?;
         fs::write(path, content)?;
-        tracing::info!("Generated default client config: {:?}", path);
+        tracing::info!(event = "config.client.generated", path = ?path, "Default client config generated.");
         Ok(())
     }
 }

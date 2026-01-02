@@ -10,7 +10,11 @@ macro_rules! guard {
                         std::time::Duration::from_secs(5),
                         async move { $cleanup }
                     ).await {
-                        tracing::error!("Async drop timeout for guard in {}", module_path!());
+                        tracing::error!(
+                            event = "guard.cleanup.timeout",
+                            module = module_path!(),
+                            "Async cleanup guard timed out."
+                        );
                     }
                 });
             };

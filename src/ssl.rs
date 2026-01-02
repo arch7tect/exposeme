@@ -61,13 +61,19 @@ impl SslManager {
 
             match create_dns_provider(&dns_config.provider, toml_config) {
                 Ok(provider) => {
-                    info!("DNS provider '{}' initialized", dns_config.provider);
+                    info!(
+                        event = "ssl.dns_provider.init",
+                        provider = %dns_config.provider,
+                        "DNS provider initialized for ACME."
+                    );
                     Some(provider)
                 }
                 Err(e) => {
                     error!(
-                        "Failed to initialize DNS provider '{}': {}",
-                        dns_config.provider, e
+                        event = "ssl.dns_provider.init_error",
+                        provider = %dns_config.provider,
+                        error = %e,
+                        "DNS provider initialization failed."
                     );
                     None
                 }
@@ -90,11 +96,15 @@ impl SslManager {
 
     pub async fn initialize(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !self.config.ssl.enabled {
-            info!("SSL disabled, running HTTP only");
+            info!(event = "ssl.disabled", "SSL disabled; running HTTP only.");
             return Ok(());
         }
 
-        info!("Initializing SSL for domain: {}", self.config.server.domain);
+        info!(
+            event = "ssl.init",
+            domain = %self.config.server.domain,
+            "SSL initialization started."
+        );
 
         let rustls_config = match self.config.ssl.provider {
             SslProvider::LetsEncrypt => self.setup_letsencrypt().await?,
@@ -103,7 +113,7 @@ impl SslManager {
         };
 
         self.rustls_config = Some(Arc::new(rustls_config));
-        info!("SSL configuration initialized successfully");
+        info!(event = "ssl.init.done", "SSL initialization completed.");
         Ok(())
     }
 
@@ -123,8 +133,10 @@ impl SslManager {
         let (cert_domains, cert_filename) = if self.config.ssl.wildcard {
             let wildcard_domain = format!("*.{}", domain);
             info!(
-                "Obtaining wildcard certificate for: {} and {}",
-                wildcard_domain, domain
+                event = "ssl.cert.wildcard.request",
+                domain = %domain,
+                wildcard = %wildcard_domain,
+                "Requesting wildcard certificate."
             );
             let domains = vec![domain.clone(), wildcard_domain];
             let filename = format!("wildcard-{}", domain.replace('.', "-"));
@@ -139,12 +151,12 @@ impl SslManager {
         let key_path = cache_dir.join(format!("{}.key", cert_filename));
 
         if cert_path.exists() && key_path.exists() {
-            info!("Found existing certificates, checking validity...");
+            info!(event = "ssl.cert.cache.check", "Checking cached certificates.");
             if let Ok(config) = self.load_certificates(&cert_path, &key_path).await {
-                info!("Using existing certificates");
+                info!(event = "ssl.cert.cache.use", "Using cached certificates.");
                 return Ok(config);
             }
-            warn!("Existing certificates invalid, obtaining new ones");
+            warn!(event = "ssl.cert.cache.invalid", "Cached certificates invalid; requesting new ones.");
         }
 
         if self.config.ssl.wildcard && self.dns_provider.is_none() {
@@ -155,7 +167,7 @@ impl SslManager {
 
         tokio::fs::write(&cert_path, &cert_pem).await?;
         tokio::fs::write(&key_path, &key_pem).await?;
-        info!("Certificates saved to cache directory");
+        info!(event = "ssl.cert.cache.saved", "Certificates saved to cache.");
 
         self.load_certificates(&cert_path, &key_path).await
     }
@@ -171,7 +183,11 @@ impl SslManager {
             LetsEncrypt::Production.url()
         };
 
-        info!("Using ACME directory: {}", directory_url);
+        info!(
+            event = "ssl.acme.directory",
+            url = %directory_url,
+            "ACME directory selected."
+        );
 
         let new_account = NewAccount {
             contact: &[&format!("mailto:{}", email)],
@@ -190,7 +206,11 @@ impl SslManager {
             .new_order(&NewOrder::new(identifiers.as_slice()))
             .await?;
 
-        info!("ACME order created for domains: {:?}", domains);
+        info!(
+            event = "ssl.acme.order.created",
+            domains = ?domains,
+            "ACME order created."
+        );
 
         let mut cleanup_tasks: Vec<CleanupTask> = Vec::new();
 
@@ -199,7 +219,7 @@ impl SslManager {
             .await
             .err();
         if error.is_none() {
-            info!("All authorizations processed, poll order ready");
+            info!(event = "ssl.acme.order.ready", "ACME order ready; polling for certificate.");
 
             error = match order.poll_ready(&RetryPolicy::default()).await {
                 Ok(status) => {
@@ -216,11 +236,15 @@ impl SslManager {
         self.cleanup_acme_challenge_records(cleanup_tasks).await;
 
         if let Some(e) = error {
-            error!("Error obtaining certificate: {}", e);
+            error!(
+                event = "ssl.acme.order.error",
+                error = %e,
+                "ACME order failed."
+            );
             return Err(e);
         }
 
-        info!("Order is ready. Finalizing.");
+        info!(event = "ssl.acme.order.finalize", "Finalizing ACME order.");
         let private_key_pem = order.finalize().await?;
         let cert_chain_pem = order.poll_certificate(&RetryPolicy::default()).await?;
         Ok((cert_chain_pem, private_key_pem))
@@ -245,7 +269,11 @@ impl SslManager {
             };
             match authz_handle.status {
                 AuthorizationStatus::Pending => {
-                    info!("Processing authorization for: {}", domain);
+                    info!(
+                        event = "ssl.acme.auth.process",
+                        domain = %domain,
+                        "Processing ACME authorization."
+                    );
 
                     if self.config.ssl.wildcard {
                         match self
@@ -266,7 +294,11 @@ impl SslManager {
                     }
                 }
                 AuthorizationStatus::Valid => {
-                    info!("Authorization already valid for: {}", domain);
+                    info!(
+                        event = "ssl.acme.auth.valid",
+                        domain = %domain,
+                        "ACME authorization already valid."
+                    );
                     continue;
                 }
                 _ => {
@@ -284,16 +316,27 @@ impl SslManager {
                 CleanupTask::Dns(info) => {
                     if let Some(dns) = self.dns_provider.as_mut() {
                         info!(
-                            "Cleanup DNS txt record with id {} for {}",
-                            info.record_id, info.domain
+                            event = "ssl.acme.cleanup.dns",
+                            domain = %info.domain,
+                            record_id = %info.record_id,
+                            "Cleaning up DNS challenge record."
                         );
                         if let Err(e) = dns.delete_txt_record(&info.domain, &info.record_id).await {
-                            warn!("Failed to delete TXT record {}: {}", info.record_id, e);
+                            warn!(
+                                event = "ssl.acme.cleanup.dns_error",
+                                record_id = %info.record_id,
+                                error = %e,
+                                "Failed to delete DNS challenge record."
+                            );
                         }
                     }
                 }
                 CleanupTask::Http(token) => {
-                    info!("Cleanup HTTPS token {}", token);
+                    info!(
+                        event = "ssl.acme.cleanup.http",
+                        token,
+                        "Cleaning up HTTP challenge token."
+                    );
                     let mut store = self.challenge_store.write().await;
                     store.remove(&token);
                 }
@@ -321,8 +364,10 @@ impl SslManager {
         let key_authorization = challenge.key_authorization();
         let dns_value = key_authorization.dns_value();
         info!(
-            "Setting up DNS challenge: {}.{} = {}",
-            record_name, record_domain, dns_value
+            event = "ssl.dns.challenge.setup",
+            record_name,
+            record_domain,
+            "Setting up DNS-01 challenge."
         );
 
         let record_id = {
@@ -336,7 +381,11 @@ impl SslManager {
                     .cleanup_txt_records(&record_domain, record_name)
                     .await
                 {
-                    warn!("DNS cleanup failed: {}", e);
+                    warn!(
+                        event = "ssl.dns.cleanup_error",
+                        error = %e,
+                        "Failed to clean up DNS challenge data."
+                    );
                 }
             }
 
@@ -347,12 +396,21 @@ impl SslManager {
                 .wait_for_propagation(&record_domain, record_name, &dns_value)
                 .await
             {
-                error!("DNS propagation failed: {}", e);
+                error!(
+                    event = "ssl.dns.propagation_error",
+                    error = %e,
+                    "DNS propagation check failed during ACME."
+                );
                 if let Err(e) = dns_provider
                     .delete_txt_record(&record_domain, &record_id)
                     .await
                 {
-                    warn!("Failed to cleanup DNS record {}: {}", record_id, e);
+                    warn!(
+                        event = "ssl.dns.cleanup_record_error",
+                        record_id = %record_id,
+                        error = %e,
+                        "Failed to delete DNS challenge record."
+                    );
                 }
                 return Err(e);
             }
@@ -360,7 +418,11 @@ impl SslManager {
         };
 
         if let Err(e) = challenge.set_ready().await {
-            error!("Setting challenge ready failed: {}", e);
+            error!(
+                event = "ssl.dns.challenge_ready_error",
+                error = %e,
+                "DNS challenge did not become ready."
+            );
         }
 
         Ok(DnsCleanupInfo {
@@ -389,7 +451,11 @@ impl SslManager {
         }
 
         if let Err(e) = challenge.set_ready().await {
-            error!("Failed to set challenge ready: {}", e);
+            error!(
+                event = "ssl.http.challenge_ready_error",
+                error = %e,
+                "HTTP challenge did not become ready."
+            );
         }
 
         Ok(challenge.token.clone())
@@ -462,8 +528,9 @@ impl SslManager {
         }
 
         warn!(
-            "Generating self-signed certificate for {} (development only)",
-            domain
+            event = "ssl.self_signed.generate",
+            domain = %domain,
+            "Generating self-signed certificate (development)."
         );
 
         let subject_alt_names = if self.config.ssl.wildcard {
@@ -541,7 +608,11 @@ impl SslManager {
         let cert_cache_dir = self.config.ssl.cert_cache_dir.clone();
         let ssl_provider = self.config.ssl.provider.clone();
 
-        info!("Starting certificate renewal for {}", domain);
+        info!(
+            event = "ssl.renew.start",
+            domain = %domain,
+            "Certificate renewal started."
+        );
 
         let cert_filename = if wildcard {
             format!("wildcard-{}", domain.replace('.', "-"))
@@ -562,11 +633,15 @@ impl SslManager {
                 tokio::fs::copy(&key_path, &key_backup_path).await,
             ) {
                 (Ok(_), Ok(_)) => {
-                    info!("Created certificate backup for {}", domain);
+                    info!(
+                        event = "ssl.renew.backup.created",
+                        domain = %domain,
+                        "Certificate backup created."
+                    );
                     true
                 }
                 _ => {
-                    warn!("Failed to create certificate backup, proceeding without backup");
+                    warn!(event = "ssl.renew.backup.error", "Failed to create certificate backup.");
                     false
                 }
             }
@@ -590,7 +665,11 @@ impl SslManager {
         match renewal_result {
             Ok(new_config) => {
                 self.rustls_config = Some(Arc::new(new_config));
-                info!("Certificate renewal completed for {}", domain);
+                info!(
+                    event = "ssl.renew.complete",
+                    domain = %domain,
+                    "Certificate renewal completed."
+                );
                 Ok(())
             }
             Err(e) => {
@@ -600,21 +679,26 @@ impl SslManager {
                         tokio::fs::copy(&key_backup_path, &key_path).await,
                     ) {
                         (Ok(_), Ok(_)) => {
-                            info!("Restored certificate from backup after renewal failure");
+                            info!(event = "ssl.renew.restore", "Restoring certificates from backup.");
                             if let Ok(restored_config) =
                                 self.load_certificates(&cert_path, &key_path).await
                             {
                                 self.rustls_config = Some(Arc::new(restored_config));
-                                info!("Successfully restored working certificates");
+                                info!(event = "ssl.renew.restore.success", "Certificates restored from backup after renewal.");
                             }
                         }
                         _ => {
-                            warn!("Failed to restore certificate backup");
+                            warn!(event = "ssl.renew.restore.error", "Certificate renewal failed.");
                         }
                     }
                 }
 
-                error!("Certificate renewal failed for {}: {}", domain, e);
+                error!(
+                    event = "ssl.renew.error",
+                    domain = %domain,
+                    error = %e,
+                    "Certificate renewal failed."
+                );
                 Err(format!("Certificate renewal failed: {}", e).into())
             }
         }

@@ -20,7 +20,11 @@ pub struct UIAssets;
 impl UIAssets {
     /// Handle UI asset requests
     pub fn serve_asset(path: &str) -> Option<Response<ResponseBody>> {
-        debug!("Serving UI asset: {}", path);
+        debug!(
+            event = "ui.asset.request",
+            path,
+            "UI asset requested."
+        );
 
         let file_path = path.trim_start_matches('/');
 
@@ -48,10 +52,20 @@ impl UIAssets {
                 .body(boxed_body(file_data))
                 .unwrap();
 
-            debug!("Serving asset: {} -> {}", path, lookup_path);
+            debug!(
+                event = "ui.asset.serve",
+                path,
+                lookup_path,
+                "UI asset served."
+            );
             Some(response)
         } else {
-            debug!("Asset not found: {} -> {}", path, lookup_path);
+            debug!(
+                event = "ui.asset.miss",
+                path,
+                lookup_path,
+                "UI asset not found in embedded assets."
+            );
             None
         }
     }
@@ -103,20 +117,38 @@ impl UIAssets {
         let lookup_path = if path == "/" { "index.html" } else { file_path };
 
         if path == "/favicon.ico" {
-            debug!("Favicon requested: {}", path);
+            debug!(
+                event = "ui.asset.favicon",
+                path,
+                "Favicon requested."
+            );
             return true;
         }
 
         let result = UIAssets::get(lookup_path).is_some();
 
         if !result {
-            debug!("Asset not found: {} -> {}", path, lookup_path);
-            debug!("Available assets:");
+            debug!(
+                event = "ui.asset.miss",
+                path,
+                lookup_path,
+                "UI asset not found in embedded assets."
+            );
+            debug!(event = "ui.asset.available", "Listing available UI assets.");
             for file in UIAssets::iter() {
-                debug!("   - {}", file.as_ref());
+                debug!(
+                    event = "ui.asset.available_item",
+                    file = %file.as_ref(),
+                    "UI asset listed in debug output."
+                );
             }
         } else {
-            debug!("Asset found: {} -> {}", path, lookup_path);
+            debug!(
+                event = "ui.asset.hit",
+                path,
+                lookup_path,
+                "UI asset found in embedded assets."
+            );
         }
 
         result

@@ -17,33 +17,49 @@ pub async fn handle_acme_challenge(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("unknown");
 
-    info!("ACME challenge request received");
-    info!("   Path: {}", path);
-    info!("   Method: {}", req.method());
-    info!("   User-Agent: {}", user_agent);
-    info!("   Remote IP: {:?}", req.headers().get("x-forwarded-for"));
+    info!(
+        event = "acme.challenge.request",
+        path,
+        method = %req.method(),
+        user_agent,
+        remote_ip = ?req.headers().get("x-forwarded-for"),
+        "ACME challenge request received."
+    );
 
     if let Some(token) = path.strip_prefix("/.well-known/acme-challenge/") {
-        info!("ACME challenge request for token: {}", token);
+        info!(
+            event = "acme.challenge.token",
+            token,
+            "ACME challenge token extracted."
+        );
 
         let store = challenge_store.read().await;
         info!(
-            "Available challenge tokens: {:?}",
-            store.keys().collect::<Vec<_>>()
+            event = "acme.challenge.tokens",
+            tokens = ?store.keys().collect::<Vec<_>>(),
+            "ACME challenge tokens listed."
         );
 
         if let Some(key_auth) = store.get(token) {
-            info!("ACME challenge found, responding with key authorization");
+            info!(event = "acme.challenge.found", token, "ACME challenge found in store.");
             return Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/plain")
                 .body(boxed_body(key_auth.clone()))
                 .unwrap());
         } else {
-            warn!("ACME challenge not found for token: {}", token);
+            warn!(
+                event = "acme.challenge.missing",
+                token,
+                "ACME challenge not found in store."
+            );
         }
     } else {
-        warn!("Invalid ACME challenge path: {}", path);
+        warn!(
+            event = "acme.challenge.invalid_path",
+            path,
+            "ACME challenge request had an invalid path."
+        );
     }
 
     Ok(Response::builder()

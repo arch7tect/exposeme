@@ -25,7 +25,11 @@ pub async fn handle_tunnel_request(
     let (tunnel_id, forwarded_path) = match extract_tunnel_id_from_request(&req, &context.config) {
         Ok(result) => result,
         Err(e) => {
-            warn!("Failed to extract tunnel ID: {}", e);
+            warn!(
+                event = "tunnel.request.invalid",
+                error = %e,
+                "Invalid tunnel request received."
+            );
             return Ok(Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(boxed_body(format!("Invalid request: {}", e)))
@@ -43,7 +47,11 @@ pub async fn handle_tunnel_request(
     let tunnel_sender = match tunnel_sender {
         Some(sender) => sender,
         None => {
-            warn!("Tunnel '{}' not found", tunnel_id);
+            warn!(
+                event = "tunnel.not_found",
+                tunnel_id,
+                "Tunnel not found for incoming request."
+            );
             context.metrics.record_error(Some(&tunnel_id));
             return Ok(Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
@@ -58,7 +66,11 @@ pub async fn handle_tunnel_request(
 
     if let Some(last_event_id) = req.headers().get("last-event-id")
         .and_then(|h| h.to_str().ok()) {
-        debug!("SSE reconnection detected with Last-Event-ID: {}", last_event_id);
+        debug!(
+            event = "tunnel.sse.reconnect",
+            last_event_id,
+            "SSE reconnect requested for tunnel client."
+        );
         headers.insert("Last-Event-ID".to_string(), last_event_id.to_string());
     }
 
@@ -75,7 +87,14 @@ pub async fn handle_tunnel_request(
         "regular"
     };
 
-    info!("{} request: {} {} (id: {})", request_type, method, forwarded_path, request_id);
+    info!(
+        event = "tunnel.request",
+        request_type,
+        method = %method,
+        path = %forwarded_path,
+        request_id,
+        "Tunnel request received."
+    );
 
     let (response_tx, response_rx) = mpsc::channel(32);
 
@@ -91,7 +110,13 @@ pub async fn handle_tunnel_request(
     let mut request_size = 0u64;
 
     if is_streaming_request {
-        debug!("Processing {} request: {} {}", request_type, method, forwarded_path);
+        debug!(
+            event = "tunnel.request.stream_start",
+            request_type,
+            method = %method,
+            path = %forwarded_path,
+            "Streaming tunnel request started."
+        );
 
         let initial_request = Message::HttpRequestStart {
             id: request_id.clone(),
@@ -169,7 +194,12 @@ async fn build_response(
 ) -> Result<Response<ResponseBody>, BoxError> {
     match response_rx.recv().await {
         Some(ResponseEvent::Complete { status, headers, body }) => {
-            info!("Complete response: {} ({} bytes)", status, body.len());
+            info!(
+                event = "tunnel.response.complete",
+                status,
+                bytes = body.len(),
+                "Complete tunnel response received."
+            );
             active_requests.write().await.remove(&request_id);
             
             // Record actual request/response bytes in metrics
@@ -178,7 +208,7 @@ async fn build_response(
             if headers.get("content-type")
                 .map(|ct| ct.contains("text/event-stream"))
                 .unwrap_or(false) {
-                warn!("SSE response received as complete - this may cause issues");
+                warn!(event = "tunnel.response.sse_complete", "SSE response arrived as complete response.");
             }
 
             let mut builder = Response::builder().status(status);
@@ -196,13 +226,19 @@ async fn build_response(
             );
 
             let response_type = if is_sse_response { "SSE" } else { "streaming" };
-            info!("{} response: {} (initial: {} bytes)", response_type, status, initial_data.len());
+            info!(
+                event = "tunnel.response.stream_start",
+                response_type,
+                status,
+                initial_bytes = initial_data.len(),
+                "Streaming tunnel response started."
+            );
             
             // Record streaming request in metrics (initial bytes only, as total is unknown)
             metrics.record_request(tunnel_id, request_size, initial_data.len() as u64);
 
             if is_sse_response {
-                debug!("Adding SSE-specific response headers");
+                debug!(event = "tunnel.response.sse_headers", "SSE headers added to response.");
                 add_sse_headers(&mut headers);
             }
 
@@ -232,7 +268,12 @@ async fn build_response(
                             yield Ok(Frame::data(chunk));
                         }
                         ResponseEvent::StreamEnd => {
-                            debug!("Stream ended {} (total: {} bytes)", request_id_for_stream, total_streaming_bytes);
+                            debug!(
+                                event = "tunnel.response.stream_end",
+                                request_id = %request_id_for_stream,
+                                bytes = total_streaming_bytes,
+                                "Streaming tunnel response ended."
+                            );
                             // Record total streaming bytes in metrics (subtract initial data since it was already counted)
                             let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
                             if additional_bytes > 0 {
@@ -242,7 +283,13 @@ async fn build_response(
                             break;
                         }
                         ResponseEvent::Error(e) => {
-                            error!("Stream error {} (streamed: {} bytes): {}", request_id_for_stream, total_streaming_bytes, e);
+                            error!(
+                                event = "tunnel.response.stream_error",
+                                request_id = %request_id_for_stream,
+                                bytes = total_streaming_bytes,
+                                error = %e,
+                                "Streaming tunnel response error."
+                            );
                             // Record partial streaming bytes even on error
                             let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
                             if additional_bytes > 0 {
@@ -257,7 +304,12 @@ async fn build_response(
                 }
 
                 if active_requests_for_stream.write().await.remove(&request_id_for_stream).is_some() {
-                    debug!("Final cleanup for streaming request {} (streamed: {} bytes)", request_id_for_stream, total_streaming_bytes);
+                    debug!(
+                        event = "tunnel.response.stream_cleanup",
+                        request_id = %request_id_for_stream,
+                        bytes = total_streaming_bytes,
+                        "Streaming tunnel response cleanup performed."
+                    );
                     // Record final bytes if we didn't hit StreamEnd/Error
                     let additional_bytes = total_streaming_bytes.saturating_sub(initial_data_len);
                     if additional_bytes > 0 {
@@ -279,7 +331,11 @@ async fn build_response(
         }
 
         Some(ResponseEvent::StreamChunk(_)) => {
-            warn!("Received StreamChunk as first event for {}", request_id);
+            warn!(
+                event = "tunnel.response.invalid_sequence",
+                request_id,
+                "Invalid response sequence received."
+            );
             active_requests.write().await.remove(&request_id);
             Ok(Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -287,7 +343,11 @@ async fn build_response(
         }
 
         Some(ResponseEvent::StreamEnd) => {
-            warn!("Received StreamEnd as first event for {}", request_id);
+            warn!(
+                event = "tunnel.response.invalid_sequence",
+                request_id,
+                "Invalid response sequence received."
+            );
             active_requests.write().await.remove(&request_id);
             Ok(Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -328,7 +388,11 @@ async fn stream_request_body(
                 }
             }
             Err(e) => {
-                error!("Body stream error: {}", e);
+                error!(
+                    event = "tunnel.request.body_error",
+                    error = %e,
+                    "Failed to read tunnel request body."
+                );
                 break;
             }
         }

@@ -73,7 +73,7 @@ impl CloudflareProvider {
             .build()
             .expect("Failed to create HTTP client");
 
-        info!("Cloudflare DNS provider initialized");
+        info!(event = "dns.provider.init", provider = "cloudflare", "DNS provider initialized.");
         Self { config, client }
     }
 
@@ -104,7 +104,12 @@ impl CloudflareProvider {
                 .iter()
                 .map(|m| format!("Code {}: {}", m.code, m.message))
                 .collect();
-            info!("Cloudflare messages: {}", info_messages.join(", "));
+            info!(
+                event = "dns.provider.messages",
+                provider = "cloudflare",
+                messages = %info_messages.join(", "),
+                "DNS provider returned informational messages."
+            );
         }
 
         if !cf_response.success {
@@ -150,7 +155,12 @@ impl DnsProviderFactory for CloudflareProvider {
             "TOML configuration"
         };
 
-        info!("Cloudflare DNS provider configured from {}", config_source);
+        info!(
+            event = "dns.provider.configured",
+            provider = "cloudflare",
+            source = config_source,
+            "DNS provider configured from source."
+        );
         Ok(Box::new(Self::new(config)))
     }
 }
@@ -158,7 +168,7 @@ impl DnsProviderFactory for CloudflareProvider {
 #[async_trait]
 impl DnsProvider for CloudflareProvider {
     async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Listing available zones from Cloudflare");
+        info!(event = "dns.zones.list", provider = "cloudflare", "Listing DNS zones from provider.");
 
         let response = self.client
             .get("https://api.cloudflare.com/client/v4/zones")
@@ -178,7 +188,12 @@ impl DnsProvider for CloudflareProvider {
             .map(|zone| ZoneInfo::new(zone.id, zone.name))
             .collect();
 
-        info!("Found {} active zones", zone_infos.len());
+        info!(
+            event = "dns.zones.listed",
+            provider = "cloudflare",
+            count = zone_infos.len(),
+            "DNS zones listed."
+        );
         Ok(zone_infos)
     }
 
@@ -187,7 +202,13 @@ impl DnsProvider for CloudflareProvider {
         zone: &ZoneInfo,
         name: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Listing TXT records: {} in zone {}", name, zone.name);
+        info!(
+            event = "dns.txt.list",
+            provider = "cloudflare",
+            name,
+            zone = %zone.name,
+            "Listing TXT records."
+        );
 
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{}/dns_records?type=TXT&name={}",
@@ -212,7 +233,12 @@ impl DnsProvider for CloudflareProvider {
             .filter_map(|record| record.id.clone())
             .collect();
 
-        info!("Found {} existing TXT records", matching_record_ids.len());
+        info!(
+            event = "dns.txt.listed",
+            provider = "cloudflare",
+            count = matching_record_ids.len(),
+            "TXT records listed."
+        );
         Ok(matching_record_ids)
     }
 
@@ -222,7 +248,13 @@ impl DnsProvider for CloudflareProvider {
         name: &str,
         value: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Creating TXT record: {} in zone {} = {}", name, zone.name, value);
+        info!(
+            event = "dns.txt.create",
+            provider = "cloudflare",
+            name,
+            zone = %zone.name,
+            "Creating TXT record."
+        );
 
         let create_request = CreateRecordRequest {
             record_type: "TXT".to_string(),
@@ -250,7 +282,12 @@ impl DnsProvider for CloudflareProvider {
             .ok_or("Cloudflare API returned success but no result data")?;
         let record_id = record.id.ok_or("No record ID returned from Cloudflare")?;
 
-        info!("Created TXT record with ID: {}", record_id);
+        info!(
+            event = "dns.txt.created",
+            provider = "cloudflare",
+            record_id = %record_id,
+            "TXT record created."
+        );
         Ok(record_id)
     }
 
@@ -259,7 +296,13 @@ impl DnsProvider for CloudflareProvider {
         zone: &ZoneInfo,
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Deleting TXT record {} from zone {}", record_id, zone.name);
+        info!(
+            event = "dns.txt.delete",
+            provider = "cloudflare",
+            record_id,
+            zone = %zone.name,
+            "Deleting TXT record."
+        );
 
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}",
@@ -276,7 +319,12 @@ impl DnsProvider for CloudflareProvider {
 
         self.handle_cloudflare_response::<serde_json::Value>(response).await?;
 
-        info!("Deleted TXT record {}", record_id);
+        info!(
+            event = "dns.txt.deleted",
+            provider = "cloudflare",
+            record_id,
+            "TXT record deleted."
+        );
         Ok(())
     }
 }

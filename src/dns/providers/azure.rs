@@ -99,7 +99,7 @@ impl AzureProvider {
             .build()
             .expect("Failed to create HTTP client");
 
-        info!("Azure DNS provider initialized");
+        info!(event = "dns.provider.init", provider = "azure", "DNS provider initialized.");
         Self {
             config,
             client,
@@ -115,7 +115,7 @@ impl AzureProvider {
             }
         }
 
-        info!("Obtaining Azure access token...");
+        info!(event = "dns.azure.token.fetch", "Fetching Azure DNS access token.");
 
         let token_url = format!(
             "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
@@ -147,7 +147,7 @@ impl AzureProvider {
         self.access_token = Some(token_response.access_token.clone());
         self.token_expires_at = Some(expires_at);
 
-        info!("Azure access token obtained");
+        info!(event = "dns.azure.token.ready", "Azure DNS access token acquired.");
         Ok(token_response.access_token)
     }
 
@@ -206,7 +206,12 @@ impl DnsProviderFactory for AzureProvider {
             "TOML configuration"
         };
 
-        info!("Azure DNS provider configured from {}", config_source);
+        info!(
+            event = "dns.provider.configured",
+            provider = "azure",
+            source = config_source,
+            "DNS provider configured from source."
+        );
         Ok(Box::new(Self::new(config)))
     }
 }
@@ -216,7 +221,7 @@ impl DnsProvider for AzureProvider {
     async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn Error + Send + Sync>> {
         let token = self.get_access_token().await?;
 
-        info!("Listing available zones from Azure DNS");
+        info!(event = "dns.zones.list", provider = "azure", "Listing DNS zones from provider.");
 
         let zones_url = format!(
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones?api-version=2018-05-01",
@@ -239,7 +244,12 @@ impl DnsProvider for AzureProvider {
             .map(|zone| ZoneInfo::new(zone.id, zone.name))
             .collect();
 
-        info!("Found {} zones", zone_infos.len());
+        info!(
+            event = "dns.zones.listed",
+            provider = "azure",
+            count = zone_infos.len(),
+            "DNS zones listed."
+        );
         Ok(zone_infos)
     }
 
@@ -250,7 +260,13 @@ impl DnsProvider for AzureProvider {
     ) -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
         let token = self.get_access_token().await?;
 
-        info!("Listing TXT records: {} in zone {}", name, zone.name);
+        info!(
+            event = "dns.txt.list",
+            provider = "azure",
+            name,
+            zone = %zone.name,
+            "Listing TXT records."
+        );
 
         let list_url = format!(
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/recordsets?api-version=2018-05-01&$filter=recordType eq 'TXT'",
@@ -278,7 +294,13 @@ impl DnsProvider for AzureProvider {
             .map(|record| record.name.clone())
             .collect();
 
-        info!("Found {} existing TXT records for {}", matching_record_ids.len(), name);
+        info!(
+            event = "dns.txt.listed",
+            provider = "azure",
+            count = matching_record_ids.len(),
+            name,
+            "TXT records listed."
+        );
         Ok(matching_record_ids)
     }
 
@@ -290,7 +312,13 @@ impl DnsProvider for AzureProvider {
     ) -> Result<String, Box<dyn Error + Send + Sync>> {
         let token = self.get_access_token().await?;
 
-        info!("Creating TXT record: {} in zone {} = {}", name, zone.name, value);
+        info!(
+            event = "dns.txt.create",
+            provider = "azure",
+            name,
+            zone = %zone.name,
+            "Creating TXT record."
+        );
 
         let record_set = DnsRecordSet {
             properties: DnsRecordProperties {
@@ -320,7 +348,12 @@ impl DnsProvider for AzureProvider {
         self.ensure_success(response, "Azure DNS record creation error")
             .await?;
 
-        info!("Created TXT record: {}", name);
+        info!(
+            event = "dns.txt.created",
+            provider = "azure",
+            record_id = name,
+            "TXT record created."
+        );
         Ok(name.to_string())
     }
 
@@ -331,7 +364,13 @@ impl DnsProvider for AzureProvider {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let token = self.get_access_token().await?;
 
-        info!("Deleting TXT record {} from Azure DNS zone {}", record_id, zone.name);
+        info!(
+            event = "dns.txt.delete",
+            provider = "azure",
+            record_id,
+            zone = %zone.name,
+            "Deleting TXT record."
+        );
 
         let url = format!(
             "https://management.azure.com/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/dnsZones/{}/TXT/{}?api-version=2018-05-01",
@@ -349,7 +388,12 @@ impl DnsProvider for AzureProvider {
 
         self.ensure_success(response, "Failed to delete record").await?;
 
-        info!("Deleted TXT record {}", record_id);
+        info!(
+            event = "dns.txt.deleted",
+            provider = "azure",
+            record_id,
+            "TXT record deleted."
+        );
         Ok(())
     }
 }

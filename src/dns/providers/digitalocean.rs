@@ -65,7 +65,7 @@ impl DigitalOceanProvider {
             .build()
             .expect("Failed to create HTTP client");
 
-        info!("DigitalOcean DNS provider initialized");
+        info!(event = "dns.provider.init", provider = "digitalocean", "DNS provider initialized.");
         Self { config, client }
     }
 
@@ -113,7 +113,12 @@ impl DnsProviderFactory for DigitalOceanProvider {
             "TOML configuration"
         };
 
-        info!("DigitalOcean DNS provider configured from {}", config_source);
+        info!(
+            event = "dns.provider.configured",
+            provider = "digitalocean",
+            source = config_source,
+            "DNS provider configured from source."
+        );
         Ok(Box::new(Self::new(config)))
     }
 }
@@ -121,7 +126,7 @@ impl DnsProviderFactory for DigitalOceanProvider {
 #[async_trait]
 impl DnsProvider for DigitalOceanProvider {
     async fn list_zones_impl(&mut self) -> Result<Vec<ZoneInfo>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Listing available domains from DigitalOcean");
+        info!(event = "dns.zones.list", provider = "digitalocean", "Listing DNS zones from provider.");
 
         let response = self.client
             .get("https://api.digitalocean.com/v2/domains")
@@ -138,7 +143,12 @@ impl DnsProvider for DigitalOceanProvider {
             .map(|domain| ZoneInfo::from_name(domain.name))
             .collect();
 
-        info!("Found {} domains", zone_infos.len());
+        info!(
+            event = "dns.zones.listed",
+            provider = "digitalocean",
+            count = zone_infos.len(),
+            "DNS zones listed."
+        );
         Ok(zone_infos)
     }
 
@@ -147,7 +157,13 @@ impl DnsProvider for DigitalOceanProvider {
         zone: &ZoneInfo,
         name: &str,
     ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Listing TXT records: {} in domain {}", name, zone.name);
+        info!(
+            event = "dns.txt.list",
+            provider = "digitalocean",
+            name,
+            zone = %zone.name,
+            "Listing TXT records."
+        );
 
         let url = format!("https://api.digitalocean.com/v2/domains/{}/records", zone.name);
         let response = self.client
@@ -168,7 +184,12 @@ impl DnsProvider for DigitalOceanProvider {
             .filter_map(|record| record.id.map(|id| id.to_string()))
             .collect();
 
-        info!("Found {} existing TXT records", matching_record_ids.len());
+        info!(
+            event = "dns.txt.listed",
+            provider = "digitalocean",
+            count = matching_record_ids.len(),
+            "TXT records listed."
+        );
         Ok(matching_record_ids)
     }
 
@@ -178,7 +199,13 @@ impl DnsProvider for DigitalOceanProvider {
         name: &str,
         value: &str,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Creating TXT record: {} in domain {} = {}", name, zone.name, value);
+        info!(
+            event = "dns.txt.create",
+            provider = "digitalocean",
+            name,
+            zone = %zone.name,
+            "Creating TXT record."
+        );
 
         let create_request = CreateRecordRequest {
             record_type: "TXT".to_string(),
@@ -203,7 +230,12 @@ impl DnsProvider for DigitalOceanProvider {
         let record_id = create_response.domain_record.id
             .ok_or("No record ID returned from DigitalOcean")?;
 
-        info!("Created TXT record with ID: {}", record_id);
+        info!(
+            event = "dns.txt.created",
+            provider = "digitalocean",
+            record_id = %record_id,
+            "TXT record created."
+        );
         Ok(record_id.to_string())
     }
 
@@ -212,7 +244,13 @@ impl DnsProvider for DigitalOceanProvider {
         zone: &ZoneInfo,
         record_id: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Deleting TXT record {} from domain {}", record_id, zone.name);
+        info!(
+            event = "dns.txt.delete",
+            provider = "digitalocean",
+            record_id,
+            zone = %zone.name,
+            "Deleting TXT record."
+        );
 
         let url = format!(
             "https://api.digitalocean.com/v2/domains/{}/records/{}",
@@ -228,7 +266,12 @@ impl DnsProvider for DigitalOceanProvider {
 
         self.ensure_success(response, "Failed to delete record").await?;
 
-        info!("Deleted TXT record {}", record_id);
+        info!(
+            event = "dns.txt.deleted",
+            provider = "digitalocean",
+            record_id,
+            "TXT record deleted."
+        );
         Ok(())
     }
 }

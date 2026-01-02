@@ -79,10 +79,14 @@ pub trait DnsProvider: Send + Sync {
     }
 
     async fn get_zone_info(&mut self, domain: &str) -> Result<ZoneInfo, Box<dyn std::error::Error + Send + Sync>> {
-        info!("Looking up zone for domain: {}", domain);
+        info!(event = "dns.zone.lookup", domain, "Looking up DNS zone for domain.");
 
         let available_zones = self.list_zones_impl().await?;
-        info!("Found {} available zones", available_zones.len());
+        info!(
+            event = "dns.zones.available",
+            count = available_zones.len(),
+            "Available DNS zones listed."
+        );
 
         let mut best_match = None;
         let mut best_length = 0;
@@ -91,13 +95,22 @@ pub trait DnsProvider: Send + Sync {
             if domain.ends_with(&zone.name) && zone.name.len() > best_length {
                 best_match = Some(zone.clone());
                 best_length = zone.name.len();
-                info!("Found better match: {}", zone.name);
+                info!(
+                    event = "dns.zone.match",
+                    zone = %zone.name,
+                    "Better DNS zone match found."
+                );
             }
         }
 
         match best_match {
             Some(zone) => {
-                info!("Using zone: {} (ID: {})", zone.name, zone.id);
+                info!(
+                    event = "dns.zone.selected",
+                    zone = %zone.name,
+                    zone_id = %zone.id,
+                    "DNS zone selected for domain."
+                );
                 Ok(zone)
             }
             None => {
@@ -128,36 +141,62 @@ pub trait DnsProvider: Send + Sync {
         domain: &str,
         name: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Cleaning up existing TXT records: {}.{}", name, domain);
+        info!(
+            event = "dns.txt.cleanup.start",
+            name,
+            domain,
+            "TXT cleanup started."
+        );
 
         match self.list_txt_records(domain, name).await {
             Ok(existing_records) => {
                 if existing_records.is_empty() {
-                    info!("No existing TXT records to clean up");
+                    info!(event = "dns.txt.cleanup.empty", "No TXT records to clean up.");
                     return Ok(());
                 }
 
-                info!("Found {} existing TXT record(s) to clean up", existing_records.len());
+                info!(
+                    event = "dns.txt.cleanup.found",
+                    count = existing_records.len(),
+                    "Existing TXT records found for cleanup."
+                );
 
                 for record_id in existing_records {
-                    info!("Deleting old TXT record ID: {}", record_id);
+                    info!(
+                        event = "dns.txt.cleanup.delete",
+                        record_id,
+                        "Deleting old TXT record."
+                    );
 
                     match self.delete_txt_record(domain, &record_id).await {
                         Ok(_) => {
-                            info!("Deleted old TXT record {}", record_id);
+                            info!(
+                                event = "dns.txt.cleanup.deleted",
+                                record_id,
+                                "Old TXT record deleted."
+                            );
                         }
                         Err(e) => {
-                            warn!("Failed to delete old TXT record {}: {}", record_id, e);
+                            warn!(
+                                event = "dns.txt.cleanup.error",
+                                record_id,
+                                error = %e,
+                                "Failed to delete TXT record during cleanup."
+                            );
                         }
                     }
                 }
 
-                info!("Cleanup completed");
+                info!(event = "dns.txt.cleanup.done", "TXT cleanup completed.");
                 Ok(())
             }
             Err(e) => {
-                warn!("Failed to list existing records for cleanup: {}", e);
-                warn!("Continuing without cleanup...");
+                warn!(
+                    event = "dns.txt.cleanup.list_error",
+                    error = %e,
+                    "Failed to list TXT records for cleanup."
+                );
+                warn!(event = "dns.txt.cleanup.skip", "Skipping TXT cleanup after list failure.");
                 Ok(())
             }
         }
@@ -169,32 +208,55 @@ pub trait DnsProvider: Send + Sync {
         name: &str,
         value: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Waiting for DNS propagation of {}.{}", name, domain);
+        info!(
+            event = "dns.propagation.wait",
+            name,
+            domain,
+            "Waiting for DNS propagation."
+        );
 
         sleep(Duration::from_secs(30)).await;
 
         const MAX_ATTEMPTS: u64 = 25;
         const RETRY_DELAY: u64 = 15;
         for attempt in 1..=MAX_ATTEMPTS {
-            info!("DNS propagation check {}/{}", attempt, MAX_ATTEMPTS);
+            info!(
+                event = "dns.propagation.check",
+                attempt,
+                max_attempts = MAX_ATTEMPTS,
+                "Checking DNS propagation."
+            );
 
             match self.check_txt_record(domain, name, value).await {
                 Ok(true) => {
-                    info!("DNS propagation confirmed");
+                    info!(event = "dns.propagation.confirmed", "DNS propagation confirmed.");
                     return Ok(());
                 }
                 Ok(false) => {
                     if attempt < MAX_ATTEMPTS {
-                        info!("DNS not yet propagated, attempt {}. Waiting {} seconds...", attempt, RETRY_DELAY);
+                        info!(
+                            event = "dns.propagation.pending",
+                            attempt,
+                            retry_delay_secs = RETRY_DELAY,
+                            "DNS propagation pending; waiting to retry."
+                        );
                         sleep(Duration::from_secs(RETRY_DELAY)).await;
                         continue;
                     } else {
-                        warn!("DNS propagation not confirmed after {} minutes, proceeding anyway", MAX_ATTEMPTS*RETRY_DELAY/60);
+                        warn!(
+                            event = "dns.propagation.timeout",
+                            minutes = MAX_ATTEMPTS * RETRY_DELAY / 60,
+                            "DNS propagation timed out; proceeding anyway."
+                        );
                         return Ok(());
                     }
                 }
                 Err(e) => {
-                    warn!("DNS check error: {}, continuing...", e);
+                    warn!(
+                        event = "dns.propagation.error",
+                        error = %e,
+                        "DNS propagation check failed."
+                    );
                     sleep(Duration::from_secs(RETRY_DELAY)).await;
                 }
             }
@@ -217,15 +279,28 @@ pub trait DnsProvider: Send + Sync {
                 for record in txt_records.iter() {
                     let record_value = record.to_string().trim_matches('"').to_string();
                     if record_value == expected_value {
-                        info!("Found matching TXT record for {}", fqdn);
+                        info!(
+                            event = "dns.txt.match",
+                            fqdn = %fqdn,
+                            "TXT record match found."
+                        );
                         return Ok(true);
                     }
                 }
-                info!("No matching TXT record found for {}", fqdn);
+                info!(
+                    event = "dns.txt.miss",
+                    fqdn = %fqdn,
+                    "TXT record match not found."
+                );
                 Ok(false)
             }
             Err(e) => {
-                info!("DNS lookup failed for {}: {}", fqdn, e);
+                info!(
+                    event = "dns.txt.lookup_error",
+                    fqdn = %fqdn,
+                    error = %e,
+                    "TXT record lookup failed."
+                );
                 Ok(false)
             }
         }

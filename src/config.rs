@@ -514,7 +514,7 @@ impl ClientConfig {
             let content = fs::read_to_string(&args.config)?;
             toml::from_str(&content)?
         } else if can_skip_config {
-            tracing::info!("Client config skipped because CLI args provided.");
+            tracing::info!("Client config generation skipped because CLI args provided.");
             Self::default()
         } else {
             tracing::info!(path = ?args.config, "Client config file missing; using defaults.");

@@ -118,7 +118,6 @@ async fn main() -> Result<(), BoxError> {
         let active_requests_https = active_requests.clone();
         let active_websockets_https = active_websockets.clone();
         let config_https = config.clone();
-        let ssl_config_for_https = ssl_manager.read().await.get_rustls_config().unwrap();
         let ssl_manager_https = ssl_manager.clone();
         let metrics_https = metrics.clone();
 
@@ -129,7 +128,6 @@ async fn main() -> Result<(), BoxError> {
                 active_requests_https,
                 active_websockets_https,
                 ssl_manager_https,
-                ssl_config_for_https,
                 metrics_https,
                 shutdown_token_https,
             ).await {

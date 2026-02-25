@@ -7,7 +7,6 @@ use crate::{ChallengeStore, ServerConfig, SslManager, MetricsCollector};
 use hyper_util::rt::TokioIo;
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
-use rustls::ServerConfig as RustlsConfig;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -88,11 +87,9 @@ pub async fn start_https_server(
     active_requests: ActiveRequests,
     active_websockets: ActiveWebSockets,
     ssl_manager: Arc<RwLock<SslManager>>,
-    tls_config: Arc<RustlsConfig>,
     metrics: Arc<MetricsCollector>,
     shutdown_token: CancellationToken,
 ) -> Result<(), BoxError> {
-    let tls_acceptor = TlsAcceptor::from(tls_config);
     let addr: std::net::SocketAddr = config.https_addr().parse()?;
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
@@ -109,7 +106,11 @@ pub async fn start_https_server(
             }
             result = listener.accept() => {
                 let (stream, _) = result?;
-                let tls_acceptor = tls_acceptor.clone();
+                let Some(tls_config) = ssl_manager.read().await.get_rustls_config() else {
+                    error!("TLS config unavailable; rejecting HTTPS connection.");
+                    continue;
+                };
+                let tls_acceptor = TlsAcceptor::from(tls_config);
                 let ssl_manager = ssl_manager.clone();
 
                 let context = ServiceContext {
